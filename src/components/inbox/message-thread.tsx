@@ -1330,24 +1330,6 @@ export function MessageThread({
         </div>
       </div>
 
-      {/* Active Sequence execution banner (if running) */}
-      <SequenceRunnerBanner
-        execution={sequenceExecution}
-        onCancel={cancelSequence}
-      />
-
-      {/* Quick Reply ZapPlus Top Bar */}
-      <QuickReplyTopBar
-        quickReplies={quickReplies}
-        loading={loadingQuickReplies}
-        contactContext={contactVariableContext}
-        onSelectText={handleSelectTextFromTopBar}
-        onSelectAudio={handleSelectAudioFromTopBar}
-        onSelectMedia={handleSelectMediaFromTopBar}
-        onSelectSequence={startSequence}
-        onOpenAudioLibrary={() => setAudioLibraryOpen(true)}
-        onOpenCreateReply={handleOpenCreateReply}
-      />
 
       {/* Messages Area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
@@ -1440,6 +1422,24 @@ export function MessageThread({
             onAssignChange(conversation.id, patch.assigned_agent_id ?? null);
           }
         }}
+      />
+      {/* Active Sequence execution banner (if running) */}
+      <SequenceRunnerBanner
+        execution={sequenceExecution}
+        onCancel={cancelSequence}
+      />
+
+      {/* Barra de Atalhos Rápidos (logo acima da caixa de digitação) */}
+      <QuickReplyTopBar
+        quickReplies={quickReplies}
+        loading={loadingQuickReplies}
+        contactContext={contactVariableContext}
+        onSelectText={handleSelectTextFromTopBar}
+        onSelectAudio={handleSelectAudioFromTopBar}
+        onSelectMedia={handleSelectMediaFromTopBar}
+        onSelectSequence={startSequence}
+        onOpenAudioLibrary={() => setAudioLibraryOpen(true)}
+        onOpenCreateReply={handleOpenCreateReply}
       />
 
       {/* Composer */}

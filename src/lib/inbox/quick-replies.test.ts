@@ -16,9 +16,9 @@ describe("Quick Replies Central Suite", () => {
 
   it("replaces all variable tokens correctly for ZapPlus sequences", () => {
     const sequenceSteps: QuickReplySequenceStep[] = [
-      { id: "1", type: "text", content: "Olá {{primeiro_nome}}, bem-vindo à {{empresa}}!", delaySeconds: 0 },
-      { id: "2", type: "audio", mediaUrl: "https://example.com/audio.ogg", delaySeconds: 3 },
-      { id: "3", type: "text", content: "Meu nome é {{atendente}}. Qual seu melhor e-mail?", delaySeconds: 2 },
+      { id: "1", order: 1, type: "text", content: "Olá {{primeiro_nome}}, bem-vindo à {{empresa}}!", delay_seconds: 0 },
+      { id: "2", order: 2, type: "audio", media_url: "https://example.com/audio.ogg", delay_seconds: 3 },
+      { id: "3", order: 3, type: "text", content: "Meu nome é {{atendente}}. Qual seu melhor e-mail?", delay_seconds: 2 },
     ];
 
     const context = {
@@ -27,8 +27,8 @@ describe("Quick Replies Central Suite", () => {
       agentName: "Carlos Suporte",
     };
 
-    const step1Content = replaceQuickReplyVariables(sequenceSteps[0].content, context);
-    const step3Content = replaceQuickReplyVariables(sequenceSteps[2].content, context);
+    const step1Content = replaceQuickReplyVariables(sequenceSteps[0].content || "", context);
+    const step3Content = replaceQuickReplyVariables(sequenceSteps[2].content || "", context);
 
     expect(step1Content).toBe("Olá Roberta, bem-vindo à Acme Corp!");
     expect(step3Content).toBe("Meu nome é Carlos Suporte. Qual seu melhor e-mail?");

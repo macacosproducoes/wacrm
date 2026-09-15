@@ -143,7 +143,8 @@ export function QuickReplyTopBar({
       const substituted = replaceQuickReplyVariables(rawText, contactContext);
       onSelectText(substituted);
     } else if (qr.kind === "audio") {
-      onSelectAudio(qr, true);
+      // 1-Click Instant Dispatch!
+      onSelectAudio(qr, false);
     } else if (qr.kind === "sequence") {
       onSelectSequence(qr);
     } else if (["image", "video", "document", "media"].includes(qr.kind)) {
@@ -153,7 +154,7 @@ export function QuickReplyTopBar({
 
   return (
     <TooltipProvider delay={200}>
-      <div className="relative border-b border-border/70 bg-card/75 backdrop-blur-md opacity-85 hover:opacity-100 transition-opacity duration-200 z-10 select-none">
+      <div className="relative border-t border-border/60 bg-card/85 dark:bg-card/65 backdrop-blur-md opacity-90 hover:opacity-100 transition-opacity duration-200 z-10 select-none shadow-2xs">
         <div className="flex items-center justify-between gap-1.5 px-3 py-1.5 overflow-hidden">
           {/* Action pills & category toggles */}
           <div className="flex items-center gap-1 shrink-0">
@@ -274,7 +275,7 @@ export function QuickReplyTopBar({
                         </span>
                       ) : null}
                     </TooltipTrigger>
-                    <TooltipContent side="bottom" align="start" className="max-w-xs text-xs p-2 space-y-1">
+                    <TooltipContent side="top" align="start" className="max-w-xs text-xs p-2 space-y-1">
                       <div className="flex items-center justify-between gap-2 border-b border-border/50 pb-1">
                         <span className="font-semibold text-foreground flex items-center gap-1">
                           <span>{conf.icon}</span>
@@ -294,9 +295,14 @@ export function QuickReplyTopBar({
                       )}
 
                       {qr.kind === "audio" && (
-                        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                          <Play className="h-3 w-3 text-purple-500" />
-                          <span>Áudio gravado • Duração: {formatAudioTime(qr.media_duration)}</span>
+                        <div className="space-y-0.5 text-[11px] text-muted-foreground">
+                          <div className="flex items-center gap-2">
+                            <Play className="h-3 w-3 text-purple-500" />
+                            <span>Nota de voz nativa • {formatAudioTime(qr.media_duration)}</span>
+                          </div>
+                          <p className="text-[10px] text-purple-600 dark:text-purple-400 font-medium">
+                            ⚡ 1-Clique: Disparo Instantâneo no WhatsApp
+                          </p>
                         </div>
                       )}
 
@@ -324,12 +330,12 @@ export function QuickReplyTopBar({
                         <span>💡</span>
                         <span>
                           {qr.kind === "text"
-                            ? "Clique para inserir no campo de mensagem e revisar antes de enviar"
+                            ? "Clique para inserir no campo de mensagem para revisar"
                             : qr.kind === "audio"
-                            ? "Clique para simular gravação e enviar como nota de voz"
+                            ? "Clique para envio instantâneo do áudio"
                             : qr.kind === "sequence"
-                            ? "Clique para iniciar a execução sequencial"
-                            : "Clique para enviar"}
+                            ? "Clique para iniciar a sequência"
+                            : "Clique para envio instantâneo"}
                         </span>
                       </div>
                     </TooltipContent>
@@ -339,7 +345,7 @@ export function QuickReplyTopBar({
             )}
           </div>
 
-          {/* "+ Criar resposta" Button */}
+          {/* "+ Criar atalho" Button */}
           <div className="shrink-0 pl-1">
             <Button
               type="button"
@@ -349,7 +355,7 @@ export function QuickReplyTopBar({
               className="h-6 px-2 text-[11px] gap-1 border-dashed border-border hover:border-primary/50 text-muted-foreground hover:text-foreground shadow-2xs"
             >
               <Plus className="h-3 w-3" />
-              <span className="hidden sm:inline">Criar resposta</span>
+              <span className="hidden sm:inline">Criar atalho</span>
               <span className="sm:hidden">Novo</span>
             </Button>
           </div>
