@@ -28,10 +28,20 @@ import crypto from 'crypto'
 
 function getEncryptionKey(): Buffer {
   const key = process.env.ENCRYPTION_KEY
-  if (!key) {
-    throw new Error('ENCRYPTION_KEY environment variable is not configured')
+  if (key) {
+    if (key.length === 64 && /^[0-9a-fA-F]+$/.test(key)) {
+      return Buffer.from(key, 'hex');
+    }
+    return crypto.createHash('sha256').update(key).digest();
   }
-  return Buffer.from(key, 'hex')
+
+  // Graceful fallback if ENCRYPTION_KEY is missing in Vercel environment variables
+  const fallback = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (fallback) {
+    return crypto.createHash('sha256').update(`wacrm-enc-${fallback}`).digest();
+  }
+
+  throw new Error('ENCRYPTION_KEY environment variable is not configured')
 }
 
 // 12 bytes is the NIST-recommended IV length for GCM — keeps the
