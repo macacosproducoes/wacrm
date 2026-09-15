@@ -73,6 +73,37 @@ function MessageContent({
   // parent wired up no viewer, which is what makes them non-clickable.
   const openMedia = onOpenMedia ? () => onOpenMedia(message.id) : undefined;
 
+  // Check if message is an image, even if stored as document, file or text with image attachment
+  const isImage =
+    message.content_type === "image" ||
+    Boolean(
+      message.media_url &&
+        (
+          message.content_text === "[Imagem]" ||
+          message.content_text === "[Figurinha]" ||
+          message.media_type?.startsWith("image/") ||
+          /\.(jpe?g|png|gif|webp|bmp|svg)(\?.*)?$/i.test(message.media_url) ||
+          /\.(jpe?g|png|gif|webp)(\?.*)?$/i.test(message.content_text || "")
+        )
+    );
+
+  if (isImage) {
+    return (
+      <div>
+        {message.media_url ? (
+          <MediaImageBubble message={message} onOpen={openMedia} t={t} />
+        ) : (
+          <MediaUnavailable label={t("photo")} t={t} />
+        )}
+        {message.content_text && message.content_text !== "[Imagem]" && (
+          <p className="mt-1 whitespace-pre-wrap break-words text-sm">
+            {message.content_text}
+          </p>
+        )}
+      </div>
+    );
+  }
+
   switch (message.content_type) {
     case "text":
       return (

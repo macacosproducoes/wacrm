@@ -122,7 +122,13 @@ export function MediaImageBubble({
   onOpen?: () => void;
   t: Translator;
 }) {
-  const { src, status } = useMediaBlobUrl(message.media_url);
+  // If URL is raw encrypted WhatsApp CDN (mmg.whatsapp.net or .enc), route through UazAPI resolver
+  const targetUrl =
+    message.media_url?.includes("mmg.whatsapp.net") || message.media_url?.includes(".enc")
+      ? `/api/whatsapp/uazapi/media?messageId=${encodeURIComponent(message.message_id || message.id)}`
+      : message.media_url;
+
+  const { src, status } = useMediaBlobUrl(targetUrl);
   // The fetch can succeed and the bytes still not be a decodable image.
   const [broken, setBroken] = useState(false);
   const { downloading, download } = useMediaDownload(message, t);

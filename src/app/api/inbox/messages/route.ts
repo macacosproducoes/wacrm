@@ -156,22 +156,48 @@ export async function GET(request: Request) {
 
                   const extId = String(m.messageid || m.id || '');
                   if (extId && !existingSet.has(extId)) {
-                    const text =
-                      m.text ||
-                      m.content?.text ||
-                      (m.messageType === 'ImageMessage' ? '[Imagem]' : '[Mensagem]');
+                    const msgTypeStr = String(m.messageType || m.type || '');
+                    const isImg = /image/i.test(msgTypeStr) || Boolean(m.content?.imageMessage) || Boolean(m.image);
+                    const isAud = /audio/i.test(msgTypeStr) || Boolean(m.content?.audioMessage) || Boolean(m.audio);
+                    const isVid = /video/i.test(msgTypeStr) || Boolean(m.content?.videoMessage) || Boolean(m.video);
+                    const isDoc = /document/i.test(msgTypeStr) || Boolean(m.content?.documentMessage) || Boolean(m.document);
+
+                    let cType: 'text' | 'image' | 'audio' | 'video' | 'document' = 'text';
+                    let defaultText = '[Mensagem]';
+                    if (isImg) {
+                      cType = 'image';
+                      defaultText = '[Imagem]';
+                    } else if (isAud) {
+                      cType = 'audio';
+                      defaultText = '[Áudio]';
+                    } else if (isVid) {
+                      cType = 'video';
+                      defaultText = '[Vídeo]';
+                    } else if (isDoc) {
+                      cType = 'document';
+                      defaultText = '[Documento]';
+                    }
+
+                    const text = m.text || m.content?.text || m.content?.caption || defaultText;
                     const isFromMe = Boolean(m.fromMe);
                     const msgTs = m.messageTimestamp
                       ? new Date(m.messageTimestamp).toISOString()
                       : new Date().toISOString();
 
+                    const resolvedMediaUrl =
+                      m.fileURL ||
+                      m.content?.fileURL ||
+                      (m.content?.URL && !String(m.content.URL).includes('mmg.whatsapp.net') ? m.content.URL : null) ||
+                      m.content?.URL ||
+                      null;
+
                     toInsert.push({
                       conversation_id: conversationId,
                       sender_type: isFromMe ? ('agent' as const) : ('customer' as const),
                       sender_id: isFromMe ? user.id : undefined,
-                      content_type: m.messageType === 'ImageMessage' ? ('image' as const) : ('text' as const),
+                      content_type: cType,
                       content_text: text,
-                      media_url: m.content?.URL || m.fileURL || null,
+                      media_url: resolvedMediaUrl,
                       message_id: extId,
                       status: 'delivered' as const,
                       created_at: msgTs,

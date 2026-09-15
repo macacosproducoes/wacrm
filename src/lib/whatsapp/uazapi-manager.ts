@@ -272,16 +272,45 @@ export async function startUazApiListener(accountId: string): Promise<boolean> {
 
             const isFromMe = Boolean(m.fromMe);
             const contentObj = (m.content || {}) as Record<string, unknown>;
-            const text = String(m.text || contentObj.text || (m.messageType === 'ImageMessage' ? '[Imagem]' : '[Mensagem]'));
+            const msgTypeStr = String(m.messageType || m.type || '');
+            const isImg = /image/i.test(msgTypeStr) || Boolean(contentObj.imageMessage) || Boolean(m.image);
+            const isAud = /audio/i.test(msgTypeStr) || Boolean(contentObj.audioMessage) || Boolean(m.audio);
+            const isVid = /video/i.test(msgTypeStr) || Boolean(contentObj.videoMessage) || Boolean(m.video);
+            const isDoc = /document/i.test(msgTypeStr) || Boolean(contentObj.documentMessage) || Boolean(m.document);
+
+            let cType: 'text' | 'image' | 'audio' | 'video' | 'document' = 'text';
+            let defaultText = '[Mensagem]';
+            if (isImg) {
+              cType = 'image';
+              defaultText = '[Imagem]';
+            } else if (isAud) {
+              cType = 'audio';
+              defaultText = '[Áudio]';
+            } else if (isVid) {
+              cType = 'video';
+              defaultText = '[Vídeo]';
+            } else if (isDoc) {
+              cType = 'document';
+              defaultText = '[Documento]';
+            }
+
+            const text = String(m.text || contentObj.text || contentObj.caption || defaultText);
             const msgTs = m.messageTimestamp ? new Date(Number(m.messageTimestamp)).toISOString() : new Date().toISOString();
+
+            const resolvedMediaUrl =
+              m.fileURL ||
+              contentObj.fileURL ||
+              (contentObj.URL && !String(contentObj.URL).includes('mmg.whatsapp.net') ? contentObj.URL : null) ||
+              contentObj.URL ||
+              null;
 
             toInsert.push({
               conversation_id: convId,
               sender_type: isFromMe ? ('agent' as const) : ('customer' as const),
               sender_id: isFromMe ? ownerUserId : undefined,
-              content_type: m.messageType === 'ImageMessage' ? ('image' as const) : ('text' as const),
+              content_type: cType,
               content_text: text,
-              media_url: (contentObj.URL || m.fileURL || null) as string | null,
+              media_url: resolvedMediaUrl as string | null,
               message_id: cleanId,
               status: 'delivered' as const,
               created_at: msgTs,

@@ -1,5 +1,5 @@
 import { createClient as createAdminClient } from '@supabase/supabase-js';
-import { formatUazApiNumber, addUazApiContact } from '@/lib/whatsapp/uazapi-client';
+import { formatUazApiNumber, addUazApiContact, normalizeBaseUrl } from '@/lib/whatsapp/uazapi-client';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { isRealWhatsAppContact } from '@/lib/whatsapp/phone-utils';
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
@@ -8,6 +8,36 @@ import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
 import { sendWhatsAppPresence } from '@/lib/whatsapp/unified-presence';
 import { cancelPendingFollowUps } from '@/lib/automations/follow-up-engine';
 import { checkAndDispatchWelcomeMessage } from '@/lib/automations/welcome-engine';
+
+async function downloadUazApiMediaDirect(
+  baseUrl: string,
+  token: string,
+  messageId: string
+): Promise<{ fileURL?: string; mimetype?: string } | null> {
+  try {
+    const res = await fetch(`${normalizeBaseUrl(baseUrl)}/message/download`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        token,
+      },
+      body: JSON.stringify({
+        id: messageId,
+        return_link: true,
+        return_base64: false,
+      }),
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    if (data?.fileURL) {
+      return { fileURL: String(data.fileURL), mimetype: data.mimetype };
+    }
+  } catch {
+    // Non-blocking timeout
+  }
+  return null;
+}
 
 function supabaseAdmin() {
   return createAdminClient(
@@ -457,25 +487,41 @@ export async function processUazApiEvent(
         mediaUrl = b64.startsWith('data:') ? b64 : `data:image/jpeg;base64,${b64}`;
       }
     }
+    const publicUrl = (msgData.fileURL || msgContentObj.fileURL || (msgData as Record<string, unknown>).url) as string | undefined;
+    if (publicUrl && !publicUrl.includes('mmg.whatsapp.net')) {
+      mediaUrl = publicUrl;
+    }
     if (!mediaUrl && typeof imgMsg.url === 'string') {
       mediaUrl = imgMsg.url;
     }
   } else if (audMsg) {
     contentType = 'audio';
     messageText = '[Áudio]';
-    mediaUrl = (audMsg.url as string) || null;
+    const publicUrl = (msgData.fileURL || msgContentObj.fileURL || (msgData as Record<string, unknown>).url) as string | undefined;
+    mediaUrl = (publicUrl && !publicUrl.includes('mmg.whatsapp.net')) ? publicUrl : (audMsg.url as string) || null;
   } else if (vidMsg) {
     contentType = 'video';
     messageText = String(vidMsg.caption || '[Vídeo]').trim();
-    mediaUrl = (vidMsg.url as string) || null;
+    const publicUrl = (msgData.fileURL || msgContentObj.fileURL || (msgData as Record<string, unknown>).url) as string | undefined;
+    mediaUrl = (publicUrl && !publicUrl.includes('mmg.whatsapp.net')) ? publicUrl : (vidMsg.url as string) || null;
   } else if (docMsg) {
-    contentType = 'document';
-    messageText = String(docMsg.fileName || '[Documento]').trim();
-    mediaUrl = (docMsg.url as string) || null;
+    const isDocImage =
+      String(docMsg.mimetype || '').startsWith('image/') ||
+      /\.(jpe?g|png|gif|webp|bmp)$/i.test(String(docMsg.fileName || ''));
+    if (isDocImage) {
+      contentType = 'image';
+      messageText = String(docMsg.caption || docMsg.fileName || '[Imagem]').trim();
+    } else {
+      contentType = 'document';
+      messageText = String(docMsg.fileName || '[Documento]').trim();
+    }
+    const publicUrl = (msgData.fileURL || msgContentObj.fileURL || (msgData as Record<string, unknown>).url) as string | undefined;
+    mediaUrl = (publicUrl && !publicUrl.includes('mmg.whatsapp.net')) ? publicUrl : (docMsg.url as string) || null;
   } else if (stickerMsg) {
     contentType = 'image';
     messageText = '[Figurinha]';
-    mediaUrl = (stickerMsg.url as string) || null;
+    const publicUrl = (msgData.fileURL || msgContentObj.fileURL || (msgData as Record<string, unknown>).url) as string | undefined;
+    mediaUrl = (publicUrl && !publicUrl.includes('mmg.whatsapp.net')) ? publicUrl : (stickerMsg.url as string) || null;
   } else if (locMsg) {
     contentType = 'text';
     messageText = locMsg.name ? `[Localização: ${locMsg.name}]` : '[Localização]';
@@ -512,6 +558,28 @@ export async function processUazApiEvent(
     return { success: true, reason: 'missing_external_message_id_ignored' };
   }
   const externalMessageId = rawExternalId.includes(':') ? rawExternalId.split(':').pop()! : rawExternalId;
+
+  // If this is a media message and mediaUrl is missing or raw encrypted mmg.whatsapp.net,
+  // resolve direct public decrypted URL via UazAPI /message/download
+  if (
+    (contentType === 'image' || contentType === 'audio' || contentType === 'video' || contentType === 'document') &&
+    rawExternalId &&
+    (!mediaUrl || mediaUrl.includes('mmg.whatsapp.net') || mediaUrl.includes('.enc'))
+  ) {
+    const uazTokenEnc = (connection.provider_config?.token || (connection as Record<string, unknown>).encrypted_access_token) as string | undefined;
+    if (uazTokenEnc) {
+      try {
+        const uazToken = decrypt(uazTokenEnc);
+        const uazBase = normalizeBaseUrl(String(connection.provider_config?.base_url || (connection as Record<string, unknown>).api_url || ''));
+        const downloaded = await downloadUazApiMediaDirect(uazBase, uazToken, rawExternalId);
+        if (downloaded?.fileURL) {
+          mediaUrl = downloaded.fileURL;
+        }
+      } catch {
+        // Non-blocking: fallback to proxy
+      }
+    }
+  }
 
   // Get account owner user_id
   const { data: accountRow } = await admin
@@ -683,6 +751,50 @@ export async function processUazApiEvent(
 
   if (msgInsertErr) {
     console.error('[UazAPI Webhook] Error inserting message:', msgInsertErr);
+  }
+
+  // Background resolver: if mediaUrl is still missing or encrypted, resolve via /message/download asynchronously
+  if (
+    createdMsg?.id &&
+    (contentType === 'image' || contentType === 'audio' || contentType === 'video' || contentType === 'document') &&
+    (!mediaUrl || mediaUrl.includes('mmg.whatsapp.net') || mediaUrl.includes('.enc')) &&
+    rawExternalId
+  ) {
+    void (async () => {
+      try {
+        const uazTokenEnc = (connection.provider_config?.token || (connection as Record<string, unknown>).encrypted_access_token) as string | undefined;
+        if (!uazTokenEnc) return;
+        const uazToken = decrypt(uazTokenEnc);
+        const uazBase = normalizeBaseUrl(String(connection.provider_config?.base_url || (connection as Record<string, unknown>).api_url || ''));
+
+        const downloaded = await downloadUazApiMediaDirect(uazBase, uazToken, rawExternalId);
+        if (downloaded?.fileURL) {
+          await admin
+            .from('messages')
+            .update({ media_url: downloaded.fileURL })
+            .eq('id', createdMsg.id);
+
+          whatsappBus.emitInboxEvent({
+            accountId: connection.account_id,
+            conversationId,
+            eventType: 'UPDATE',
+            message: {
+              id: createdMsg.id,
+              conversation_id: conversationId,
+              sender_type: senderType,
+              content_type: contentType,
+              content_text: messageText,
+              media_url: downloaded.fileURL,
+              message_id: externalMessageId,
+              status: 'delivered' as const,
+              created_at: createdMsg.created_at || messageCreatedAt,
+            },
+          });
+        }
+      } catch {
+        // Non-blocking background attempt
+      }
+    })();
   }
 
   // Update conversation summary via update_conversation_with_message RPC
