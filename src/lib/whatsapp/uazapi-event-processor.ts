@@ -137,11 +137,118 @@ export async function processUazApiEvent(
     return { success: true, reason: 'presence_processed' };
   }
 
+  // Handle Message Status Updates / ACKs / Delivery Receipts
+  const isStatusUpdate =
+    eventType === 'messages_update' ||
+    eventType === 'message_update' ||
+    eventType === 'messages.update' ||
+    eventType === 'message.update' ||
+    eventType === 'message_status' ||
+    eventType === 'messages_status' ||
+    eventType === 'status' ||
+    eventType === 'status_update' ||
+    eventType === 'ack' ||
+    eventType === 'message_ack' ||
+    eventType === 'receipt';
+
+  if (isStatusUpdate) {
+    const rawItems: Array<Record<string, unknown>> = Array.isArray(body.data)
+      ? (body.data as Array<Record<string, unknown>>)
+      : Array.isArray(body.messages)
+        ? (body.messages as Array<Record<string, unknown>>)
+        : [((body.data || body.message || body) ?? {}) as Record<string, unknown>];
+
+    for (const item of rawItems) {
+      if (!item || typeof item !== 'object') continue;
+      const itemKey = (item.key || {}) as Record<string, unknown>;
+      const rawMsgId = String(
+        itemKey.id ||
+        item.messageid ||
+        item.id ||
+        item.message_id ||
+        item.msgId ||
+        ''
+      ).trim();
+      if (!rawMsgId) continue;
+
+      const cleanMsgId = rawMsgId.includes(':') ? rawMsgId.split(':').pop()! : rawMsgId;
+      const rawStatus =
+        item.status ??
+        (item.update as Record<string, unknown> | undefined)?.status ??
+        item.ack ??
+        item.state;
+
+      let normalizedStatus: 'sent' | 'delivered' | 'read' | null = null;
+      const statusNum = typeof rawStatus === 'number' ? rawStatus : Number(rawStatus);
+      const statusStr = String(rawStatus || '').toLowerCase();
+
+      if (statusNum === 2 || statusStr === 'sent' || statusStr === 'server_ack') {
+        normalizedStatus = 'sent';
+      } else if (statusNum === 3 || statusStr === 'delivered' || statusStr === 'delivery_ack') {
+        normalizedStatus = 'delivered';
+      } else if (statusNum === 4 || statusNum === 5 || statusStr === 'read' || statusStr === 'played') {
+        normalizedStatus = 'read';
+      }
+
+      if (normalizedStatus) {
+        const { data: updatedMsg } = await admin
+          .from('messages')
+          .update({ status: normalizedStatus })
+          .or(`message_id.eq.${cleanMsgId},message_id.eq.${rawMsgId}`)
+          .select('id, conversation_id, status, sender_type')
+          .maybeSingle();
+
+        if (updatedMsg) {
+          whatsappBus.emitInboxEvent({
+            accountId: connection.account_id,
+            conversationId: updatedMsg.conversation_id,
+            eventType: 'UPDATE',
+            message: updatedMsg,
+          });
+        }
+      }
+    }
+
+    return { success: true, reason: 'message_status_updated' };
+  }
+
+  // Handle Chat Metadata & Contacts updates (never generate message rows)
+  if (
+    eventType === 'chats' ||
+    eventType === 'chat' ||
+    eventType === 'chats_update' ||
+    eventType === 'chat_update' ||
+    eventType === 'chats.update' ||
+    eventType === 'chats_set' ||
+    eventType === 'chats.set' ||
+    eventType === 'contacts' ||
+    eventType === 'contact' ||
+    eventType === 'contacts_update' ||
+    eventType === 'contact_update' ||
+    eventType === 'contacts.update' ||
+    eventType === 'contacts_set' ||
+    eventType === 'contacts.set' ||
+    eventType === 'labels' ||
+    eventType === 'call' ||
+    eventType === 'call_offer' ||
+    eventType === 'qrcode'
+  ) {
+    return { success: true, reason: `${eventType}_event_ignored` };
+  }
+
   // Handle Messages
   const msgData = ((body.message || body.data || body) ?? {}) as Record<string, unknown>;
   const chatData = ((body.chat || {}) ?? {}) as Record<string, unknown>;
   const key = (msgData.key || {}) as Record<string, unknown>;
-  const fromMe = Boolean(key.fromMe ?? msgData.fromMe);
+  const fromMe = Boolean(
+    key.fromMe ||
+    msgData.fromMe ||
+    msgData.from_me ||
+    key.from_me ||
+    body.fromMe ||
+    (body.data as Record<string, unknown> | undefined)?.fromMe ||
+    (body.data as Record<string, unknown> | undefined)?.from_me
+  );
 
   // 1. STRICT GROUP VETO
   // A CRM inbox is strictly for 1-to-1 customer service.
@@ -163,8 +270,24 @@ export async function processUazApiEvent(
     return { success: true, reason: 'group_event_ignored' };
   }
 
-  // Extract message content object early to check for reactions
+  // Extract message content object early
   const msgContentObj = ((msgData.content || msgData.message || msgData) ?? {}) as Record<string, unknown>;
+
+  // 1.1 PROTOCOL & SYSTEM MESSAGES VETO
+  const isProtocolOrStub = Boolean(
+    msgData.messageType === 'protocolMessage' ||
+    msgData.messageType === 'ProtocolMessage' ||
+    msgData.type === 'protocol' ||
+    Boolean(msgContentObj.protocolMessage) ||
+    msgData.messageStubType ||
+    msgData.stubType ||
+    msgData.messageType === 'pollUpdateMessage' ||
+    msgData.type === 'poll_update'
+  );
+
+  if (isProtocolOrStub) {
+    return { success: true, reason: 'protocol_or_stub_ignored' };
+  }
 
   // 2. STRICT REACTION VETO
   // Reactions (emojis like 👍, ❤️, 😮, etc.) are message reactions, NOT customer conversation turns.
@@ -172,7 +295,6 @@ export async function processUazApiEvent(
   const isReaction = Boolean(
     eventType === 'reaction' ||
     eventType === 'messages_reaction' ||
-    eventType === 'messages_update' ||
     msgData.messageType === 'reactionMessage' ||
     msgData.messageType === 'ReactionMessage' ||
     msgData.type === 'reaction' ||
@@ -262,24 +384,64 @@ export async function processUazApiEvent(
   let contentType: 'text' | 'image' | 'audio' | 'document' | 'video' = 'text';
   let mediaUrl: string | null = null;
 
-
   const extText = msgContentObj.extendedTextMessage as Record<string, unknown> | undefined;
   const imgMsg = msgContentObj.imageMessage as Record<string, unknown> | undefined;
   const audMsg = msgContentObj.audioMessage as Record<string, unknown> | undefined;
   const vidMsg = msgContentObj.videoMessage as Record<string, unknown> | undefined;
   const docMsg = msgContentObj.documentMessage as Record<string, unknown> | undefined;
+  const stickerMsg = msgContentObj.stickerMessage as Record<string, unknown> | undefined;
+  const locMsg = (msgContentObj.locationMessage || msgContentObj.liveLocationMessage) as Record<string, unknown> | undefined;
+  const contactMsg = (msgContentObj.contactMessage || msgContentObj.contactsArrayMessage) as Record<string, unknown> | undefined;
+
+  // Check if this messages event is actually a status/ack event without content
+  const hasStatusWithoutContent = Boolean(
+    (msgData.status !== undefined || (msgData.update as Record<string, unknown> | undefined)?.status !== undefined || msgData.ack !== undefined) &&
+    !msgData.text &&
+    !msgContentObj.text &&
+    !msgContentObj.conversation &&
+    !extText?.text &&
+    !imgMsg &&
+    !audMsg &&
+    !vidMsg &&
+    !docMsg &&
+    !stickerMsg &&
+    !locMsg &&
+    !contactMsg
+  );
+
+  if (hasStatusWithoutContent) {
+    const rawMsgId = String(key.id || msgData.messageid || msgData.id || '');
+    if (rawMsgId) {
+      const cleanMsgId = rawMsgId.includes(':') ? rawMsgId.split(':').pop()! : rawMsgId;
+      const rawStatus = msgData.status ?? (msgData.update as Record<string, unknown> | undefined)?.status ?? msgData.ack;
+      let normalizedStatus: 'sent' | 'delivered' | 'read' | null = null;
+      const statusNum = typeof rawStatus === 'number' ? rawStatus : Number(rawStatus);
+      const statusStr = String(rawStatus || '').toLowerCase();
+      if (statusNum === 2 || statusStr === 'sent' || statusStr === 'server_ack') normalizedStatus = 'sent';
+      else if (statusNum === 3 || statusStr === 'delivered' || statusStr === 'delivery_ack') normalizedStatus = 'delivered';
+      else if (statusNum === 4 || statusNum === 5 || statusStr === 'read' || statusStr === 'played') normalizedStatus = 'read';
+
+      if (normalizedStatus) {
+        await admin
+          .from('messages')
+          .update({ status: normalizedStatus })
+          .or(`message_id.eq.${cleanMsgId},message_id.eq.${rawMsgId}`);
+      }
+    }
+    return { success: true, reason: 'message_status_updated' };
+  }
 
   if (typeof msgData.text === 'string' && msgData.text.trim()) {
-    messageText = msgData.text;
+    messageText = msgData.text.trim();
   } else if (typeof msgContentObj.text === 'string' && msgContentObj.text.trim()) {
-    messageText = msgContentObj.text;
-  } else if (msgContentObj.conversation) {
-    messageText = String(msgContentObj.conversation);
-  } else if (extText?.text) {
-    messageText = String(extText.text);
+    messageText = msgContentObj.text.trim();
+  } else if (msgContentObj.conversation && String(msgContentObj.conversation).trim()) {
+    messageText = String(msgContentObj.conversation).trim();
+  } else if (extText?.text && String(extText.text).trim()) {
+    messageText = String(extText.text).trim();
   } else if (imgMsg) {
     contentType = 'image';
-    messageText = String(imgMsg.caption || '[Imagem]');
+    messageText = String(imgMsg.caption || '[Imagem]').trim();
     const rawThumb =
       imgMsg.jpegThumbnail ||
       (msgData as Record<string, unknown>).jpegThumbnail ||
@@ -304,16 +466,28 @@ export async function processUazApiEvent(
     mediaUrl = (audMsg.url as string) || null;
   } else if (vidMsg) {
     contentType = 'video';
-    messageText = String(vidMsg.caption || '[Vídeo]');
+    messageText = String(vidMsg.caption || '[Vídeo]').trim();
     mediaUrl = (vidMsg.url as string) || null;
   } else if (docMsg) {
     contentType = 'document';
-    messageText = String(docMsg.fileName || '[Documento]');
+    messageText = String(docMsg.fileName || '[Documento]').trim();
     mediaUrl = (docMsg.url as string) || null;
+  } else if (stickerMsg) {
+    contentType = 'image';
+    messageText = '[Figurinha]';
+    mediaUrl = (stickerMsg.url as string) || null;
+  } else if (locMsg) {
+    contentType = 'text';
+    messageText = locMsg.name ? `[Localização: ${locMsg.name}]` : '[Localização]';
+  } else if (contactMsg) {
+    contentType = 'text';
+    messageText = '[Contato]';
   }
 
+  // STRICT GUARD: If there is no real text and no media, ignore event completely
+  // Never create phantom '[Mensagem recebida]' entries!
   if (!messageText && !mediaUrl) {
-    messageText = '[Mensagem recebida]';
+    return { success: true, reason: 'empty_event_ignored' };
   }
 
   const pushName = String(
@@ -328,8 +502,15 @@ export async function processUazApiEvent(
     msgData.messageid ||
     key.id ||
     msgData.id ||
-    `uazapi_${Date.now()}`
-  );
+    body.id ||
+    body.messageId ||
+    ''
+  ).trim();
+
+  // STRICT GUARD: Real messages always have an external ID from WhatsApp
+  if (!rawExternalId) {
+    return { success: true, reason: 'missing_external_message_id_ignored' };
+  }
   const externalMessageId = rawExternalId.includes(':') ? rawExternalId.split(':').pop()! : rawExternalId;
 
   // Get account owner user_id
