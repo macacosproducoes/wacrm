@@ -72,7 +72,7 @@ export async function GET(request: Request) {
     const baseUrl = normalizeBaseUrl(activeConn.provider_config?.base_url || activeConn.api_url);
     const targetMsgId = message.message_id || messageId;
 
-    // 3. Call UazAPI /message/download
+    // 3. Call UazAPI /message/download (request only public fileURL for instant redirect)
     const dlRes = await fetch(`${baseUrl}/message/download`, {
       method: 'POST',
       headers: {
@@ -82,9 +82,9 @@ export async function GET(request: Request) {
       body: JSON.stringify({
         id: targetMsgId,
         return_link: true,
-        return_base64: true,
+        return_base64: false,
       }),
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(5000),
     });
 
     if (!dlRes.ok) {
