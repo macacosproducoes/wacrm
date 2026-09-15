@@ -5624,3 +5624,16 @@ BEGIN
   UPDATE quick_replies SET usage_count = COALESCE(usage_count, 0) + 1 WHERE id = p_id;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+-- >>>>>>>>>>>>>> MIGRATION: 045_grant_permissions.sql <<<<<<<<<<<<<<
+
+-- Grant public schema permissions to standard Supabase roles
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
