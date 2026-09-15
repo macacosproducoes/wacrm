@@ -55,7 +55,11 @@ function LoginPageInner() {
     });
 
     if (error) {
-      setError(error.message);
+      const msg =
+        error.message === "Failed to fetch"
+          ? "Erro de conexão (Failed to fetch): O servidor do Supabase não respondeu. Verifique se o projeto no Supabase está Ativo (não Pausado)."
+          : error.message;
+      setError(msg);
       setLoading(false);
       return;
     }
