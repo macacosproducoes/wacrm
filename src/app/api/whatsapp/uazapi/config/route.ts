@@ -61,6 +61,10 @@ export async function GET(request: Request) {
       .order('created_at', { ascending: true });
 
     if (error) {
+      if (error.code === 'PGRST205' || error.message?.includes('schema cache')) {
+        console.warn('whatsapp_connections table not yet created in Supabase schema.');
+        return NextResponse.json({ connections: [], activeConnection: null });
+      }
       console.error('Error fetching whatsapp_connections:', error);
       return NextResponse.json(
         { error: 'Failed to fetch connections' },
