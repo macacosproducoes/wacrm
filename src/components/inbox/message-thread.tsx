@@ -31,10 +31,12 @@ import {
   Bot,
   User,
   Loader2,
+  Smartphone,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { useTranslations } from "next-intl";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -43,6 +45,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { ContactAvatar } from "@/components/ui/contact-avatar";
 import { formatContactDisplayName } from "@/lib/contacts/format-contact";
 import { MessageBubble } from "./message-bubble";
@@ -118,6 +128,7 @@ interface MessageThreadProps {
   contactPanelOpen?: boolean;
   onToggleContactPanel?: () => void;
   isUazApi?: boolean;
+  onContactUpdated?: (updated: Contact) => void;
 }
 
 function formatDateSeparator(dateStr: string, t: ReturnType<typeof useTranslations>): string {
@@ -177,6 +188,7 @@ export function MessageThread({
   contactPanelOpen,
   onToggleContactPanel,
   isUazApi = true,
+  onContactUpdated,
 }: MessageThreadProps) {
   const t = useTranslations("Inbox.messageThread");
   const tTimer = useTranslations("Inbox.sessionTimer");
@@ -189,6 +201,52 @@ export function MessageThread({
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [reactions, setReactions] = useState<MessageReaction[]>([]);
+
+  // WhatsApp Contact Save Modal state
+  const [saveContactModalOpen, setSaveContactModalOpen] = useState(false);
+  const [saveContactModalName, setSaveContactModalName] = useState("");
+  const [isSavingContactModal, setIsSavingContactModal] = useState(false);
+
+  const handleSaveContactFromModal = useCallback(async () => {
+    if (!contact?.id) return;
+    setIsSavingContactModal(true);
+
+    try {
+      const res = await fetch("/api/whatsapp/uazapi/contacts/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contactId: contact.id,
+          name: saveContactModalName.trim() || null,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        toast.error(data.error || "Erro ao salvar contato.");
+        return;
+      }
+
+      setSaveContactModalOpen(false);
+      if (data.contact) {
+        onContactUpdated?.(data.contact);
+      }
+
+      if (data.whatsapp_saved) {
+        toast.success(
+          data.message ||
+            "✓ Contato salvo na agenda do WhatsApp com sucesso! O cliente agora poderá visualizar seus Status."
+        );
+      } else {
+        toast.info(data.message || "Contato atualizado no CRM.");
+      }
+    } catch (err) {
+      console.error("Save contact modal error:", err);
+      toast.error("Falha ao salvar contato.");
+    } finally {
+      setIsSavingContactModal(false);
+    }
+  }, [contact?.id, saveContactModalName, onContactUpdated]);
   // Purely visual spin state for the manual-refresh button. The actual
   // refetch is fire-and-forget through `onRefresh` (which bumps the
   // parent's resyncToken); the 700ms spin is just feedback so the click
@@ -1127,6 +1185,22 @@ export function MessageThread({
             <p className="truncate text-xs text-muted-foreground">{formatContactDisplayName('', effectiveContact.phone)}</p>
           </div>
 
+          {/* Quick Save Contact to WhatsApp */}
+          {effectiveContact.phone && (
+            <button
+              type="button"
+              onClick={() => {
+                setSaveContactModalName(effectiveContact.name || "");
+                setSaveContactModalOpen(true);
+              }}
+              title="Salvar contato na agenda do WhatsApp para visualização de Status e Stories"
+              className="ml-1 inline-flex items-center gap-1.5 h-7 px-2 rounded-md text-xs font-medium border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 transition-all cursor-pointer"
+            >
+              <Smartphone className="h-3.5 w-3.5" />
+              <span className="hidden md:inline">Salvar no WhatsApp</span>
+            </button>
+          )}
+
           {/* Session timer / provider badge */}
           {isUazApi ? (
             <Badge
@@ -1490,6 +1564,77 @@ export function MessageThread({
         defaultKind={createDefaultKind}
         onCreated={loadQuickReplies}
       />
+
+      {/* Modal Salvar Contato no WhatsApp */}
+      <Dialog open={saveContactModalOpen} onOpenChange={setSaveContactModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-semibold text-foreground">
+              <Smartphone className="h-5 w-5 text-emerald-500" />
+              Salvar Contato no WhatsApp
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Salva o contato diretamente na agenda do WhatsApp do seu celular. Isso permite que o cliente visualize seus Status e Stories imediatamente!
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Número de WhatsApp</label>
+              <div className="mt-1 flex items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-2 text-xs font-mono text-foreground">
+                <span>{formatContactDisplayName('', effectiveContact.phone)}</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs font-medium text-foreground">Nome do Contato</label>
+              <input
+                type="text"
+                value={saveContactModalName}
+                onChange={(e) => setSaveContactModalName(e.target.value)}
+                placeholder="Ex: Maria Silva"
+                className="mt-1 flex w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void handleSaveContactFromModal();
+                  }
+                }}
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setSaveContactModalOpen(false)}
+              disabled={isSavingContactModal}
+            >
+              Cancelar
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => void handleSaveContactFromModal()}
+              disabled={isSavingContactModal}
+              className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              {isSavingContactModal ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span>Salvando...</span>
+                </>
+              ) : (
+                <>
+                  <Check className="h-3.5 w-3.5" />
+                  <span>Salvar na Agenda</span>
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

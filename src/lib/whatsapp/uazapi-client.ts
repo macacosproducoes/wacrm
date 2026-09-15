@@ -486,3 +486,56 @@ export async function markUazApiMessageRead(
   }
 }
 
+/**
+ * Add or save contact in phone's WhatsApp address book via UazAPI.
+ * Essential for WhatsApp Status / Stories visibility.
+ * Endpoint: POST /contact/add
+ */
+export async function addUazApiContact(
+  baseUrl: string,
+  token: string,
+  opts: {
+    number: string;
+    name: string;
+  }
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  const endpoint = `${normalizeBaseUrl(baseUrl)}/contact/add`;
+  const formattedNumber = formatUazApiNumber(opts.number);
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        token,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        number: formattedNumber,
+        name: opts.name.trim(),
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      return {
+        success: false,
+        error: data.message || data.error || `HTTP ${res.status}`,
+      };
+    }
+
+    return {
+      success: true,
+      message: data.message || 'Contato adicionado à agenda com sucesso',
+    };
+  } catch (err: any) {
+    console.warn('[uazapi-client] addUazApiContact error:', err);
+    return {
+      success: false,
+      error: err?.message || 'Falha na conexão com UazAPI',
+    };
+  }
+}
+
+

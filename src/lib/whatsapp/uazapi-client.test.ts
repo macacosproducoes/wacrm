@@ -8,6 +8,7 @@ import {
   sendUazApiText,
   sendUazApiMedia,
   setUazApiWebhook,
+  addUazApiContact,
 } from './uazapi-client';
 
 describe('uazapi-client', () => {
@@ -131,6 +132,40 @@ describe('uazapi-client', () => {
           body: JSON.stringify({
             number: '5511999998888',
             text: 'Hello from CRM',
+          }),
+        })
+      );
+    });
+  });
+
+  describe('addUazApiContact', () => {
+    it('sends POST /contact/add with formatted number and name', async () => {
+      const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          success: true,
+          message: 'Contato adicionado com sucesso',
+        }),
+      } as Response);
+
+      const res = await addUazApiContact('https://free.uazapi.com', 'tok_123', {
+        number: '+55 (11) 98888-7777',
+        name: 'Roberto Cliente',
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.message).toBe('Contato adicionado com sucesso');
+      expect(fetchSpy).toHaveBeenCalledWith(
+        'https://free.uazapi.com/contact/add',
+        expect.objectContaining({
+          method: 'POST',
+          headers: {
+            token: 'tok_123',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            number: '5511988887777',
+            name: 'Roberto Cliente',
           }),
         })
       );

@@ -15,6 +15,10 @@ import {
   DollarSign,
   StickyNote,
   Plus,
+  Pencil,
+  X,
+  Smartphone,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -22,12 +26,14 @@ import { ContactAvatar } from "@/components/ui/contact-avatar";
 import { formatContactDisplayName } from "@/lib/contacts/format-contact";
 import { format } from "date-fns";
 import { useTranslations } from "next-intl";
+import { toast } from "sonner";
 
 interface ContactSidebarProps {
   contact: Contact | null;
+  onContactUpdated?: (updated: Contact) => void;
 }
 
-export function ContactSidebar({ contact }: ContactSidebarProps) {
+export function ContactSidebar({ contact, onContactUpdated }: ContactSidebarProps) {
   const tSidebar = useTranslations("Inbox.sidebar");
   const tThread = useTranslations("Inbox.messageThread");
 
@@ -38,6 +44,66 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
   const [tags, setTags] = useState<(Tag & { contact_tag_id: string })[]>([]);
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
+
+  // Contact name editing and WhatsApp save state
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState(contact?.name || "");
+  const [isSavingToWhatsapp, setIsSavingToWhatsapp] = useState(false);
+  const [savedSuccess, setSavedSuccess] = useState(false);
+
+  useEffect(() => {
+    setNameInput(contact?.name || "");
+    setEditingName(false);
+    setSavedSuccess(false);
+  }, [contact?.id, contact?.name]);
+
+  const handleSaveContact = useCallback(
+    async (overrideName?: string) => {
+      if (!contact) return;
+      const finalName = (overrideName !== undefined ? overrideName : nameInput).trim();
+      setIsSavingToWhatsapp(true);
+
+      try {
+        const res = await fetch("/api/whatsapp/uazapi/contacts/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contactId: contact.id,
+            name: finalName || null,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          toast.error(data.error || "Erro ao salvar contato.");
+          return;
+        }
+
+        setSavedSuccess(true);
+        setEditingName(false);
+        if (data.contact) {
+          onContactUpdated?.(data.contact);
+        }
+
+        if (data.whatsapp_saved) {
+          toast.success(
+            data.message ||
+              "✓ Contato salvo na agenda do WhatsApp com sucesso! O cliente agora poderá visualizar seus Status."
+          );
+        } else {
+          toast.info(data.message || "Contato atualizado no CRM.");
+        }
+
+        setTimeout(() => setSavedSuccess(false), 4000);
+      } catch (err) {
+        console.error("Save contact error:", err);
+        toast.error("Falha ao salvar contato.");
+      } finally {
+        setIsSavingToWhatsapp(false);
+      }
+    },
+    [contact, nameInput, onContactUpdated]
+  );
 
   const fetchContactData = useCallback(async () => {
     if (!contact) return;
@@ -144,12 +210,106 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
               avatarUrl={contact.avatar_url}
               size="xl"
             />
-            <h3 className="mt-3 text-sm font-semibold text-foreground">
-              {displayName}
-            </h3>
-            {contact.company && (
-              <p className="text-xs text-muted-foreground">{contact.company}</p>
+
+            {editingName ? (
+              <div className="mt-3 flex w-full items-center gap-1.5">
+                <input
+                  type="text"
+                  value={nameInput}
+                  onChange={(e) => setNameInput(e.target.value)}
+                  placeholder="Nome do cliente..."
+                  className="flex-1 rounded-md border border-primary/50 bg-background px-2.5 py-1 text-xs font-medium text-foreground outline-none ring-1 ring-primary/30"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleSaveContact();
+                    } else if (e.key === "Escape") {
+                      setEditingName(false);
+                      setNameInput(contact.name || "");
+                    }
+                  }}
+                />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 w-7 p-0 text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-600"
+                  onClick={() => handleSaveContact()}
+                  disabled={isSavingToWhatsapp}
+                >
+                  {isSavingToWhatsapp ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Check className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 w-7 p-0 text-muted-foreground hover:bg-muted"
+                  onClick={() => {
+                    setEditingName(false);
+                    setNameInput(contact.name || "");
+                  }}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : (
+              <div className="group mt-3 flex items-center justify-center gap-1.5">
+                <h3 className="text-sm font-semibold text-foreground">
+                  {displayName}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setEditingName(true)}
+                  className="rounded p-1 text-muted-foreground opacity-60 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100"
+                  title="Editar nome do contato"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+              </div>
             )}
+
+            {contact.company && (
+              <p className="mt-0.5 text-xs text-muted-foreground">{contact.company}</p>
+            )}
+
+            {/* Salvar na Agenda do WhatsApp */}
+            <div className="mt-3 w-full">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => handleSaveContact()}
+                disabled={isSavingToWhatsapp}
+                className={cn(
+                  "w-full gap-2 text-xs font-medium shadow-sm transition-all",
+                  savedSuccess
+                    ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                    : "bg-emerald-600/90 hover:bg-emerald-600 text-white"
+                )}
+              >
+                {isSavingToWhatsapp ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>Salvando no WhatsApp...</span>
+                  </>
+                ) : savedSuccess ? (
+                  <>
+                    <Check className="h-3.5 w-3.5" />
+                    <span>Salvo no WhatsApp!</span>
+                  </>
+                ) : (
+                  <>
+                    <Smartphone className="h-3.5 w-3.5" />
+                    <span>Salvar na Agenda do WhatsApp</span>
+                  </>
+                )}
+              </Button>
+              <p className="mt-1 text-[11px] leading-tight text-muted-foreground">
+                Salva no celular para o cliente ver seus Status e Stories.
+              </p>
+            </div>
           </div>
 
           {/* Phone */}

@@ -1,5 +1,6 @@
 import { createClient as createAdminClient } from '@supabase/supabase-js';
-import { formatUazApiNumber } from '@/lib/whatsapp/uazapi-client';
+import { formatUazApiNumber, addUazApiContact } from '@/lib/whatsapp/uazapi-client';
+import { decrypt } from '@/lib/whatsapp/encryption';
 import { isRealWhatsAppContact } from '@/lib/whatsapp/phone-utils';
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
 import { notifyClientPresence } from '@/lib/ai/auto-reply-debouncer';
@@ -413,7 +414,28 @@ export async function processUazApiEvent(
     }
   }
 
+  // Auto-save contact to phone's WhatsApp address book (UAZAPI /contact/add)
+  // Ensures customer can view operator's WhatsApp Status / Stories immediately!
+  try {
+    const uazConfig = connection.provider_config as Record<string, unknown> | undefined;
+    if (uazConfig?.token) {
+      let plainToken = String(uazConfig.token);
+      try {
+        plainToken = decrypt(plainToken);
+      } catch {}
+      const baseUrl = typeof uazConfig.base_url === 'string' ? uazConfig.base_url : 'https://free.uazapi.com';
+      const contactSaveName = pushName && /[a-zA-ZÀ-ÿ]/.test(pushName)
+        ? pushName
+        : `Cliente ${formattedPhone.slice(-4)}`;
 
+      void addUazApiContact(baseUrl, plainToken, {
+        number: formattedPhone,
+        name: contactSaveName,
+      }).catch((err) => console.warn('[uazapi] Auto save contact to phone failed:', err));
+    }
+  } catch (err) {
+    console.warn('[uazapi] Error triggering auto contact save:', err);
+  }
 
   // Call find_or_create_conversation RPC
   const { data: conversationId, error: convErr } = await admin.rpc('find_or_create_conversation', {
