@@ -1,0 +1,482 @@
+import https from 'https';
+import http from 'http';
+import { createClient as createAdminClient } from '@supabase/supabase-js';
+import { decrypt } from '@/lib/whatsapp/encryption';
+import { normalizeBaseUrl, formatUazApiNumber } from '@/lib/whatsapp/uazapi-client';
+import { processUazApiEvent } from '@/lib/whatsapp/uazapi-event-processor';
+import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
+import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
+import { sendWhatsAppPresence } from '@/lib/whatsapp/unified-presence';
+
+function supabaseAdmin() {
+  return createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+}
+
+interface ActiveListener {
+  accountId: string;
+  connectionId: string;
+  req: http.ClientRequest | null;
+  reconnectTimeout: NodeJS.Timeout | null;
+  pollInterval: NodeJS.Timeout | null;
+  isPolling: boolean;
+  isDestroyed: boolean;
+  status: 'connecting' | 'connected' | 'disconnected';
+  lastEventAt: number;
+}
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __uazapiListeners: Map<string, ActiveListener> | undefined;
+}
+
+const listeners: Map<string, ActiveListener> =
+  globalThis.__uazapiListeners || new Map<string, ActiveListener>();
+globalThis.__uazapiListeners = listeners;
+
+/**
+ * Start or resume a persistent background sync and SSE listener for the given account.
+ * Keeps a continuous connection to UazAPI's /sse endpoint directly inside Node.js,
+ * paired with a lightweight 2.5s ticker that guarantees 0-delay ingestion and immediate AI replies
+ * even when the user's browser tab is minimized or inactive.
+ */
+export async function startUazApiListener(accountId: string): Promise<boolean> {
+  const existing = listeners.get(accountId);
+  if (existing && !existing.isDestroyed && existing.status === 'connected') {
+    return true;
+  }
+
+  const admin = supabaseAdmin();
+  const { data: conn } = await admin
+    .from('whatsapp_connections')
+    .select('*')
+    .eq('account_id', accountId)
+    .eq('provider', 'uazapi')
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (!conn) return false;
+
+  const config = (conn.provider_config || {}) as Record<string, string>;
+  let token = '';
+  try {
+    token = decrypt(config.token);
+  } catch {
+    token = config.token || '';
+  }
+
+  if (!token || !config.base_url) return false;
+
+  const baseUrl = normalizeBaseUrl(config.base_url);
+
+  if (existing) {
+    existing.isDestroyed = true;
+    if (existing.req) existing.req.destroy();
+    if (existing.reconnectTimeout) clearTimeout(existing.reconnectTimeout);
+    if (existing.pollInterval) clearInterval(existing.pollInterval);
+    listeners.delete(accountId);
+  }
+
+  const listener: ActiveListener = {
+    accountId,
+    connectionId: conn.id,
+    req: null,
+    reconnectTimeout: null,
+    pollInterval: null,
+    isPolling: false,
+    isDestroyed: false,
+    status: 'connecting',
+    lastEventAt: Date.now(),
+  };
+  listeners.set(accountId, listener);
+
+  let reconnectDelay = 2000;
+
+  // 1. Start Server-Side Fast Poller (Runs every 2.5s in Node.js independent of browser tabs)
+  function startServerPoller() {
+    if (listener.isDestroyed) return;
+
+    async function pollBatch() {
+      if (listener.isDestroyed || listener.isPolling) return;
+      listener.isPolling = true;
+
+      try {
+        const chatsRes = await fetch(`${baseUrl}/chat/find`, {
+          method: 'POST',
+          headers: { token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: 50 }),
+          signal: AbortSignal.timeout(4000),
+        });
+
+        if (!chatsRes.ok) return;
+        const chatsData = await chatsRes.json();
+        const rawChats = (chatsData.chats || []) as Record<string, unknown>[];
+        if (rawChats.length === 0) return;
+
+        // Fetch account owner
+        const { data: acct } = await admin
+          .from('accounts')
+          .select('owner_user_id')
+          .eq('id', accountId)
+          .single();
+        const ownerUserId = acct?.owner_user_id;
+        if (!ownerUserId) return;
+
+        // Fetch existing conversations
+        const { data: convs } = await admin
+          .from('conversations')
+          .select('id, contact_id, last_message_at, contacts(phone)')
+          .eq('account_id', accountId);
+
+        const convMapByPhone = new Map<string, { id: string; contact_id: string; last_message_at: string | null }>();
+        for (const c of convs || []) {
+          const p = (c as unknown as { contacts?: { phone?: string } })?.contacts?.phone;
+          if (p) {
+            const clean = p.replace(/\D/g, '');
+            convMapByPhone.set(clean, { id: c.id, contact_id: c.contact_id, last_message_at: c.last_message_at });
+          }
+        }
+
+        const now = Date.now();
+
+        const processChat = async (chat: Record<string, unknown>) => {
+          if (listener.isDestroyed) return;
+
+          // Strict group veto
+          const isGroup = Boolean(
+            chat.isGroup ||
+            chat.wa_isGroup ||
+            String(chat.wa_chatid || '').endsWith('@g.us') ||
+            String(chat.id || '').endsWith('@g.us') ||
+            String(chat.chatid || '').endsWith('@g.us')
+          );
+          if (isGroup) return;
+
+          const rawPhone = String(chat.phone || '').replace(/\D/g, '');
+          if (!rawPhone || rawPhone.length < 8 || rawPhone.startsWith('120363') || rawPhone.length > 15) return;
+          const formattedPhone = formatUazApiNumber(rawPhone);
+          if (!formattedPhone || formattedPhone.length < 8) return;
+
+          const matchedConv = convMapByPhone.get(formattedPhone) || convMapByPhone.get(rawPhone);
+          const chatLastMsgTs = Number(chat.wa_lastMsgTimestamp || 0);
+          const dbLastMsgTs = matchedConv?.last_message_at
+            ? new Date(matchedConv.last_message_at).getTime()
+            : 0;
+
+          const hasUnread = Number(chat.wa_unreadCount || 0) > 0;
+          const tsDiff = Math.abs(chatLastMsgTs - dbLastMsgTs);
+          const isRecent = (now - chatLastMsgTs) < 300000; // within 5 minutes
+          const needsSync = !matchedConv || hasUnread || (tsDiff > 1000 && isRecent);
+
+          if (!needsSync) {
+            // Recovery check: if latest turn in DB is from customer without reply in last 15 min, trigger AI
+            if (matchedConv) {
+              const { data: lastMsg } = await admin
+                .from('messages')
+                .select('sender_type, content_text, created_at')
+                .eq('conversation_id', matchedConv.id)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+              if (lastMsg && lastMsg.sender_type === 'customer' && (now - new Date(lastMsg.created_at).getTime() < 900000)) {
+                const text = (lastMsg.content_text || '').trim();
+                const isEmojiOnly = /^(\p{Extended_Pictographic}|\p{Emoji_Presentation}|\s)+$/u.test(text);
+                const isIgnored = text === '[Mensagem recebida]' || text === '[Reação]' || text.startsWith('[Undecryptable]');
+                if (text && !isEmojiOnly && !isIgnored) {
+                  void sendWhatsAppPresence({
+                    accountId,
+                    phoneNumber: formattedPhone,
+                    presence: 'composing',
+                    delayMs: 15000,
+                    baseUrl,
+                    token,
+                  });
+                  void dispatchInboundToAiReply({
+                    accountId,
+                    conversationId: matchedConv.id,
+                    contactId: matchedConv.contact_id,
+                    configOwnerUserId: ownerUserId,
+                  }).catch(() => {});
+                }
+              }
+            }
+            return;
+          }
+
+          // Resolve contact & conversation
+          let convId = matchedConv?.id;
+          let contactId = matchedConv?.contact_id;
+
+          if (!convId || !contactId) {
+            const contactName = String(chat.wa_name || chat.name || `+${formattedPhone}`);
+            const { data: resContactId } = await admin.rpc('find_or_create_contact', {
+              p_account_id: accountId,
+              p_user_id: ownerUserId,
+              p_phone: formattedPhone,
+              p_name: contactName,
+            });
+            if (!resContactId) return;
+            contactId = resContactId;
+
+            const { data: resConvId } = await admin.rpc('find_or_create_conversation', {
+              p_account_id: accountId,
+              p_user_id: ownerUserId,
+              p_contact_id: contactId,
+              p_connection_id: conn.id,
+            });
+            if (!resConvId) return;
+            convId = resConvId;
+          }
+
+          // Fetch recent messages
+          const msgRes = await fetch(`${baseUrl}/message/find`, {
+            method: 'POST',
+            headers: { token, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chatid: `${formattedPhone}@s.whatsapp.net`, limit: 15 }),
+            signal: AbortSignal.timeout(4000),
+          });
+
+          if (!msgRes.ok) return;
+          const msgData = await msgRes.json();
+          const rawMsgs = ((msgData.messages || []) as Record<string, unknown>[]).reverse();
+          if (rawMsgs.length === 0) return;
+
+          // Extract message IDs (stripping owner prefix to prevent duplicate outgoing messages)
+          const rawIds = rawMsgs.map((m) => String(m.messageid || m.id || '')).filter(Boolean);
+          const cleanIds = rawIds.map((id: string) => (id.includes(':') ? id.split(':').pop()! : id));
+
+          const { data: existingRows } = await admin
+            .from('messages')
+            .select('message_id')
+            .eq('conversation_id', convId)
+            .in('message_id', [...rawIds, ...cleanIds]);
+
+          const existingSet = new Set((existingRows || []).map((r) => r.message_id));
+          const toInsert = [];
+
+          for (const m of rawMsgs) {
+            const rawId = String(m.messageid || m.id || '');
+            const cleanId = rawId.includes(':') ? rawId.split(':').pop()! : rawId;
+            if (!rawId || existingSet.has(rawId) || existingSet.has(cleanId)) continue;
+
+            const isReaction = Boolean(
+              m.messageType === 'reactionMessage' ||
+              m.messageType === 'ReactionMessage' ||
+              m.type === 'reaction' ||
+              m.reaction
+            );
+            if (isReaction) continue;
+
+            const isFromMe = Boolean(m.fromMe);
+            const contentObj = (m.content || {}) as Record<string, unknown>;
+            const text = String(m.text || contentObj.text || (m.messageType === 'ImageMessage' ? '[Imagem]' : '[Mensagem]'));
+            const msgTs = m.messageTimestamp ? new Date(Number(m.messageTimestamp)).toISOString() : new Date().toISOString();
+
+            toInsert.push({
+              conversation_id: convId,
+              sender_type: isFromMe ? ('agent' as const) : ('customer' as const),
+              sender_id: isFromMe ? ownerUserId : undefined,
+              content_type: m.messageType === 'ImageMessage' ? ('image' as const) : ('text' as const),
+              content_text: text,
+              media_url: (contentObj.URL || m.fileURL || null) as string | null,
+              message_id: cleanId,
+              status: 'delivered' as const,
+              created_at: msgTs,
+            });
+          }
+
+          if (toInsert.length > 0) {
+            const { data: inserted } = await admin.from('messages').insert(toInsert).select('*');
+            const last = rawMsgs[rawMsgs.length - 1];
+            const contentObj = (last.content || {}) as Record<string, unknown>;
+            const lastText = String(last.text || contentObj.text || '[Mensagem]').trim();
+            const lastTs = last.messageTimestamp ? new Date(Number(last.messageTimestamp)).toISOString() : new Date().toISOString();
+
+            await admin.rpc('update_conversation_with_message', {
+              p_conversation_id: convId,
+              p_message_text: lastText,
+              p_message_timestamp: lastTs,
+              p_is_inbound: !last.fromMe,
+            });
+
+            if (!last.fromMe) {
+              void admin
+                .from('conversations')
+                .update({ ai_reply_count: 0 })
+                .eq('id', convId);
+            }
+
+            if (inserted) {
+              for (const row of inserted) {
+                whatsappBus.emitInboxEvent({
+                  accountId,
+                  conversationId: convId,
+                  eventType: 'INSERT',
+                  message: row,
+                  conversation: {
+                    id: convId,
+                    last_message_text: lastText,
+                    last_message_at: lastTs,
+                    unread_count: last.fromMe ? 0 : 1,
+                  },
+                });
+              }
+            }
+
+            // Immediately trigger AI auto-reply for newly detected incoming customer messages
+            const isEmojiOnly = /^(\p{Extended_Pictographic}|\p{Emoji_Presentation}|\s)+$/u.test(lastText);
+            const isIgnored = lastText === '[Mensagem recebida]' || lastText === '[Reação]' || lastText.startsWith('[Undecryptable]');
+            const hasCustomerInbound = toInsert.some((m) => m.sender_type === 'customer');
+
+            if (hasCustomerInbound && contactId && convId && !isEmojiOnly && !isIgnored && lastText) {
+              void dispatchInboundToAiReply({
+                accountId,
+                conversationId: convId,
+                contactId,
+                configOwnerUserId: ownerUserId,
+                messageId: toInsert[toInsert.length - 1]?.message_id,
+              }).catch((err) => {
+                console.error('[uazapi-manager poller] AI auto-reply error:', err);
+              });
+            }
+          }
+        };
+
+        await Promise.allSettled(rawChats.map(processChat));
+      } catch {
+        // Non-blocking
+      } finally {
+        listener.isPolling = false;
+      }
+    }
+
+    // Run first batch immediately, then every 1000ms
+    void pollBatch();
+    listener.pollInterval = setInterval(pollBatch, 1000);
+  }
+
+  // 2. Start Persistent Upstream SSE Connection
+  function connect() {
+    if (listener.isDestroyed) return;
+
+    try {
+      const sseUrl = `${baseUrl}/sse?token=${encodeURIComponent(token)}`;
+      const parsedUrl = new URL(sseUrl);
+      const isHttps = parsedUrl.protocol === 'https:';
+      const client = isHttps ? https : http;
+
+      const req = client.get(
+        sseUrl,
+        {
+          headers: {
+            token,
+            Accept: 'text/event-stream',
+          },
+        },
+        (res) => {
+          if (res.statusCode !== 200) {
+            scheduleReconnect();
+            return;
+          }
+
+          listener.status = 'connected';
+          reconnectDelay = 2000;
+
+          let buffer = '';
+
+          res.on('data', (chunk: Buffer) => {
+            if (listener.isDestroyed) return;
+            listener.lastEventAt = Date.now();
+
+            buffer += chunk.toString();
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (trimmed.startsWith('data:')) {
+                const jsonStr = trimmed.slice(5).trim();
+                if (jsonStr && jsonStr !== '[DONE]') {
+                  try {
+                    const eventData = JSON.parse(jsonStr);
+                    processUazApiEvent(eventData, conn).catch((err) => {
+                      console.error('[UazAPI Background SSE] Event processing error:', err);
+                    });
+                  } catch {
+                    // Non-JSON chunk
+                  }
+                }
+              }
+            }
+          });
+
+          res.on('end', () => {
+            scheduleReconnect();
+          });
+
+          res.on('error', () => {
+            scheduleReconnect();
+          });
+        }
+      );
+
+      req.on('error', () => {
+        scheduleReconnect();
+      });
+
+      listener.req = req;
+    } catch {
+      scheduleReconnect();
+    }
+  }
+
+  function scheduleReconnect() {
+    if (listener.isDestroyed) return;
+    listener.status = 'disconnected';
+    if (listener.req) {
+      try {
+        listener.req.destroy();
+      } catch {
+        // Ignored
+      }
+      listener.req = null;
+    }
+
+    if (listener.reconnectTimeout) clearTimeout(listener.reconnectTimeout);
+    listener.reconnectTimeout = setTimeout(() => {
+      if (!listener.isDestroyed) {
+        connect();
+      }
+    }, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 1.5, 15000);
+  }
+
+  connect();
+  startServerPoller();
+  return true;
+}
+
+/**
+ * Stop background SSE listener and poller for an account.
+ */
+export function stopUazApiListener(accountId: string) {
+  const existing = listeners.get(accountId);
+  if (existing) {
+    existing.isDestroyed = true;
+    if (existing.req) existing.req.destroy();
+    if (existing.reconnectTimeout) clearTimeout(existing.reconnectTimeout);
+    if (existing.pollInterval) clearInterval(existing.pollInterval);
+    listeners.delete(accountId);
+  }
+}
+
+/**
+ * Check if the background listener is currently active for an account.
+ */
+export function isUazApiListenerActive(accountId: string): boolean {
+  const l = listeners.get(accountId);
+  return Boolean(l && !l.isDestroyed && (l.status === 'connected' || l.pollInterval !== null));
+}

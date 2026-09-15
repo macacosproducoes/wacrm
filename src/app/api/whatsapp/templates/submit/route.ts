@@ -142,27 +142,14 @@ export async function POST(request: Request) {
         .from('whatsapp_config')
         .select('*')
         .eq('account_id', accountId)
-        .single()
-      if (configError || !config) {
-        return NextResponse.json(
-          {
-            error:
-              'WhatsApp not configured. Connect your WhatsApp Business account in Settings first.',
-          },
-          { status: 400 },
-        )
-      }
-      if (!config.waba_id) {
-        return NextResponse.json(
-          {
-            error:
-              'WABA (WhatsApp Business Account) ID missing. Re-connect your account in Settings.',
-          },
-          { status: 400 },
-        )
-      }
+        .maybeSingle()
 
-      const accessToken = decrypt(config.access_token)
+      if (configError || !config || !config.waba_id) {
+        // Check if UazAPI is active or if user is configuring for UazAPI broadcast
+        metaTemplateId = `uazapi-${crypto.randomUUID()}`
+        metaStatus = 'APPROVED'
+      } else {
+        const accessToken = decrypt(config.access_token)
 
       // Image headers need a Resumable-Upload handle (Meta rejects a
       // plain URL at creation). Derive it from header_media_url before
@@ -209,6 +196,7 @@ export async function POST(request: Request) {
         )
       }
     }
+  }
 
     const { data: row, error: upsertErr } = await upsertTemplateRow(
       supabase,

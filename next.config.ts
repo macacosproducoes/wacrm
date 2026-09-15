@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import path from "node:path";
 import createNextIntlPlugin from "next-intl/plugin";
 
 const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
@@ -68,6 +69,13 @@ const nextConfig: NextConfig = {
   // Docker image can run without node_modules or the Next CLI.
   // Harmless outside Docker: `next start` keeps working as before.
   output: "standalone",
+  outputFileTracingRoot: path.resolve(__dirname),
+  serverExternalPackages: [
+    "@whiskeysockets/baileys",
+    "whatsapp-rust-bridge",
+    "pino",
+    "qrcode",
+  ],
 
   /**
    * Cross-origin dev access (Next.js 16).

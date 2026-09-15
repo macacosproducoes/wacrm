@@ -1,12 +1,33 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Loader2, MessageSquare, Pencil, Plus, Trash2, Zap } from "lucide-react";
+import { useCallback, useEffect, useState, useRef, useMemo } from "react";
+import {
+  Loader2,
+  MessageSquare,
+  Pencil,
+  Plus,
+  Trash2,
+  Zap,
+  Mic,
+  Square,
+  Upload,
+  Sparkles,
+  Volume2,
+  Copy,
+  Star,
+  Layers,
+  Image as ImageIcon,
+  FileText,
+  Video,
+  Play,
+  Check,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -23,13 +44,27 @@ import {
   interactivePayloadPreviewText,
   type InteractiveMessagePayload,
 } from "@/lib/whatsapp/interactive";
-import type { QuickReply, QuickReplyKind } from "@/types";
+import type { QuickReply, QuickReplyKind, QuickReplySequenceStep } from "@/types";
+import { QuickReplyAudioPlayer } from "@/components/inbox/quick-reply-audio-player";
+import { uploadAccountMedia } from "@/lib/storage/upload-media";
+import { CHAT_MEDIA_BUCKET } from "@/components/inbox/message-composer";
+import { getDefaultColorForKind } from "@/lib/inbox/quick-reply-colors";
 
 interface DraftState {
   id?: string;
   title: string;
   kind: QuickReplyKind;
+  shortcut: string;
+  category: string;
+  color?: string;
   content_text: string;
+  media_url?: string;
+  media_duration?: number;
+  media_type?: string;
+  is_favorite?: boolean;
+  order_index?: number;
+  scope?: "team" | "personal";
+  sequence_items?: QuickReplySequenceStep[];
   interactive_payload: InteractiveMessagePayload;
 }
 
@@ -37,16 +72,53 @@ function emptyDraft(): DraftState {
   return {
     title: "",
     kind: "text",
+    shortcut: "",
+    category: "Geral",
+    color: "#EAB308",
     content_text: "",
+    is_favorite: false,
+    order_index: 0,
+    scope: "team",
+    sequence_items: [
+      { id: "1", order: 1, type: "text", content: "Olá {{primeiro_nome}}, tudo bem?", delay_seconds: 0 },
+      { id: "2", order: 2, type: "text", content: "Como posso te ajudar hoje?", delay_seconds: 3 },
+    ],
     interactive_payload: blankButtonsPayload(),
   };
 }
+
+const CATEGORIES = [
+  "Geral",
+  "Saudação",
+  "Vendas",
+  "Preço",
+  "Pagamento",
+  "Produtos",
+  "Objeções",
+  "Follow-up",
+  "Pós-venda",
+  "Suporte",
+  "Qualificação",
+  "Apresentação",
+  "Documentos",
+];
 
 export function QuickRepliesManager() {
   const [items, setItems] = useState<QuickReply[]>([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [saving, setSaving] = useState(false);
+  const [tabFilter, setTabFilter] = useState<
+    "all" | "favorite" | "text" | "audio" | "sequence" | "media" | "interactive"
+  >("all");
+
+  // Mic recorder state for audio quick reply editing
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -64,26 +136,196 @@ export function QuickRepliesManager() {
   }, [load]);
 
   const openCreate = () => setDraft(emptyDraft());
+
   const openEdit = (qr: QuickReply) =>
     setDraft({
       id: qr.id,
       title: qr.title,
       kind: qr.kind,
+      shortcut: qr.shortcut ?? "",
+      category: qr.category ?? (qr.kind === "audio" ? "Áudios" : "Geral"),
+      color: qr.color ?? getDefaultColorForKind(qr.kind),
       content_text: qr.content_text ?? "",
-      interactive_payload:
-        qr.interactive_payload ?? blankButtonsPayload(),
+      media_url: qr.media_url ?? undefined,
+      media_duration: qr.media_duration ?? undefined,
+      media_type: qr.media_type ?? undefined,
+      is_favorite: qr.is_favorite ?? false,
+      order_index: qr.order_index ?? 0,
+      scope: qr.scope ?? "team",
+      sequence_items: qr.sequence_items ?? [
+        { id: "1", order: 1, type: "text", content: "Olá {{primeiro_nome}}!", delay_seconds: 0 },
+      ],
+      interactive_payload: qr.interactive_payload ?? blankButtonsPayload(),
     });
+
+  // Handle duplication
+  const handleDuplicate = async (qr: QuickReply) => {
+    try {
+      const res = await fetch(`/api/quick-replies/${qr.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "duplicate" }),
+      });
+      if (!res.ok) {
+        throw new Error("Falha ao duplicar resposta");
+      }
+      toast.success(`Cópia criada para "${qr.title}"`);
+      await load();
+    } catch {
+      toast.error("Não foi possível duplicar a resposta rápida.");
+    }
+  };
+
+  // Toggle favorite
+  const handleToggleFavorite = async (qr: QuickReply) => {
+    const nextFav = !qr.is_favorite;
+    try {
+      const res = await fetch(`/api/quick-replies/${qr.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_favorite: nextFav }),
+      });
+      if (res.ok) {
+        toast.success(nextFav ? "Adicionado aos favoritos ⭐" : "Removido dos favoritos");
+        await load();
+      }
+    } catch {
+      toast.error("Erro ao alterar favorito.");
+    }
+  };
+
+  // Handle in-dialog microphone recording
+  const startMicRecording = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      toast.error("Gravação não suportada neste navegador.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        const blob = new Blob(audioChunksRef.current, { type: "audio/ogg" });
+        const url = URL.createObjectURL(blob);
+        const tempAudio = new Audio(url);
+        tempAudio.onloadedmetadata = () => {
+          const duration = isFinite(tempAudio.duration) ? Math.round(tempAudio.duration) : recordSeconds;
+          setDraft((d) => (d ? { ...d, media_url: url, media_duration: duration, media_type: "audio/ogg" } : d));
+        };
+
+        // Upload blob to storage
+        try {
+          const file = new File([blob], `voice-qr-${Date.now()}.ogg`, { type: "audio/ogg" });
+          const { publicUrl } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
+          setDraft((d) => (d ? { ...d, media_url: publicUrl, media_type: "audio/ogg" } : d));
+          toast.success("Áudio gravado com sucesso!");
+        } catch {
+          toast.error("Falha ao salvar arquivo de áudio gravado.");
+        }
+
+        stream.getTracks().forEach((track) => track.stop());
+      };
+
+      mediaRecorder.start(250);
+      setIsRecording(true);
+      setRecordSeconds(0);
+      timerRef.current = setInterval(() => setRecordSeconds((s) => s + 1), 1000);
+    } catch {
+      toast.error("Microfone não disponível ou permissão negada.");
+    }
+  };
+
+  const stopMicRecording = () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    setIsRecording(false);
+  };
+
+  const handleFileUpload = async (file: File) => {
+    if (!file) return;
+    try {
+      const { publicUrl } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
+      setDraft((d) =>
+        d
+          ? {
+              ...d,
+              media_url: publicUrl,
+              media_type: file.type || "application/octet-stream",
+              media_duration: 5,
+            }
+          : d
+      );
+      toast.success("Arquivo carregado com sucesso!");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Falha no upload.");
+    }
+  };
 
   const save = useCallback(async () => {
     if (!draft) return;
     if (!draft.title.trim()) {
-      toast.error("Give the quick reply a name.");
+      toast.error("Dê um nome para a resposta rápida.");
       return;
     }
-    const payload =
-      draft.kind === "interactive"
-        ? { title: draft.title, kind: "interactive", interactive_payload: draft.interactive_payload }
-        : { title: draft.title, kind: "text", content_text: draft.content_text };
+
+    if (draft.kind === "text" && !draft.content_text.trim()) {
+      toast.error("O texto da resposta não pode ficar vazio.");
+      return;
+    }
+
+    if (["audio", "image", "video", "document"].includes(draft.kind) && !draft.media_url) {
+      toast.error("Grave ou envie um arquivo antes de salvar.");
+      return;
+    }
+
+    let payload: Record<string, unknown> = {
+      title: draft.title.trim(),
+      kind: draft.kind,
+      shortcut: draft.shortcut.trim() ? draft.shortcut.replace(/^\//, "").trim() : null,
+      category: draft.category.trim() || "Geral",
+      color: draft.color || getDefaultColorForKind(draft.kind),
+      is_favorite: draft.is_favorite ?? false,
+      scope: draft.scope || "team",
+      order_index: draft.order_index || 0,
+    };
+
+    if (draft.kind === "interactive") {
+      payload.interactive_payload = draft.interactive_payload;
+    } else if (draft.kind === "audio") {
+      payload = {
+        ...payload,
+        media_url: draft.media_url,
+        media_duration: draft.media_duration || 5,
+        media_type: draft.media_type || "audio/ogg",
+        content_text: draft.content_text || `🎙️ ${draft.title}`,
+      };
+    } else if (["image", "video", "document"].includes(draft.kind)) {
+      payload = {
+        ...payload,
+        media_url: draft.media_url,
+        media_type: draft.media_type,
+        content_text: draft.content_text || "",
+      };
+    } else if (draft.kind === "sequence") {
+      payload = {
+        ...payload,
+        sequence_items: draft.sequence_items || [],
+        content_text: `[Sequência: ${draft.sequence_items?.length || 0} mensagens]`,
+      };
+    } else {
+      payload.content_text = draft.content_text;
+    }
 
     setSaving(true);
     try {
@@ -93,18 +335,18 @@ export function QuickRepliesManager() {
           method: draft.id ? "PATCH" : "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
-        },
+        }
       );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast.error(data.error ?? "Couldn't save the quick reply.");
+        toast.error(data.error ?? "Não foi possível salvar a resposta rápida.");
         return;
       }
-      toast.success(draft.id ? "Quick reply updated." : "Quick reply created.");
+      toast.success(draft.id ? "Resposta rápida atualizada." : "Resposta rápida criada.");
       setDraft(null);
       await load();
     } catch {
-      toast.error("Couldn't save the quick reply.");
+      toast.error("Não foi possível salvar a resposta rápida.");
     } finally {
       setSaving(false);
     }
@@ -112,154 +354,630 @@ export function QuickRepliesManager() {
 
   const remove = useCallback(
     async (id: string) => {
-      if (!window.confirm("Delete this quick reply?")) return;
+      if (!window.confirm("Excluir esta resposta rápida?")) return;
       const res = await fetch(`/api/quick-replies/${id}`, { method: "DELETE" });
       if (!res.ok) {
-        toast.error("Couldn't delete the quick reply.");
+        toast.error("Não foi possível excluir a resposta rápida.");
         return;
       }
+      toast.success("Resposta rápida excluída.");
       await load();
     },
-    [load],
+    [load]
   );
 
+  const filteredItems = useMemo(() => {
+    return items.filter((i) => {
+      if (tabFilter === "favorite") return Boolean(i.is_favorite);
+      if (tabFilter === "audio") return i.kind === "audio";
+      if (tabFilter === "text") return i.kind === "text";
+      if (tabFilter === "sequence") return i.kind === "sequence";
+      if (tabFilter === "media") return ["image", "video", "document", "media"].includes(i.kind);
+      if (tabFilter === "interactive") return i.kind === "interactive";
+      return true;
+    });
+  }, [items, tabFilter]);
+
   return (
-    <div>
+    <div className="space-y-6">
       <SettingsPanelHead
-        title="Quick replies"
-        description="Reusable snippets — plain text or a saved interactive message — that agents can insert from the inbox composer."
+        title="Central de Respostas Rápidas & Atalhos (ZapPlus)"
+        description="Gerencie atalhos de textos, áudios com simulação de gravação, mídias e sequências automáticas com delays para a equipe do Inbox."
         action={
-          <Button onClick={openCreate}>
-            <Plus className="mr-1 h-4 w-4" />
-            New quick reply
+          <Button onClick={openCreate} className="bg-primary text-primary-foreground gap-1.5 shadow-xs">
+            <Plus className="h-4 w-4" />
+            Nova Resposta / Atalho
           </Button>
         }
       />
 
+      {/* Filter tabs */}
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-border pb-3">
+        <button
+          type="button"
+          onClick={() => setTabFilter("all")}
+          className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+            tabFilter === "all" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Todas ({items.length})
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setTabFilter("favorite")}
+          className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+            tabFilter === "favorite" ? "bg-amber-500 text-white" : "bg-muted text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <Star className="h-3.5 w-3.5 fill-current" />
+          Favoritos ({items.filter((i) => i.is_favorite).length})
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setTabFilter("text")}
+          className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+            tabFilter === "text" ? "bg-amber-500 text-white" : "bg-muted text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          🟨 Textos ({items.filter((i) => i.kind === "text").length})
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setTabFilter("audio")}
+          className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+            tabFilter === "audio" ? "bg-purple-600 text-white" : "bg-muted text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          🟪 Áudios ({items.filter((i) => i.kind === "audio").length})
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setTabFilter("sequence")}
+          className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+            tabFilter === "sequence" ? "bg-orange-500 text-white" : "bg-muted text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          🟧 Sequências ({items.filter((i) => i.kind === "sequence").length})
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setTabFilter("media")}
+          className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+            tabFilter === "media" ? "bg-blue-600 text-white" : "bg-muted text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          🟦 Mídias ({items.filter((i) => ["image", "video", "document", "media"].includes(i.kind)).length})
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setTabFilter("interactive")}
+          className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+            tabFilter === "interactive" ? "bg-emerald-600 text-white" : "bg-muted text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          ⚡ Interativos ({items.filter((i) => i.kind === "interactive").length})
+        </button>
+      </div>
+
       {loading ? (
-        <div className="flex justify-center py-10">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <div className="flex justify-center py-12">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
-      ) : items.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-border py-10 text-center text-sm text-muted-foreground">
-          No quick replies yet. Create one to reuse it across conversations.
-        </p>
+      ) : filteredItems.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border py-12 text-center text-sm text-muted-foreground">
+          Nenhuma resposta rápida cadastrada neste filtro.
+        </div>
       ) : (
-        <ul className="flex flex-col gap-2">
-          {items.map((qr) => (
-            <li
-              key={qr.id}
-              className="flex items-start gap-3 rounded-lg border border-border bg-card p-3"
-            >
-              {qr.kind === "interactive" ? (
-                <Zap className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-              ) : (
-                <MessageSquare className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-              )}
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-foreground">{qr.title}</p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {qr.kind === "interactive" && qr.interactive_payload
-                    ? interactivePayloadPreviewText(qr.interactive_payload)
-                    : qr.content_text}
-                </p>
-              </div>
-              <div className="flex shrink-0 gap-1">
-                <Button variant="ghost" size="icon-sm" onClick={() => openEdit(qr)}>
-                  <Pencil className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => remove(qr.id)}
-                  className="text-red-400 hover:bg-red-500/10 hover:text-red-300"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </div>
-            </li>
-          ))}
+        <ul className="flex flex-col gap-2.5">
+          {filteredItems.map((qr) => {
+            const isAudio = qr.kind === "audio";
+            const isSequence = qr.kind === "sequence";
+            const isText = qr.kind === "text";
+
+            return (
+              <li
+                key={qr.id}
+                className="rounded-xl border border-border/80 bg-card p-3.5 transition-all hover:border-primary/40 shadow-xs"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3 min-w-0 flex-1">
+                    <div
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-base shadow-2xs"
+                      style={{ backgroundColor: `${qr.color || "#EAB308"}20` }}
+                    >
+                      {isAudio ? "🟪" : isSequence ? "🟧" : qr.kind === "image" ? "🟦" : qr.kind === "document" ? "🟥" : qr.kind === "video" ? "🟩" : "🟨"}
+                    </div>
+
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold text-sm text-foreground truncate">
+                          {qr.title}
+                        </span>
+
+                        {qr.shortcut && (
+                          <Badge variant="outline" className="font-mono text-[10px] px-1.5 py-0">
+                            /{qr.shortcut}
+                          </Badge>
+                        )}
+
+                        {qr.category && (
+                          <span className="text-[10px] text-muted-foreground font-medium px-1.5 py-0.5 rounded bg-muted">
+                            {qr.category}
+                          </span>
+                        )}
+
+                        {qr.scope === "personal" && (
+                          <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium px-1.5 py-0.5 rounded bg-amber-500/10">
+                            👤 Pessoal
+                          </span>
+                        )}
+
+                        {qr.is_favorite && (
+                          <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-500" />
+                        )}
+                      </div>
+
+                      {isText && qr.content_text && (
+                        <p className="text-xs text-muted-foreground line-clamp-2 whitespace-pre-wrap">
+                          {qr.content_text}
+                        </p>
+                      )}
+
+                      {isAudio && qr.media_url && (
+                        <div className="pt-1 max-w-sm">
+                          <QuickReplyAudioPlayer
+                            url={qr.media_url}
+                            duration={qr.media_duration || 0}
+                          />
+                        </div>
+                      )}
+
+
+                      {isSequence && qr.sequence_items?.length ? (
+                        <div className="text-xs text-muted-foreground pt-0.5 space-y-0.5">
+                          <span className="font-medium text-foreground">
+                            {qr.sequence_items.length} mensagens na sequência:
+                          </span>{" "}
+                          {qr.sequence_items.map((s, idx) => (
+                            <span key={s.id || idx} className="text-[11px] inline-block mr-2 text-muted-foreground">
+                              {idx + 1}. [{s.type}] ({s.delay_seconds}s)
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handleToggleFavorite(qr)}
+                      title={qr.is_favorite ? "Desfavoritar" : "Favoritar"}
+                      className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-amber-500 transition-colors"
+                    >
+                      <Star className={`h-4 w-4 ${qr.is_favorite ? "fill-amber-400 text-amber-500" : ""}`} />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleDuplicate(qr)}
+                      title="Duplicar resposta (criar variação)"
+                      className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <Copy className="h-4 w-4" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => openEdit(qr)}
+                      title="Editar"
+                      className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => remove(qr.id)}
+                      title="Excluir"
+                      className="p-1.5 rounded-md hover:bg-red-500/10 text-muted-foreground hover:text-red-500 transition-colors"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
 
-      <Dialog open={!!draft} onOpenChange={(o) => !o && setDraft(null)}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{draft?.id ? "Edit quick reply" : "New quick reply"}</DialogTitle>
-          </DialogHeader>
-          {draft && (
-            <div className="max-h-[70vh] space-y-3 overflow-y-auto">
-              <div>
-                <label className="mb-1 block text-xs text-muted-foreground">Name</label>
-                <Input
-                  value={draft.title}
-                  onChange={(e) => setDraft({ ...draft, title: e.target.value })}
-                  placeholder="e.g. Business hours"
-                  className="bg-muted text-foreground"
-                />
+      {/* Edit / Create Dialog */}
+      {draft && (
+        <Dialog open={true} onOpenChange={(open) => !open && setDraft(null)}>
+          <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden border-border bg-card">
+            <DialogHeader className="px-6 py-4 border-b border-border/70 flex flex-row items-center justify-between">
+              <DialogTitle className="text-base font-semibold text-foreground">
+                {draft.id ? "Editar Resposta Rápida / Atalho" : "Nova Resposta Rápida / Atalho"}
+              </DialogTitle>
+              <button
+                type="button"
+                onClick={() => setDraft({ ...draft, is_favorite: !draft.is_favorite })}
+                className="p-1 rounded hover:bg-muted"
+                title="Favoritar"
+              >
+                <Star className={`h-4 w-4 ${draft.is_favorite ? "fill-amber-400 text-amber-500" : "text-muted-foreground"}`} />
+              </button>
+            </DialogHeader>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {/* Kind selection */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-foreground">Tipo de Resposta</label>
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+                  {[
+                    { id: "text", label: "Texto", icon: "🟨" },
+                    { id: "audio", label: "Áudio", icon: "🟪" },
+                    { id: "sequence", label: "Sequência", icon: "🟧" },
+                    { id: "image", label: "Imagem", icon: "🟦" },
+                    { id: "video", label: "Vídeo", icon: "🟩" },
+                    { id: "document", label: "Documento", icon: "🟥" },
+                  ].map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setDraft({ ...draft, kind: t.id as QuickReplyKind })}
+                      className={`flex flex-col items-center justify-center p-2 rounded-lg border text-xs font-medium transition-all ${
+                        draft.kind === t.id
+                          ? "border-primary bg-primary/10 text-primary shadow-xs"
+                          : "border-border/60 hover:bg-muted/50 text-muted-foreground"
+                      }`}
+                    >
+                      <span className="text-base mb-0.5">{t.icon}</span>
+                      <span>{t.label}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="flex gap-2">
-                <KindTab
-                  active={draft.kind === "text"}
-                  label="Text"
-                  onClick={() => setDraft({ ...draft, kind: "text" })}
-                />
-                <KindTab
-                  active={draft.kind === "interactive"}
-                  label="Interactive"
-                  onClick={() => setDraft({ ...draft, kind: "interactive" })}
-                />
+
+              {/* Title & Shortcut */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2 space-y-1">
+                  <label className="text-xs font-semibold text-foreground">Título</label>
+                  <Input
+                    placeholder="Ex: Apresentação da Solução"
+                    value={draft.title}
+                    onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+                    className="h-8 text-xs bg-background"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-foreground">Atalho (/)</label>
+                  <Input
+                    placeholder="intro, preco"
+                    value={draft.shortcut}
+                    onChange={(e) => setDraft({ ...draft, shortcut: e.target.value })}
+                    className="h-8 text-xs font-mono bg-background"
+                  />
+                </div>
               </div>
-              {draft.kind === "text" ? (
-                <Textarea
-                  value={draft.content_text}
-                  onChange={(e) => setDraft({ ...draft, content_text: e.target.value })}
-                  placeholder="The message text to insert"
-                  className="min-h-28 bg-muted text-foreground"
-                />
-              ) : (
-                <InteractiveBuilder
-                  value={draft.interactive_payload}
-                  onChange={(p) => setDraft({ ...draft, interactive_payload: p })}
-                />
+
+              {/* Category & Scope */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-foreground">Categoria</label>
+                  <select
+                    value={draft.category}
+                    onChange={(e) => setDraft({ ...draft, category: e.target.value })}
+                    className="w-full h-8 text-xs rounded-md border border-input bg-background px-2.5 text-foreground"
+                  >
+                    {CATEGORIES.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-foreground">Disponibilidade</label>
+                  <select
+                    value={draft.scope}
+                    onChange={(e) => setDraft({ ...draft, scope: e.target.value as "team" | "personal" })}
+                    className="w-full h-8 text-xs rounded-md border border-input bg-background px-2.5 text-foreground"
+                  >
+                    <option value="team">👥 Compartilhada com a Equipe</option>
+                    <option value="personal">👤 Somente Pessoal</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Kind specific inputs */}
+              {draft.kind === "text" && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-foreground">Texto da Mensagem</label>
+                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                      <span className="font-semibold text-primary">Variáveis:</span>
+                      {["{{primeiro_nome}}", "{{nome}}", "{{empresa}}", "{{atendente}}"].map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() => setDraft({ ...draft, content_text: `${draft.content_text} ${v}` })}
+                          className="px-1 py-0.5 rounded bg-muted hover:bg-muted/80 font-mono text-[9px]"
+                        >
+                          {v}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <Textarea
+                    rows={4}
+                    placeholder="Olá {{primeiro_nome}}, tudo bem? Segue a proposta..."
+                    value={draft.content_text}
+                    onChange={(e) => setDraft({ ...draft, content_text: e.target.value })}
+                    className="text-xs bg-background resize-y"
+                  />
+                </div>
+              )}
+
+              {draft.kind === "audio" && (
+                <div className="space-y-2 p-3.5 rounded-lg border border-purple-500/30 bg-purple-500/5">
+                  <label className="text-xs font-semibold text-purple-700 dark:text-purple-300">
+                    Gravação de Áudio PTT
+                  </label>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {!isRecording ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={startMicRecording}
+                        className="h-8 text-xs text-purple-600 border-purple-500/40 hover:bg-purple-500/10 gap-1.5"
+                      >
+                        <Mic className="h-3.5 w-3.5" />
+                        Gravar Microfone
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        onClick={stopMicRecording}
+                        className="h-8 text-xs animate-pulse gap-1.5"
+                      >
+                        <Square className="h-3.5 w-3.5" />
+                        Parar ({recordSeconds}s)
+                      </Button>
+                    )}
+
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="audio/*,.ogg,.mp3,.wav"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) void handleFileUpload(file);
+                      }}
+                      className="hidden"
+                    />
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="h-8 text-xs gap-1.5"
+                    >
+                      <Upload className="h-3.5 w-3.5" />
+                      Upload Arquivo
+                    </Button>
+
+                    {draft.media_url && (
+                      <span className="text-xs text-emerald-600 font-medium pl-2">
+                        ✓ Áudio armazenado ({draft.media_duration || 0}s)
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {["image", "video", "document"].includes(draft.kind) && (
+                <div className="space-y-2 p-3.5 rounded-lg border border-border bg-muted/20">
+                  <label className="text-xs font-semibold text-foreground capitalize">
+                    Arquivo de {draft.kind}
+                  </label>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept={
+                        draft.kind === "image"
+                          ? "image/*"
+                          : draft.kind === "video"
+                          ? "video/*"
+                          : ".pdf,.doc,.docx,.xls,.xlsx,.txt"
+                      }
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) void handleFileUpload(file);
+                      }}
+                      className="hidden"
+                    />
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="h-8 text-xs gap-1.5"
+                    >
+                      <Upload className="h-3.5 w-3.5" />
+                      Selecionar Arquivo
+                    </Button>
+
+                    {draft.media_url && (
+                      <span className="text-xs text-emerald-600 font-medium">
+                        ✓ Mídia pronta para envio
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="space-y-1 pt-1">
+                    <label className="text-xs text-muted-foreground">Legenda</label>
+                    <Input
+                      placeholder="Texto que acompanha a mídia..."
+                      value={draft.content_text}
+                      onChange={(e) => setDraft({ ...draft, content_text: e.target.value })}
+                      className="h-8 text-xs bg-background"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {draft.kind === "sequence" && (
+                <div className="space-y-3 p-3.5 rounded-lg border border-orange-500/30 bg-orange-500/5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-orange-800 dark:text-orange-200">
+                      Etapas da Sequência
+                    </label>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        const next = [
+                          ...(draft.sequence_items || []),
+                          {
+                            id: String(Date.now()),
+                            order: (draft.sequence_items?.length || 0) + 1,
+                            type: "text" as const,
+                            content: "",
+                            delay_seconds: 2,
+                          },
+                        ];
+                        setDraft({ ...draft, sequence_items: next });
+                      }}
+                      className="h-6 text-[11px] gap-1 border-orange-500/40 text-orange-700 dark:text-orange-300"
+                    >
+                      <Plus className="h-3 w-3" />
+                      Adicionar Etapa
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                    {(draft.sequence_items || []).map((step, idx) => (
+                      <div
+                        key={step.id || idx}
+                        className="p-2.5 rounded-md border border-border/80 bg-background flex flex-col gap-2 shadow-2xs"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-semibold text-foreground">
+                            {idx + 1}. Tipo:
+                          </span>
+                          <select
+                            value={step.type}
+                            onChange={(e) => {
+                              const val = e.target.value as any;
+                              const next = [...(draft.sequence_items || [])];
+                              next[idx] = { ...next[idx], type: val };
+                              setDraft({ ...draft, sequence_items: next });
+                            }}
+                            className="h-6 text-[11px] rounded border px-1 bg-background text-foreground"
+                          >
+                            <option value="text">Texto</option>
+                            <option value="audio">Áudio</option>
+                            <option value="image">Imagem</option>
+                            <option value="video">Vídeo</option>
+                            <option value="document">Documento</option>
+                          </select>
+
+                          <div className="flex items-center gap-1 text-[11px] text-muted-foreground ml-auto">
+                            <span>Delay:</span>
+                            <input
+                              type="number"
+                              min={0}
+                              max={120}
+                              value={step.delay_seconds}
+                              onChange={(e) => {
+                                const val = Number(e.target.value) || 0;
+                                const next = [...(draft.sequence_items || [])];
+                                next[idx] = { ...next[idx], delay_seconds: val };
+                                setDraft({ ...draft, sequence_items: next });
+                              }}
+                              className="w-12 h-6 text-[11px] rounded border px-1 bg-background text-foreground text-center"
+                            />
+                            <span>s</span>
+                          </div>
+
+                          {(draft.sequence_items?.length || 0) > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next = (draft.sequence_items || []).filter((_, i) => i !== idx);
+                                setDraft({ ...draft, sequence_items: next });
+                              }}
+                              className="text-muted-foreground hover:text-red-500 p-0.5"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
+
+                        <Input
+                          placeholder={step.type === "text" ? "Texto da mensagem..." : "URL do arquivo/mídia..."}
+                          value={step.content || step.media_url || ""}
+                          onChange={(e) => {
+                            const next = [...(draft.sequence_items || [])];
+                            if (step.type === "text") {
+                              next[idx] = { ...next[idx], content: e.target.value };
+                            } else {
+                              next[idx] = { ...next[idx], media_url: e.target.value };
+                            }
+                            setDraft({ ...draft, sequence_items: next });
+                          }}
+                          className="h-7 text-xs bg-background"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
             </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDraft(null)} disabled={saving}>
-              Cancel
-            </Button>
-            <Button onClick={save} disabled={saving}>
-              {saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
-              Save
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
-}
 
-function KindTab({
-  active,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={
-        active
-          ? "flex-1 rounded-md border border-primary bg-primary/10 px-3 py-1.5 text-sm font-medium text-primary"
-          : "flex-1 rounded-md border border-border bg-muted px-3 py-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
-      }
-    >
-      {label}
-    </button>
+            <DialogFooter className="px-6 py-3 border-t border-border/70 bg-muted/20 flex flex-row items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setDraft(null)}
+                className="h-8 text-xs"
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={saving || !draft.title.trim()}
+                onClick={save}
+                className="h-8 text-xs bg-primary text-primary-foreground gap-1"
+              >
+                {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                Salvar Alterações
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </div>
   );
 }

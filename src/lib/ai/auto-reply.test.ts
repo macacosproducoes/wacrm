@@ -36,6 +36,15 @@ vi.mock('./admin-client', () => ({
         }
         return chain
       }
+      if (table === 'whatsapp_connections' || table === 'contacts') {
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          maybeSingle: () => Promise.resolve({ data: null, error: null }),
+          single: () => Promise.resolve({ data: null, error: null }),
+        }
+        return chain
+      }
       // conversations
       return {
         select: () => ({
@@ -184,15 +193,25 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.generateReply).not.toHaveBeenCalled()
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
+
+  it('skips when the latest message in context is already an assistant reply', async () => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'user', content: 'Olá' },
+      { role: 'assistant', content: 'Olá! Já estou te atendendo.' },
+    ])
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
 })
 
 describe('dispatchInboundToAiReply — handoff', () => {
-  it('disables auto-reply, writes a summary, and does not send on handoff', async () => {
+  it('writes a summary and does not send on handoff without disabling auto-reply automatically', async () => {
     h.generateReply.mockResolvedValue({ text: '', handoff: true })
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
     expect(h.state.rpcCalls).toHaveLength(0)
-    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updatePayload).not.toHaveProperty('ai_autoreply_disabled')
     expect(h.state.updatePayload?.ai_handoff_summary).toContain(
       'AI agent handed off',
     )
@@ -205,8 +224,8 @@ describe('dispatchInboundToAiReply — handoff', () => {
     h.generateReply.mockResolvedValue({ text: '', handoff: true })
     await dispatchInboundToAiReply(ARGS)
     expect(h.state.updatePayload).toMatchObject({
-      ai_autoreply_disabled: true,
       assigned_agent_id: 'agent-7',
     })
+    expect(h.state.updatePayload).not.toHaveProperty('ai_autoreply_disabled')
   })
 })

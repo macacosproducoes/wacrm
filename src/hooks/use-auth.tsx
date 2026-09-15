@@ -243,12 +243,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             .eq("id", data.account_id)
             .maybeSingle();
           if (accountErr) {
-            console.error("[AuthProvider] fetchAccount error:", {
-              message: accountErr.message,
-              details: accountErr.details,
-              hint: accountErr.hint,
-              code: accountErr.code,
-            });
+            try {
+              const res = await fetch("/api/account").then((r) => r.json());
+              if (res?.account) {
+                accountRow = {
+                  id: res.account.id,
+                  name: res.account.name,
+                  default_currency: res.account.default_currency ?? DEFAULT_CURRENCY,
+                };
+              }
+            } catch {
+              // Silently handle fallback failure
+            }
           } else if (account) {
             accountRow = {
               id: account.id,

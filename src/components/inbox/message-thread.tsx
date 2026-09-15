@@ -27,6 +27,10 @@ import {
   RefreshCw,
   PanelRightOpen,
   PanelRightClose,
+  Zap,
+  Bot,
+  User,
+  Loader2,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { useTranslations } from "next-intl";
@@ -39,6 +43,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ContactAvatar } from "@/components/ui/contact-avatar";
+import { formatContactDisplayName } from "@/lib/contacts/format-contact";
 import { MessageBubble } from "./message-bubble";
 import { MessageActions } from "./message-actions";
 import { MediaLightbox } from "./media-lightbox";
@@ -54,6 +60,12 @@ import { AiThreadBanner } from "./ai-thread-banner";
 import { buildReplyPreview } from "./reply-quote";
 import { renderTemplateBody } from "@/lib/whatsapp/template-body";
 import { toast } from "sonner";
+import { QuickReplyTopBar } from "./quick-reply-top-bar";
+import { AudioLibraryModal } from "./audio-library-modal";
+import { SequenceRunnerBanner, useSequenceRunner } from "./sequence-runner";
+import { QuickReplyCreateModal } from "./quick-reply-create-modal";
+import type { QuickReply, QuickReplyKind } from "@/types";
+import type { InsertedTextPayload, ExternalAudioActionPayload } from "./message-composer";
 
 interface ReplyDraft {
   id: string;
@@ -105,6 +117,7 @@ interface MessageThreadProps {
    */
   contactPanelOpen?: boolean;
   onToggleContactPanel?: () => void;
+  isUazApi?: boolean;
 }
 
 function formatDateSeparator(dateStr: string, t: ReturnType<typeof useTranslations>): string {
@@ -163,6 +176,7 @@ export function MessageThread({
   onRefresh,
   contactPanelOpen,
   onToggleContactPanel,
+  isUazApi = true,
 }: MessageThreadProps) {
   const t = useTranslations("Inbox.messageThread");
   const tTimer = useTranslations("Inbox.sessionTimer");
@@ -198,6 +212,58 @@ export function MessageThread({
     }, 700);
   }, [isRefreshing, onRefresh]);
   const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
+
+  // AI Autoreply local toggle state
+  const [aiDisabled, setAiDisabled] = useState(
+    conversation?.ai_autoreply_disabled ?? false
+  );
+  const [isTogglingAi, setIsTogglingAi] = useState(false);
+
+  useEffect(() => {
+    setAiDisabled(conversation?.ai_autoreply_disabled ?? false);
+  }, [conversation?.id, conversation?.ai_autoreply_disabled]);
+
+  const handleToggleAiAutoreply = useCallback(async () => {
+    if (!conversation?.id || isTogglingAi) return;
+    const nextDisabled = !aiDisabled;
+    setIsTogglingAi(true);
+    setAiDisabled(nextDisabled);
+
+    try {
+      const res = await fetch(`/api/ai/autoreply/${conversation.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          paused: nextDisabled,
+          assign_to_me: nextDisabled,
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData?.error || "Falha ao alterar status da IA");
+      }
+
+      toast.success(
+        nextDisabled
+          ? "⏸️ IA pausada — Atendimento humano assumido"
+          : "🤖 IA ativada! O bot responderá automaticamente"
+      );
+
+      if (nextDisabled && user?.id) {
+        onAssignChange(conversation.id, user.id);
+      } else if (!nextDisabled) {
+        onAssignChange(conversation.id, null);
+      }
+    } catch (err: unknown) {
+      setAiDisabled(!nextDisabled);
+      const msg = err instanceof Error ? err.message : "Erro ao alterar status da IA";
+      toast.error(msg);
+    } finally {
+      setIsTogglingAi(false);
+    }
+  }, [conversation?.id, aiDisabled, isTogglingAi, user?.id, onAssignChange]);
+
   // Which attachment the media viewer is showing. Lives here rather than in
   // the bubble so the viewer can page through every image/video in the
   // thread (issue #373). Paired with the conversation it belongs to and read
@@ -233,6 +299,11 @@ export function MessageThread({
 
   // 24-hour session timer
   const sessionInfo = useMemo(() => {
+    // When using UazAPI (unofficial WhatsApp), there is NO 24-hour limit!
+    if (isUazApi) {
+      return { expired: false, remaining: "" };
+    }
+
     if (!messages.length) return { expired: false, remaining: "" };
 
     // Find last customer message
@@ -256,7 +327,7 @@ export function MessageThread({
         : tTimer("xmRemaining", { minutes: Math.floor(hoursLeft * 60) });
 
     return { expired, remaining };
-  }, [messages, tTimer]);
+  }, [messages, tTimer, isUazApi]);
 
   // Store latest callback in a ref so fetchMessages doesn't need to
   // depend on `onMessagesLoaded` — otherwise parent re-renders cause
@@ -297,7 +368,25 @@ export function MessageThread({
     let cancelled = false;
 
     (async () => {
-      setLoading(true);
+      // Only show full loading spinner if we don't have messages for this conversation yet
+      if (!messages || messages.length === 0 || messages[0]?.conversation_id !== conversationId) {
+        if (conversation?.last_message_text) {
+          // Provide instant fallback so the user sees the preview message immediately while the full thread loads
+          const isAgent = conversation.last_message_sender === 'agent' || conversation.last_message_sender === 'bot';
+          const optimisticInitial: Message = {
+            id: `preview-${conversation.id}`,
+            conversation_id: conversation.id,
+            sender_type: isAgent ? 'agent' : 'customer',
+            content_type: 'text',
+            content_text: conversation.last_message_text,
+            status: 'delivered',
+            created_at: conversation.last_message_at || new Date().toISOString(),
+          };
+          onMessagesLoadedRef.current([optimisticInitial]);
+        } else {
+          setLoading(true);
+        }
+      }
 
       const { data, error } = await supabase
         .from("messages")
@@ -307,22 +396,41 @@ export function MessageThread({
 
       if (cancelled) return;
 
-      if (error) {
-        console.error("Failed to fetch messages:", error);
-      } else {
-        onMessagesLoadedRef.current(data ?? []);
+      if (!error && data && data.length > 0) {
+        onMessagesLoadedRef.current(data);
+        setLoading(false);
       }
 
-      if (!cancelled) setLoading(false);
+      // If DB has 0 messages, sync live messages from WhatsApp via /api/inbox/messages
+      if (error || !data || data.length === 0) {
+        try {
+          const apiRes = await fetch(
+            `/api/inbox/messages?conversation_id=${encodeURIComponent(conversationId)}`
+          ).then((r) => r.json());
+          if (!cancelled && apiRes?.messages) {
+            onMessagesLoadedRef.current(apiRes.messages);
+          }
+        } catch {
+          // Keep existing state
+        } finally {
+          if (!cancelled) setLoading(false);
+        }
+      } else {
+        // Background sync to ensure we didn't miss recent WhatsApp messages
+        fetch(`/api/inbox/messages?conversation_id=${encodeURIComponent(conversationId)}`)
+          .then((r) => r.json())
+          .then((apiRes) => {
+            if (!cancelled && apiRes?.messages && apiRes.messages.length > data.length) {
+              onMessagesLoadedRef.current(apiRes.messages);
+            }
+          })
+          .catch(() => {});
+      }
     })();
 
     return () => {
       cancelled = true;
     };
-    // `resyncToken` is included so the parent can force a refetch when
-    // the realtime channel reconnects or the tab regains focus —
-    // realtime is best-effort and any message events sent while the WS
-    // was disconnected or throttled are otherwise lost.
   }, [conversationId, resyncToken]);
 
   // Reactions fetch — pulls the current state from the DB. Kept separate
@@ -506,10 +614,12 @@ export function MessageThread({
           return;
         }
 
-        // Success — the realtime INSERT event will replace the temp bubble
-        // with the real DB row. If realtime hasn't arrived yet, at least
-        // flip status to 'sent' so the UI stops showing "sending".
-        onUpdateMessage(tempId, { status: "sent" });
+        // Success — update the optimistic bubble with the real ID and status 'sent'
+        onUpdateMessage(tempId, {
+          id: payload?.message_id || tempId,
+          status: "sent",
+          message_id: payload?.whatsapp_message_id,
+        });
       } catch (err) {
         console.error("Failed to send message:", err);
         const reason = err instanceof Error ? err.message : "network error";
@@ -574,7 +684,11 @@ export function MessageThread({
           return;
         }
 
-        onUpdateMessage(tempId, { status: "sent" });
+        onUpdateMessage(tempId, {
+          id: data?.message_id || tempId,
+          status: "sent",
+          message_id: data?.whatsapp_message_id,
+        });
       } catch (err) {
         console.error("Failed to send media:", err);
         const reason = err instanceof Error ? err.message : "network error";
@@ -628,7 +742,11 @@ export function MessageThread({
           return;
         }
 
-        onUpdateMessage(tempId, { status: "sent" });
+        onUpdateMessage(tempId, {
+          id: data?.message_id || tempId,
+          status: "sent",
+          message_id: data?.whatsapp_message_id,
+        });
       } catch (err) {
         console.error("Failed to send interactive message:", err);
         const reason = err instanceof Error ? err.message : "network error";
@@ -728,7 +846,79 @@ export function MessageThread({
     [conversation, onNewMessage, onUpdateMessage],
   );
 
+  // ============================================================
+  // Quick Replies Central (ZapPlus style)
+  // ============================================================
+  const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
+  const [loadingQuickReplies, setLoadingQuickReplies] = useState(false);
+  const [audioLibraryOpen, setAudioLibraryOpen] = useState(false);
+  const [createQuickReplyOpen, setCreateQuickReplyOpen] = useState(false);
+  const [createDefaultKind, setCreateDefaultKind] = useState<QuickReplyKind>("text");
+  const [insertedTextPayload, setInsertedTextPayload] = useState<InsertedTextPayload | null>(null);
+  const [externalAudioAction, setExternalAudioAction] = useState<ExternalAudioActionPayload | null>(null);
+
+  const loadQuickReplies = useCallback(async () => {
+    setLoadingQuickReplies(true);
+    try {
+      const res = await fetch("/api/quick-replies", { cache: "no-store" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && Array.isArray(data.quick_replies)) {
+        setQuickReplies(data.quick_replies);
+      }
+    } finally {
+      setLoadingQuickReplies(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadQuickReplies();
+  }, [loadQuickReplies]);
+
+  const contactVariableContext = useMemo(() => ({
+    name: contact?.name || "Cliente",
+    phone: contact?.phone || "",
+    agentName: user?.user_metadata?.full_name || user?.email || "Atendente",
+  }), [contact?.name, contact?.phone, user]);
+
+  const {
+    execution: sequenceExecution,
+    startSequence,
+    cancelSequence,
+  } = useSequenceRunner({
+    conversationId: conversation?.id || null,
+    contactPhone: contact?.phone || null,
+    contactContext: contactVariableContext,
+    onNewMessage,
+  });
+
+  const handleSelectTextFromTopBar = useCallback((text: string) => {
+    setInsertedTextPayload({ text, id: Date.now() });
+    toast.info("Texto inserido no campo de mensagem para revisão.");
+  }, []);
+
+  const handleSelectAudioFromTopBar = useCallback((qr: QuickReply, simulateRecording: boolean) => {
+    setExternalAudioAction({ qr, simulate: simulateRecording, id: Date.now() });
+  }, []);
+
+  const handleSelectMediaFromTopBar = useCallback((qr: QuickReply) => {
+    if (!qr.media_url) return;
+    const kind = (["image", "video", "document", "audio"].includes(qr.kind) ? qr.kind : "image") as any;
+    handleSendMedia({
+      kind,
+      mediaUrl: qr.media_url,
+      path: "",
+      caption: qr.content_text || undefined,
+      filename: qr.title,
+    });
+  }, [handleSendMedia]);
+
+  const handleOpenCreateReply = useCallback((defaultKind: QuickReplyKind = "text") => {
+    setCreateDefaultKind(defaultKind);
+    setCreateQuickReplyOpen(true);
+  }, []);
+
   // Build a quick id → Message map so reply quotes can be rendered without
+
   // an extra fetch — the thread already holds the full conversation.
   const messagesById = useMemo(() => {
     const map = new Map<string, Message>();
@@ -863,7 +1053,7 @@ export function MessageThread({
   // Empty state — same WhatsApp-style doodle background as the active
   // thread below, so swapping between empty/selected doesn't change the
   // pattern under the user's eye.
-  if (!conversation || !contact) {
+  if (!conversation) {
     return (
       <div className={cn("flex flex-1 flex-col items-center justify-center", DOODLE_BG_CLASSES)}>
         <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
@@ -879,7 +1069,17 @@ export function MessageThread({
     );
   }
 
-  const displayName = contact.name || contact.phone;
+  const effectiveContact: Contact = contact ?? {
+    id: conversation.contact_id || 'unknown',
+    user_id: '',
+    account_id: '',
+    name: 'Contato WhatsApp',
+    phone: '',
+    created_at: conversation.created_at,
+    updated_at: conversation.updated_at,
+  };
+
+  const displayName = formatContactDisplayName(effectiveContact.name, effectiveContact.phone);
   const messageGroups = groupMessagesByDate(messages);
   const currentStatus = STATUS_OPTIONS.find(
     (s) => s.value === conversation.status
@@ -916,28 +1116,79 @@ export function MessageThread({
               <ArrowLeft className="h-5 w-5" />
             </button>
           )}
-          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground">
-            {displayName.charAt(0).toUpperCase()}
-          </div>
+          <ContactAvatar
+            name={effectiveContact.name}
+            phone={effectiveContact.phone}
+            avatarUrl={effectiveContact.avatar_url}
+            size="sm"
+          />
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold text-foreground">{displayName}</h2>
-            <p className="truncate text-xs text-muted-foreground">{contact.phone}</p>
+            <p className="truncate text-xs text-muted-foreground">{formatContactDisplayName('', effectiveContact.phone)}</p>
           </div>
-          {/* Session timer badge — hidden on the narrowest phones so
-              the name + back arrow keep their room. */}
-          <Badge
-            variant="outline"
-            className={cn(
-              "ml-1 hidden gap-1 border-border text-[10px] sm:inline-flex sm:ml-2",
-              sessionInfo.expired ? "text-red-400" : "text-primary"
-            )}
-          >
-            <Clock className="h-3 w-3" />
-            {sessionInfo.remaining}
-          </Badge>
+
+          {/* Session timer / provider badge */}
+          {isUazApi ? (
+            <Badge
+              variant="outline"
+              className="ml-1 hidden gap-1 border-emerald-500/30 bg-emerald-500/10 text-[10px] text-emerald-500 sm:inline-flex sm:ml-2"
+            >
+              <Zap className="h-3 w-3" />
+              UazAPI Sem Limite 24h
+            </Badge>
+          ) : sessionInfo.remaining ? (
+            <Badge
+              variant="outline"
+              className={cn(
+                "ml-1 hidden gap-1 border-border text-[10px] sm:inline-flex sm:ml-2",
+                sessionInfo.expired ? "text-red-400" : "text-primary"
+              )}
+            >
+              <Clock className="h-3 w-3" />
+              {sessionInfo.remaining}
+            </Badge>
+          ) : null}
         </div>
 
         <div className="flex items-center gap-2">
+          {/* AI Quick Toggle */}
+          <button
+            type="button"
+            onClick={handleToggleAiAutoreply}
+            disabled={isTogglingAi}
+            title={
+              aiDisabled
+                ? "IA pausada nesta conversa. Clique para reativar o bot automático."
+                : "IA ativa nesta conversa. Clique para pausar e assumir o atendimento."
+            }
+            className={cn(
+              "inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs font-medium border transition-all duration-150 cursor-pointer disabled:opacity-60",
+              aiDisabled
+                ? "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"
+                : "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20"
+            )}
+          >
+            {isTogglingAi ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : aiDisabled ? (
+              <>
+                <User className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                <span className="hidden md:inline">Atendimento Humano</span>
+                <span className="md:hidden">Humano</span>
+              </>
+            ) : (
+              <>
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                </span>
+                <Bot className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                <span className="hidden md:inline">IA Ativa</span>
+                <span className="md:hidden">IA</span>
+              </>
+            )}
+          </button>
+
           {/* Contact-panel toggle — desktop only. The contact sidebar
               eats a chunk of horizontal width that crowds the thread on
               smaller laptops; this lets agents reclaim it when they just
@@ -1079,9 +1330,28 @@ export function MessageThread({
         </div>
       </div>
 
+      {/* Active Sequence execution banner (if running) */}
+      <SequenceRunnerBanner
+        execution={sequenceExecution}
+        onCancel={cancelSequence}
+      />
+
+      {/* Quick Reply ZapPlus Top Bar */}
+      <QuickReplyTopBar
+        quickReplies={quickReplies}
+        loading={loadingQuickReplies}
+        contactContext={contactVariableContext}
+        onSelectText={handleSelectTextFromTopBar}
+        onSelectAudio={handleSelectAudioFromTopBar}
+        onSelectMedia={handleSelectMediaFromTopBar}
+        onSelectSequence={startSequence}
+        onOpenAudioLibrary={() => setAudioLibraryOpen(true)}
+        onOpenCreateReply={handleOpenCreateReply}
+      />
+
       {/* Messages Area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
-        {loading ? (
+        {loading && messages.length === 0 ? (
           <div className="flex items-center justify-center py-12">
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           </div>
@@ -1182,6 +1452,11 @@ export function MessageThread({
         onOpenTemplates={handleOpenTemplates}
         replyTo={replyTo}
         onClearReply={() => setReplyTo(null)}
+        isUazApi={isUazApi}
+        contactName={contactDisplayName}
+        contactPhone={contact?.phone}
+        insertedTextPayload={insertedTextPayload}
+        externalAudioAction={externalAudioAction}
       />
 
       <TemplatePicker
@@ -1197,6 +1472,23 @@ export function MessageThread({
         activeId={mediaMessageId}
         onActiveIdChange={handleMediaChange}
         contactLabel={contactDisplayName}
+      />
+
+      {/* Audio Library Modal */}
+      <AudioLibraryModal
+        open={audioLibraryOpen}
+        onOpenChange={setAudioLibraryOpen}
+        audioReplies={quickReplies.filter((q) => q.kind === "audio")}
+        onSendAudio={handleSelectAudioFromTopBar}
+        onRefreshReplies={loadQuickReplies}
+      />
+
+      {/* Quick Reply Create Modal */}
+      <QuickReplyCreateModal
+        open={createQuickReplyOpen}
+        onOpenChange={setCreateQuickReplyOpen}
+        defaultKind={createDefaultKind}
+        onCreated={loadQuickReplies}
       />
     </div>
   );

@@ -102,3 +102,61 @@ export function phoneVariants(sanitized: string): string[] {
 export function isRecipientNotAllowedError(message: string): boolean {
   return /131030|not in allowed list|not in the allowed list/i.test(message)
 }
+
+const VALID_ITU_COUNTRY_CODES = [
+  '1', '7', '20', '27', '30', '31', '32', '33', '34', '36', '39', '40', '41', '43', '44', '45', '46', '47', '48', '49',
+  '51', '52', '53', '54', '55', '56', '57', '58', '60', '61', '62', '63', '64', '65', '66', '81', '82', '84', '86', '90', '91', '92', '93', '94', '95', '98',
+  '351', '352', '353', '354', '355', '356', '357', '358', '359', '370', '371', '372', '373', '374', '375', '376', '377', '378', '380', '381', '382', '385', '386', '387', '389',
+  '591', '592', '593', '594', '595', '596', '597', '598'
+];
+
+/**
+ * Strict validator for real WhatsApp 1-to-1 contacts.
+ * Rejects WhatsApp groups (@g.us), status broadcasts (@broadcast),
+ * newsletters/channels (@newsletter), and device LIDs (@lid).
+ * Validates real Brazilian phone numbers (55 + DDD + 8/9 digits) and
+ * genuine international E.164 ITU-T country codes.
+ * Rejects synthetic 64-bit integer device hashes (LIDs).
+ */
+export function isRealWhatsAppContact(jidOrPhone: string): boolean {
+  if (!jidOrPhone) return false;
+  const str = String(jidOrPhone).toLowerCase().trim();
+  if (
+    str.includes('@g.us') ||
+    str.includes('@lid') ||
+    str.includes('@broadcast') ||
+    str.includes('@newsletter') ||
+    str.includes('status@broadcast')
+  ) {
+    return false;
+  }
+  if (str.includes('@')) {
+    const domain = str.split('@')[1];
+    if (domain && domain !== 's.whatsapp.net') return false;
+  }
+
+  const clean = str.replace(/\D/g, '');
+  if (clean.length < 9 || clean.length > 13) return false;
+  if (clean.startsWith('120363')) return false;
+
+  // Brazilian phone number validation
+  if (clean.startsWith('55')) {
+    if (clean.length < 12 || clean.length > 13) return false;
+    const ddd = parseInt(clean.slice(2, 4), 10);
+    if (isNaN(ddd) || ddd < 11 || ddd > 99) return false;
+    const invalidDdds = [20, 23, 25, 26, 29, 30, 36, 39, 50, 52, 56, 57, 58, 59, 70, 72, 76, 78, 80, 90];
+    if (invalidDdds.includes(ddd)) return false;
+    return true;
+  }
+
+  // Genuine international ITU-T phone validation
+  const hasValidCountry = VALID_ITU_COUNTRY_CODES.some((cc) => {
+    if (clean.startsWith(cc)) {
+      const restLen = clean.length - cc.length;
+      return restLen >= 7 && restLen <= 10;
+    }
+    return false;
+  });
+
+  return hasValidCountry;
+}

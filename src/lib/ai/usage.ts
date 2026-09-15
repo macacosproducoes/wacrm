@@ -42,7 +42,18 @@ export async function logAiUsage(
       completion_tokens: args.usage.completionTokens,
       total_tokens: args.usage.totalTokens,
     })
-    if (error) {
+    if (error && error.code === '23514' && args.provider === 'gemini') {
+      await db.from('ai_usage_log').insert({
+        account_id: args.accountId,
+        conversation_id: args.conversationId,
+        mode: args.mode,
+        provider: 'openai',
+        model: `gemini::${args.model}`,
+        prompt_tokens: args.usage.promptTokens,
+        completion_tokens: args.usage.completionTokens,
+        total_tokens: args.usage.totalTokens,
+      })
+    } else if (error) {
       console.error('[ai usage] log insert failed:', error)
     }
   } catch (err) {

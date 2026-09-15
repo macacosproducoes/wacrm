@@ -172,7 +172,7 @@ export const RATE_LIMITS = {
    *  or the owner's budget. 30/min is generous for organic inbound while
    *  capping a stampede; excess inbounds simply don't get an auto-reply
    *  (they still land in the inbox for a human). */
-  aiAutoReplyAccount: { limit: 30, windowMs: 60_000 },
+  aiAutoReplyAccount: { limit: 300, windowMs: 60_000 },
 } as const;
 
 /** Test-only helper. Clears the in-memory state so unit tests don't

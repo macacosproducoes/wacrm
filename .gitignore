@@ -42,3 +42,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local temporary & sessions
+scratch/
+scratch_test_session_2/
+whatsapp_sessions/
+supabase/.temp/

@@ -65,57 +65,56 @@ export default function DashboardPage() {
   const [activityLoading, setActivityLoading] = useState(true)
 
   const loadAll = useCallback(() => {
-    const db = createClient()
-
-    // Kick everything off in parallel. Each block has its own
-    // setState + finally so a slow query doesn't hold up faster
-    // sections — each widget shows its own skeleton independently.
-    void loadMetrics(db)
-      .then((m) => setMetrics(m))
-      .catch((err) => console.error('[dashboard] metrics failed:', err))
-      .finally(() => setMetricsLoading(false))
-
-    void loadConversationsSeries(db, 30)
-      .then((s) => setSeries((prev) => ({ ...prev, 30: s })))
-      .catch((err) => console.error('[dashboard] series failed:', err))
-      .finally(() => setSeriesLoading(false))
-
-    void loadPipelineDonut(db)
-      .then((p) => setPipeline(p))
-      .catch((err) => console.error('[dashboard] pipeline failed:', err))
-      .finally(() => setPipelineLoading(false))
-
-    void loadResponseTime(db)
-      .then((r) => setResponseTime(r))
-      .catch((err) => console.error('[dashboard] response time failed:', err))
-      .finally(() => setResponseTimeLoading(false))
-
-    // Fetch up to 50 so the biggest page-size option in the feed
-    // (50 rows) is already in memory — switching sizes then becomes
-    // a pure client-side slice with no extra round trip.
-    void loadActivity(db, 50)
-      .then((a) => setActivity(a))
-      .catch((err) => console.error('[dashboard] activity failed:', err))
-      .finally(() => setActivityLoading(false))
+    fetch('/api/dashboard/summary?range=30')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.metrics) setMetrics(data.metrics)
+        if (data.series) setSeries((prev) => ({ ...prev, 30: data.series }))
+        if (data.pipeline) setPipeline(data.pipeline)
+        if (data.responseTime) setResponseTime(data.responseTime)
+        if (data.activity) setActivity(data.activity)
+      })
+      .catch((err) => {
+        console.error('[dashboard] summary fetch failed:', err)
+        // Fallback to client-side queries if endpoint fails
+        const db = createClient()
+        void loadMetrics(db).then(setMetrics).catch(() => {})
+        void loadConversationsSeries(db, 30).then((s) => setSeries((prev) => ({ ...prev, 30: s }))).catch(() => {})
+        void loadPipelineDonut(db).then(setPipeline).catch(() => {})
+        void loadResponseTime(db).then(setResponseTime).catch(() => {})
+        void loadActivity(db, 50).then(setActivity).catch(() => {})
+      })
+      .finally(() => {
+        setMetricsLoading(false)
+        setSeriesLoading(false)
+        setPipelineLoading(false)
+        setResponseTimeLoading(false)
+        setActivityLoading(false)
+      })
   }, [])
 
   useEffect(() => {
     loadAll()
   }, [loadAll])
 
-  // Range switch handler — kept in an event callback (not an effect)
-  // so the setState calls stay out of the react-hooks/set-state-in-effect
-  // rule's way. The cached bucket check means switching back to a
-  // previously-viewed range is instant and doesn't re-fetch.
   const handleRangeChange = useCallback(
     (r: RangeDays) => {
       setRange(r)
       if (series[r] !== null) return
       setSeriesLoading(true)
-      const db = createClient()
-      loadConversationsSeries(db, r)
-        .then((s) => setSeries((prev) => ({ ...prev, [r]: s })))
-        .catch((err) => console.error('[dashboard] series failed:', err))
+      fetch(`/api/dashboard/summary?range=${r}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.series) {
+            setSeries((prev) => ({ ...prev, [r]: data.series }))
+          }
+        })
+        .catch(() => {
+          const db = createClient()
+          loadConversationsSeries(db, r)
+            .then((s) => setSeries((prev) => ({ ...prev, [r]: s })))
+            .catch((err) => console.error('[dashboard] series failed:', err))
+        })
         .finally(() => setSeriesLoading(false))
     },
     [series],

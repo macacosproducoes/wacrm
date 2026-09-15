@@ -5,6 +5,7 @@ import {
   Download,
   FileText,
   ImageOff,
+  ImageIcon,
   Loader2,
   Maximize2,
   type LucideIcon,
@@ -128,9 +129,26 @@ export function MediaImageBubble({
 
   if (status === "error" || broken) {
     return (
-      <MediaPlaceholder>
-        <ImageOff className="h-8 w-8 text-muted-foreground" />
-      </MediaPlaceholder>
+      <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-border/60 bg-muted/40 p-4 text-center min-w-44 max-w-60 shadow-xs">
+        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
+          <ImageIcon className="h-5 w-5" />
+        </div>
+        <div className="text-xs font-medium text-foreground truncate max-w-full">
+          {message.content_text && message.content_text !== '[Imagem]' ? message.content_text : t('imageAlt')}
+        </div>
+        <p className="text-[10px] text-muted-foreground">Foto enviada via WhatsApp</p>
+        {message.media_url && (
+          <button
+            type="button"
+            onClick={download}
+            disabled={downloading}
+            className="mt-1 inline-flex items-center gap-1.5 rounded-md bg-muted px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted/80 transition-colors"
+          >
+            {downloading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+            <span>Baixar Foto</span>
+          </button>
+        )}
+      </div>
     );
   }
 

@@ -375,6 +375,18 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
               <DropdownMenuItem
                 render={
                   <Link
+                    href="/agents"
+                    onClick={onClose}
+                    className="text-popover-foreground focus:bg-accent focus:text-accent-foreground"
+                  />
+                }
+              >
+                <Bot className="size-4" />
+                Agente de IA
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                render={
+                  <Link
                     href="/settings?tab=whatsapp"
                     onClick={onClose}
                     className="text-popover-foreground focus:bg-accent focus:text-accent-foreground"

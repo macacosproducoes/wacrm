@@ -9,9 +9,10 @@ import {
 } from "@/lib/inbox/conversations";
 import { cn } from "@/lib/utils";
 import type { Conversation, ConversationStatus, Tag } from "@/types";
-import { Search, ChevronDown, X } from "lucide-react";
+import { Search, ChevronDown, X, RefreshCw, UserCheck } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useTranslations } from "next-intl";
+import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
@@ -21,6 +22,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ContactAvatar } from "@/components/ui/contact-avatar";
+import { formatContactDisplayName } from "@/lib/contacts/format-contact";
 
 interface ConversationListProps {
   activeConversationId: string | null;
@@ -72,6 +75,75 @@ export function ConversationList({
   const [tags, setTags] = useState<Tag[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [leadCaptureEnabled, setLeadCaptureEnabled] = useState(true);
+  const [togglingLeadCapture, setTogglingLeadCapture] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/whatsapp/uazapi/capture-leads')
+      .then((r) => r.json())
+      .then((data) => {
+        if (typeof data.enabled === 'boolean') {
+          setLeadCaptureEnabled(data.enabled);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleToggleLeadCapture = async () => {
+    try {
+      setTogglingLeadCapture(true);
+      const next = !leadCaptureEnabled;
+      setLeadCaptureEnabled(next);
+      const res = await fetch('/api/whatsapp/uazapi/capture-leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'toggle', enabled: next }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(next ? 'Captura de Leads ATIVADA (Sim)' : 'Captura de Leads DESATIVADA (Não)');
+      }
+    } catch {
+      toast.error('Erro ao alternar captura de leads');
+    } finally {
+      setTogglingLeadCapture(false);
+    }
+  };
+
+  const handleSyncChats = async () => {
+    try {
+      setSyncing(true);
+      const res = await fetch("/api/whatsapp/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 500 }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        toast.success(data.message || `${data.conversationsCount || data.synced || 0} conversas sincronizadas!`);
+        // If lead capture is active, batch capture real names and leads
+        if (leadCaptureEnabled) {
+          fetch("/api/whatsapp/uazapi/capture-leads", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "capture-all" }),
+          }).catch(() => {});
+        }
+        // Refresh conversations list
+        const apiRes = await fetch("/api/inbox/conversations").then((r) => r.json());
+        if (apiRes.conversations) {
+          onConversationsLoadedRef.current(apiRes.conversations);
+        }
+      } else {
+        toast.error(data.error || "Falha ao sincronizar conversas.");
+      }
+    } catch {
+      toast.error("Erro ao sincronizar conversas.");
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   // Keep the latest callback in a ref so the fetch effect below can
   // have a stable, empty-dep identity. Previously the fetch useCallback
@@ -102,19 +174,27 @@ export function ConversationList({
 
       if (cancelled) return;
 
+      let list = data;
+
       if (error) {
-        // Supabase errors have non-enumerable properties — log fields explicitly
-        console.error("Failed to fetch conversations:", {
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-          code: error.code,
-        });
-        setLoading(false);
-        return;
+        // Fallback to internal server-side API
+        try {
+          const apiRes = await fetch("/api/inbox/conversations").then((r) => r.json());
+          if (apiRes?.conversations) {
+            list = apiRes.conversations;
+          } else {
+            console.error("Failed to fetch conversations:", error);
+            setLoading(false);
+            return;
+          }
+        } catch (apiErr) {
+          console.error("Failed to fetch conversations:", apiErr);
+          setLoading(false);
+          return;
+        }
       }
 
-      onConversationsLoadedRef.current(normalizeConversations(data ?? []));
+      onConversationsLoadedRef.current(normalizeConversations(list ?? []));
       setLoading(false);
     })();
 
@@ -226,6 +306,43 @@ export function ConversationList({
     <div className="flex h-full w-full flex-col border-r border-border bg-card lg:w-80">
       {/* Search + Filter */}
       <div className="space-y-2 border-b border-border p-3">
+        {/* Quick Lead Capture Toggle & Sync */}
+        <div className="flex items-center justify-between gap-1.5 pb-0.5">
+          <div className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+            <UserCheck className="h-3.5 w-3.5 text-emerald-500" />
+            <span>Captura Leads:</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleToggleLeadCapture}
+              disabled={togglingLeadCapture}
+              title={leadCaptureEnabled ? "Captura automática de leads ativada (Sim). Clique para desativar." : "Captura desativada (Não). Clique para ativar."}
+              className={cn(
+                "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold transition-all cursor-pointer select-none",
+                leadCaptureEnabled
+                  ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25"
+                  : "bg-muted text-muted-foreground border border-border/60 hover:bg-muted/80"
+              )}
+            >
+              <span className={cn(
+                "h-1.5 w-1.5 rounded-full",
+                leadCaptureEnabled ? "bg-emerald-500 animate-pulse" : "bg-muted-foreground/50"
+              )} />
+              {leadCaptureEnabled ? "Sim" : "Não"}
+            </button>
+            <button
+              type="button"
+              onClick={handleSyncChats}
+              disabled={syncing}
+              title="Sincronizar conversas e capturar nomes reais do WhatsApp"
+              className="inline-flex items-center justify-center h-6 w-6 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer"
+            >
+              <RefreshCw className={cn("h-3 w-3", syncing && "animate-spin text-primary")} />
+            </button>
+          </div>
+        </div>
+
         <div className="relative">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -350,6 +467,17 @@ export function ConversationList({
               </DropdownMenuContent>
             </DropdownMenu>
           )}
+
+          <button
+            type="button"
+            onClick={handleSyncChats}
+            disabled={syncing}
+            title="Sincronizar conversas do WhatsApp (UazAPI)"
+            className="ml-auto inline-flex items-center justify-center h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground rounded-md hover:bg-muted disabled:opacity-50"
+          >
+            <RefreshCw className={cn("h-3 w-3", syncing && "animate-spin")} />
+            <span className="hidden sm:inline">{syncing ? "Sincronizando..." : "Sincronizar"}</span>
+          </button>
         </div>
 
         {hasContactFilters && (
@@ -437,7 +565,7 @@ function ConversationItem({
   t,
 }: ConversationItemProps) {
   const contact = conversation.contact;
-  const displayName = contact?.name || contact?.phone || t("unknown");
+  const displayName = formatContactDisplayName(contact?.name, contact?.phone) || t("unknown");
   const initials = displayName.charAt(0).toUpperCase();
 
   const handleClick = useCallback(() => {
@@ -459,17 +587,12 @@ function ConversationItem({
       )}
     >
       {/* Avatar */}
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground">
-        {contact?.avatar_url ? (
-          <img
-            src={contact.avatar_url}
-            alt={displayName}
-            className="h-10 w-10 rounded-full object-cover"
-          />
-        ) : (
-          initials
-        )}
-      </div>
+      <ContactAvatar
+        name={contact?.name}
+        phone={contact?.phone}
+        avatarUrl={contact?.avatar_url}
+        size="md"
+      />
 
       {/* Content */}
       <div className="min-w-0 flex-1">

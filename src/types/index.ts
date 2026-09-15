@@ -165,6 +165,7 @@ export interface Conversation {
   assigned_agent_id?: string;
   last_message_text?: string;
   last_message_at?: string;
+  last_message_sender?: string;
   unread_count: number;
   created_at: string;
   updated_at: string;
@@ -272,6 +273,62 @@ export interface MessageReaction {
   created_at: string;
 }
 
+// ============================================================
+// WhatsApp Connections (migration 040)
+// Multi-provider support: Meta Official API + UazAPI
+// ============================================================
+
+export type WhatsAppProvider = 'meta' | 'uazapi';
+export type WhatsAppConnectionStatus = 'connected' | 'connecting' | 'disconnected' | 'error';
+
+/**
+ * Multi-provider WhatsApp connection. One account can have multiple
+ * connections from different providers (Meta, UazAPI, etc.) all
+ * operating simultaneously.
+ */
+export interface WhatsAppConnection {
+  id: string;
+  account_id: string;
+  provider: WhatsAppProvider;
+  display_name: string;
+  phone_number: string | null;
+  is_active: boolean;
+  provider_config: Record<string, unknown>;
+  status: WhatsAppConnectionStatus;
+  last_sync_at: string | null;
+  last_error: string | null;
+  registered_at: string | null;
+  subscribed_apps_at: string | null;
+  last_registration_error: string | null;
+  mirror_inbound_media: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Meta-specific configuration stored in provider_config
+ */
+export interface MetaProviderConfig {
+  phone_number_id: string;
+  waba_id: string;
+  access_token: string;
+  verify_token: string;
+}
+
+/**
+ * UazAPI-specific configuration stored in provider_config
+ */
+export interface UazAPIProviderConfig {
+  instance_id: string;
+  token: string;
+  base_url: string;
+}
+
+/**
+ * Legacy WhatsAppConfig interface — kept for backward compatibility
+ * during migration. New code should use WhatsAppConnection.
+ * @deprecated Use WhatsAppConnection instead
+ */
 export interface WhatsAppConfig {
   id: string;
   user_id: string;
@@ -660,10 +717,30 @@ export interface AutomationLog {
 }
 
 // ============================================================
-// Quick replies — reusable snippets (migration 035)
+// Quick replies — reusable snippets & ZapPlus central (migrations 035 & 043)
 // ============================================================
 
-export type QuickReplyKind = 'text' | 'interactive';
+export type QuickReplyKind =
+  | 'text'
+  | 'interactive'
+  | 'audio'
+  | 'image'
+  | 'video'
+  | 'document'
+  | 'media'
+  | 'sequence';
+
+export interface QuickReplySequenceStep {
+  id: string;
+  order: number;
+  type: 'text' | 'audio' | 'image' | 'video' | 'document';
+  content?: string | null;
+  media_url?: string | null;
+  media_type?: string | null;
+  media_duration?: number | null;
+  filename?: string | null;
+  delay_seconds: number;
+}
 
 export interface QuickReply {
   id: string;
@@ -673,10 +750,33 @@ export interface QuickReply {
   user_id: string;
   title: string;
   kind: QuickReplyKind;
+  /** Optional slash command shortcut (e.g. "ola", "audio1"). */
+  shortcut?: string | null;
+  /** Category or folder (e.g. "Vendas", "Atendimento", "Geral"). */
+  category?: string | null;
+  /** Visual badge / highlight color (e.g. "#EAB308", "#A855F7", "#F97316"). */
+  color?: string | null;
   /** Set when `kind === 'text'`. */
   content_text?: string | null;
   /** Set when `kind === 'interactive'`. */
   interactive_payload?: InteractiveMessagePayload | null;
+  /** Set when `kind` carries a media file (audio, image, video, document). */
+  media_url?: string | null;
+  /** MIME type (e.g. "audio/ogg", "audio/mp3", "image/jpeg", "application/pdf"). */
+  media_type?: string | null;
+  /** Duration of audio in seconds (used for simulated "Gravando áudio..."). */
+  media_duration?: number | null;
+  /** Is pinned / favorite quick reply. */
+  is_favorite?: boolean;
+  /** Custom ordering index. */
+  order_index?: number;
+  /** Active status toggle. */
+  is_active?: boolean;
+  /** Scope: shared with whole team or personal to the author. */
+  scope?: 'team' | 'personal';
+  /** Ordered steps when `kind === 'sequence'`. */
+  sequence_items?: QuickReplySequenceStep[] | null;
   created_at: string;
   updated_at: string;
 }
+

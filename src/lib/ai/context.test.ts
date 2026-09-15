@@ -39,15 +39,19 @@ describe('buildConversationContext', () => {
     expect(out).toEqual([{ role: 'assistant', content: 'auto reply' }])
   })
 
-  it('drops empty / whitespace-only messages', async () => {
-    const out = await buildConversationContext(
-      fakeDb([
-        { sender_type: 'customer', content_text: '   ' },
-        { sender_type: 'customer', content_text: null },
-        { sender_type: 'customer', content_text: 'real' },
-      ]),
-      'conv-1',
-    )
-    expect(out).toEqual([{ role: 'user', content: 'real' }])
+  it('groups consecutive messages from the same sender role with newlines', async () => {
+    const rows = [
+      { sender_type: 'customer', content_text: 'do plano premium' },
+      { sender_type: 'customer', content_text: 'Queria saber o preço' },
+      { sender_type: 'customer', content_text: 'tudo bem?' },
+      { sender_type: 'customer', content_text: 'Oi' },
+    ]
+    const out = await buildConversationContext(fakeDb(rows), 'conv-1')
+    expect(out).toEqual([
+      {
+        role: 'user',
+        content: 'Oi\ntudo bem?\nQueria saber o preço\ndo plano premium',
+      },
+    ])
   })
 })

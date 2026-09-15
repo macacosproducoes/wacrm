@@ -20,65 +20,170 @@ export async function PATCH(
     return toErrorResponse(err)
   }
 
-  const body = await request.json().catch(() => null)
-  if (!body) return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+  const body = await request.json().catch(() => null);
+  if (!body) return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
 
-  const update: Record<string, unknown> = {}
-  if (typeof body.title === 'string') {
-    const title = body.title.trim()
-    if (!title) return NextResponse.json({ error: 'title cannot be empty' }, { status: 400 })
-    update.title = title
+  const admin = supabaseAdmin();
+  const { data: existingRow, error: fetchErr } = await admin
+    .from('quick_replies')
+    .select('*')
+    .eq('id', id)
+    .eq('account_id', ctx.accountId)
+    .maybeSingle();
+
+  if (fetchErr || !existingRow) {
+    return NextResponse.json({ error: 'Quick reply not found' }, { status: 404 });
   }
 
-  // When `kind` is supplied (e.g. the editor flips Text ↔ Interactive), it
-  // drives which content column is authoritative and the other is cleared —
-  // otherwise a switched row keeps a stale payload the picker mis-routes on.
-  if ('kind' in body) {
-    if (body.kind !== 'text' && body.kind !== 'interactive') {
-      return NextResponse.json({ error: 'kind must be "text" or "interactive"' }, { status: 400 })
+  const existingMeta = ((existingRow.interactive_payload as Record<string, unknown>) || {}) as Record<string, unknown>;
+
+  // Handle duplication action
+  if (body.action === 'duplicate' || body.duplicate === true) {
+    const dupTitle = body.title || `${existingRow.title} (Cópia)`;
+    const dupMeta = { ...existingMeta };
+    if (dupMeta.shortcut) {
+      dupMeta.shortcut = `${dupMeta.shortcut}-copia`;
     }
-    update.kind = body.kind
-    if (body.kind === 'interactive') {
-      const result = validateInteractivePayload(body.interactive_payload)
-      if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 })
-      update.interactive_payload = body.interactive_payload
-      update.content_text = null
-    } else {
-      const text = typeof body.content_text === 'string' ? body.content_text : ''
-      if (!text.trim()) {
-        return NextResponse.json(
-          { error: 'content_text is required for text quick replies' },
-          { status: 400 },
-        )
-      }
-      update.content_text = text
-      update.interactive_payload = null
+
+    const { data: dupData, error: dupErr } = await admin
+      .from('quick_replies')
+      .insert({
+        account_id: ctx.accountId,
+        user_id: ctx.userId,
+        title: dupTitle,
+        kind: existingRow.kind,
+        content_text: existingRow.content_text,
+        interactive_payload: dupMeta,
+      })
+      .select()
+      .single();
+
+    if (dupErr) return NextResponse.json({ error: dupErr.message }, { status: 500 });
+    return NextResponse.json({ ok: true, quick_reply: dupData }, { status: 201 });
+  }
+
+  const update: Record<string, unknown> = {};
+  if (typeof body.title === 'string') {
+    const title = body.title.trim();
+    if (!title) return NextResponse.json({ error: 'title cannot be empty' }, { status: 400 });
+    update.title = title;
+  }
+
+  const nextKind = body.kind ? String(body.kind).toLowerCase() : (existingMeta.type || existingRow.kind || 'text');
+  const shortcut = body.shortcut !== undefined ? (body.shortcut ? String(body.shortcut).replace(/^\//, '').trim() : null) : (existingMeta.shortcut ?? null);
+  const category = body.category !== undefined ? (body.category ? String(body.category).trim() : 'Geral') : (existingMeta.category ?? 'Geral');
+  const color = body.color !== undefined ? String(body.color).trim() : (existingMeta.color ?? null);
+  const is_favorite = body.is_favorite !== undefined ? Boolean(body.is_favorite) : (existingMeta.is_favorite ?? false);
+  const order_index = body.order_index !== undefined ? Number(body.order_index) : (existingMeta.order_index ?? 0);
+  const is_active = body.is_active !== undefined ? Boolean(body.is_active) : (existingMeta.is_active ?? true);
+  const scope = body.scope !== undefined ? (body.scope === 'personal' ? 'personal' : 'team') : (existingMeta.scope ?? 'team');
+  const sequence_items = body.sequence_items !== undefined ? body.sequence_items : (existingMeta.sequence_items ?? null);
+
+  if (nextKind === 'interactive') {
+    update.kind = 'interactive';
+    const payload = body.interactive_payload ?? existingRow.interactive_payload;
+    const result = validateInteractivePayload(payload);
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+    update.interactive_payload = {
+      ...(payload as Record<string, unknown>),
+      type: 'interactive',
+      shortcut,
+      category,
+      color,
+      is_favorite,
+      order_index,
+      is_active,
+      scope,
+    };
+    update.content_text = null;
+  } else if (nextKind === 'audio') {
+    update.kind = 'text';
+    const mediaUrl = body.media_url || existingMeta.media_url;
+    if (!mediaUrl) {
+      return NextResponse.json({ error: 'media_url is required for audio quick replies' }, { status: 400 });
     }
+    update.content_text = body.content_text || existingRow.content_text || '[Áudio Gravado]';
+    update.interactive_payload = {
+      ...existingMeta,
+      type: 'audio',
+      media_url: mediaUrl,
+      media_duration: body.media_duration !== undefined ? Number(body.media_duration) : existingMeta.media_duration,
+      media_type: body.media_type || existingMeta.media_type || 'audio/ogg',
+      shortcut,
+      category,
+      color,
+      is_favorite,
+      order_index,
+      is_active,
+      scope,
+    };
+  } else if (nextKind === 'image' || nextKind === 'video' || nextKind === 'document' || nextKind === 'media') {
+    update.kind = 'text';
+    const mediaUrl = body.media_url || existingMeta.media_url;
+    if (!mediaUrl) {
+      return NextResponse.json({ error: 'media_url is required for media quick replies' }, { status: 400 });
+    }
+    update.content_text = body.content_text !== undefined ? body.content_text : existingRow.content_text;
+    update.interactive_payload = {
+      ...existingMeta,
+      type: nextKind === 'media' ? 'image' : nextKind,
+      media_url: mediaUrl,
+      media_type: body.media_type || existingMeta.media_type || (nextKind === 'video' ? 'video/mp4' : nextKind === 'document' ? 'application/pdf' : 'image/jpeg'),
+      shortcut,
+      category,
+      color,
+      is_favorite,
+      order_index,
+      is_active,
+      scope,
+    };
+  } else if (nextKind === 'sequence') {
+    update.kind = 'text';
+    const items = Array.isArray(sequence_items) ? sequence_items : [];
+    update.content_text = `[Sequência: ${items.length} mensagens]`;
+    update.interactive_payload = {
+      ...existingMeta,
+      type: 'sequence',
+      sequence_items: items,
+      shortcut,
+      category,
+      color,
+      is_favorite,
+      order_index,
+      is_active,
+      scope,
+    };
   } else {
-    // No kind change — allow partial edits of whichever field the row uses.
-    if ('content_text' in body) update.content_text = body.content_text ?? null
-    if ('interactive_payload' in body) {
-      if (body.interactive_payload != null) {
-        const result = validateInteractivePayload(body.interactive_payload)
-        if (!result.ok) {
-          return NextResponse.json({ error: result.error }, { status: 400 })
-        }
-      }
-      update.interactive_payload = body.interactive_payload ?? null
+    // text
+    update.kind = 'text';
+    if (body.content_text !== undefined) {
+      update.content_text = body.content_text;
     }
+    update.interactive_payload = {
+      ...existingMeta,
+      type: 'text',
+      shortcut,
+      category,
+      color,
+      is_favorite,
+      order_index,
+      is_active,
+      scope,
+    };
   }
 
   if (Object.keys(update).length === 0) {
-    return NextResponse.json({ ok: true })
+    return NextResponse.json({ ok: true });
   }
 
-  const { error } = await supabaseAdmin()
+  const { error } = await admin
     .from('quick_replies')
     .update(update)
     .eq('id', id)
-    .eq('account_id', ctx.accountId)
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ ok: true })
+    .eq('account_id', ctx.accountId);
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ ok: true });
 }
 
 export async function DELETE(

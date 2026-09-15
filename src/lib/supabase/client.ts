@@ -14,5 +14,12 @@ export function createClient() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   )
 
+  // Synchronize realtime WebSocket authentication with the user's active session
+  browserClient.auth.onAuthStateChange((_event, session) => {
+    if (session?.access_token && browserClient) {
+      browserClient.realtime.setAuth(session.access_token)
+    }
+  })
+
   return browserClient
 }

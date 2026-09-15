@@ -22,6 +22,7 @@ import { BroadcastError, type BroadcastPlan } from '@/lib/whatsapp/broadcast-cor
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { resolveTemplateRow } from '@/lib/whatsapp/template-body';
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils';
+import { normalizeBaseUrl } from '@/lib/whatsapp/uazapi-client';
 
 /** Which recipients a resume pass picks up. */
 export type ResumeScope = 'pending' | 'failed' | 'all';
@@ -210,7 +211,24 @@ export async function planBroadcastResume(
     .select('*')
     .eq('account_id', accountId)
     .single();
+
+  let uazConn: any = null;
   if (configError || !config) {
+    try {
+      const { data: conn } = await db
+        .from('whatsapp_connections')
+        .select('*')
+        .eq('account_id', accountId)
+        .eq('provider', 'uazapi')
+        .eq('is_active', true)
+        .single();
+      uazConn = conn;
+    } catch {
+      uazConn = null;
+    }
+  }
+
+  if (!uazConn && (configError || !config)) {
     throw new BroadcastError(
       'whatsapp_not_configured',
       'WhatsApp not configured. Please set up your WhatsApp integration first.',
@@ -224,7 +242,7 @@ export async function planBroadcastResume(
     broadcast.template_name,
     broadcast.template_language
   );
-  if (resolvedTemplate.malformed) {
+  if (resolvedTemplate.malformed && !uazConn) {
     throw new BroadcastError(
       'template_malformed',
       'Template row is malformed locally — run "Sync from Meta" in Settings to repair it before resuming.',
@@ -232,22 +250,51 @@ export async function planBroadcastResume(
     );
   }
 
-  const plan: BroadcastPlan = {
-    broadcastId,
-    templateName: broadcast.template_name,
-    templateLanguage: resolvedTemplate.language,
-    phoneNumberId: config.phone_number_id,
-    accessToken: decrypt(config.access_token),
-    templateRow: resolvedTemplate.row,
-    planned: slice.map((row) => ({
-      recipientRowId: row.id,
-      phone: sanitizePhoneForMeta(contactPhone(row) ?? ''),
-      params: Array.isArray(row.template_params)
-        ? row.template_params.filter((p): p is string => typeof p === 'string')
-        : [],
-    })),
-    rejected: 0,
-  };
+  let plan: BroadcastPlan;
+  if (uazConn) {
+    const uazConfig = uazConn.provider_config || {};
+    let token = '';
+    try {
+      token = decrypt(uazConfig.token);
+    } catch {
+      token = uazConfig.token;
+    }
+    const baseUrl = normalizeBaseUrl(uazConfig.base_url);
+    plan = {
+      broadcastId,
+      templateName: broadcast.template_name,
+      templateLanguage: resolvedTemplate.language || 'pt_BR',
+      templateRow: resolvedTemplate.row,
+      planned: slice.map((row) => ({
+        recipientRowId: row.id,
+        phone: sanitizePhoneForMeta(contactPhone(row) ?? ''),
+        params: Array.isArray(row.template_params)
+          ? row.template_params.filter((p): p is string => typeof p === 'string')
+          : [],
+      })),
+      rejected: 0,
+      provider: 'uazapi',
+      uazapi: { baseUrl, token },
+    };
+  } else {
+    plan = {
+      broadcastId,
+      templateName: broadcast.template_name,
+      templateLanguage: resolvedTemplate.language,
+      phoneNumberId: config!.phone_number_id,
+      accessToken: decrypt(config!.access_token),
+      templateRow: resolvedTemplate.row,
+      planned: slice.map((row) => ({
+        recipientRowId: row.id,
+        phone: sanitizePhoneForMeta(contactPhone(row) ?? ''),
+        params: Array.isArray(row.template_params)
+          ? row.template_params.filter((p): p is string => typeof p === 'string')
+          : [],
+      })),
+      rejected: 0,
+      provider: 'meta',
+    };
+  }
 
   return { plan, remaining, unsendable: unsendable.length };
 }

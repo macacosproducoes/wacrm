@@ -89,6 +89,15 @@ export async function POST(request: Request) {
       )
     }
 
+    // If the latest message was sent by an agent or bot, prompt the AI to draft
+    // a follow-up message to continue the conversation.
+    if (messages[messages.length - 1].role === 'assistant') {
+      messages.push({
+        role: 'user',
+        content: '(Sugira uma mensagem de acompanhamento ou continuação do atendimento para o cliente.)',
+      })
+    }
+
     // Ground the draft in the account's knowledge base (best-effort —
     // returns [] when there's no KB or retrieval fails).
     const knowledge = await retrieveKnowledge(

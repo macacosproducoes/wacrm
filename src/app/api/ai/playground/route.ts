@@ -46,6 +46,11 @@ export async function POST(request: Request) {
       )
       .slice(-MAX_TURNS)
 
+    // Ensure the simulation ends with a user turn
+    while (messages.length > 0 && messages[messages.length - 1].role === 'assistant') {
+      messages.pop()
+    }
+
     if (messages.length === 0) {
       return NextResponse.json(
         { error: 'Send a message to test the agent.' },

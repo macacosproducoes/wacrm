@@ -16,6 +16,7 @@ import { ContactSidebar } from "@/components/inbox/contact-sidebar";
 import { toast } from "sonner";
 import { WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useUazApiSse } from "@/hooks/use-uazapi-sse";
 
 // Remembers the agent's show/hide choice for the desktop contact panel
 // across reloads and sessions (device-scoped, like the theme prefs).
@@ -51,6 +52,7 @@ function InboxPageInner() {
   const [whatsappConnected, setWhatsappConnected] = useState<boolean | null>(
     null
   );
+  const [isUazApi, setIsUazApi] = useState<boolean>(true);
   /**
    * Bumped whenever we want children (ConversationList, MessageThread)
    * to refetch from the DB — used as a safety net against missed
@@ -96,6 +98,9 @@ function InboxPageInner() {
   // elsewhere.
   const autoSelectedForDeepLinkRef = useRef<string | null>(null);
 
+  // In-memory cache of messages by conversation ID to eliminate delay and flickering when switching chats
+  const messagesCacheRef = useRef<Map<string, Message[]>>(new Map());
+
   // Tracks conversations whose hydrate fetch is currently in flight. The
   // conv-INSERT and the first-message-INSERT events both call into
   // hydrateConversation; the dedupe here keeps it at one refetch per
@@ -127,30 +132,46 @@ function InboxPageInner() {
   // (when the conv-INSERT event was delayed past the message-INSERT)
   // conversations stuck on "No messages yet" until the user reloaded.
   // Also self-heals if a realtime event was missed: callers can invoke
-  // this whenever they reference a conversation id they don't recognise.
   const hydrateConversation = useCallback(async (convId: string) => {
-    if (hydratingConvIdsRef.current.has(convId)) return;
+    if (
+      !convId ||
+      typeof convId !== "string" ||
+      convId === "undefined" ||
+      convId === "null" ||
+      hydratingConvIdsRef.current.has(convId)
+    ) {
+      return;
+    }
     hydratingConvIdsRef.current.add(convId);
     try {
       const supabase = createClient();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let row: any = null;
       const { data, error } = await supabase
         .from("conversations")
         .select(CONVERSATION_SELECT)
         .eq("id", convId)
         .maybeSingle();
+
       if (error) {
-        // Supabase errors have non-enumerable properties — log fields
-        // explicitly so the console message isn't just `{}`.
-        console.error("Failed to hydrate conversation:", {
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-          code: error.code,
-        });
-        return;
+        // Fallback to internal server API (bypasses potential client RLS/parsing edge cases)
+        try {
+          const apiRes = await fetch(
+            `/api/inbox/conversations?id=${encodeURIComponent(convId)}`
+          ).then((r) => r.json());
+          row = apiRes?.conversation || apiRes?.conversations?.[0] || null;
+        } catch {
+          // Silent fallback
+        }
+        if (!row) {
+          return;
+        }
+      } else {
+        row = data;
       }
-      if (!data) return;
-      const fetched = normalizeConversation(data);
+
+      if (!row) return;
+      const fetched = normalizeConversation(row);
       setConversations((prev) => {
         const existing = prev.find((c) => c.id === fetched.id);
         if (existing) {
@@ -172,44 +193,99 @@ function InboxPageInner() {
     }
   }, []);
 
-  // Check WhatsApp connection status on mount
-  useEffect(() => {
-    const checkConnection = async () => {
-      const supabase = createClient();
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const user = session?.user;
+  // Check WhatsApp connection status on mount and when tab regains focus / resyncs
+  const checkConnection = useCallback(async () => {
+    const supabase = createClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const user = session?.user;
 
-      if (!user) return;
+    if (!user) return;
 
-      // whatsapp_config is one-row-per-account post-multi-user, so
-      // the previous `.eq('user_id', user.id)` would miss the row
-      // for any teammate who didn't personally save the config —
-      // the "WhatsApp not connected" banner would show in the
-      // shared inbox even though the admin had it configured.
-      // Resolve account_id via the profile and query by that.
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("account_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      const accountId = profile?.account_id as string | undefined;
-      if (!accountId) {
-        setWhatsappConnected(false);
-        return;
+    // whatsapp_config is one-row-per-account post-multi-user, so
+    // resolve account_id via the profile and query by that.
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("account_id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    const accountId = profile?.account_id as string | undefined;
+    if (!accountId) {
+      setWhatsappConnected(false);
+      return;
+    }
+
+    // 1. Check Baileys status (direct WhatsApp QR Code in CRM) first
+    try {
+      const baileysRes = await fetch("/api/whatsapp/baileys/status");
+      if (baileysRes.ok) {
+        const baileysData = await baileysRes.json();
+        if (baileysData.status === "connected") {
+          setWhatsappConnected(true);
+          setIsUazApi(false);
+          return;
+        }
       }
+    } catch {
+      // Fallback to database check
+    }
 
-      const { data } = await supabase
-        .from("whatsapp_config")
-        .select("status")
-        .eq("account_id", accountId)
-        .maybeSingle();
+    // 2. Check UazAPI status via server-side route (bypasses RLS issues)
+    try {
+      const uazRes = await fetch("/api/whatsapp/uazapi/config");
+      if (uazRes.ok) {
+        const uazConfig = await uazRes.json();
+        if (uazConfig.activeConnection?.status === "connected") {
+          setWhatsappConnected(true);
+          setIsUazApi(true);
+          return;
+        }
+      }
+    } catch {
+      // Continue to fallback
+    }
 
-      setWhatsappConnected(data?.status === "connected");
-    };
+    // 3. Check Meta Cloud API config
+    const { data: metaData } = await supabase
+      .from("whatsapp_config")
+      .select("status")
+      .eq("account_id", accountId)
+      .maybeSingle();
 
-    checkConnection();
+    if (metaData?.status === "connected") {
+      setWhatsappConnected(true);
+      setIsUazApi(false);
+      return;
+    }
+
+    // 4. Check active connection in whatsapp_connections (use limit(1) to avoid PGRST116)
+    const { data: activeConns } = await supabase
+      .from("whatsapp_connections")
+      .select("status, provider, provider_config")
+      .eq("account_id", accountId)
+      .eq("status", "connected")
+      .limit(1);
+
+    const activeConn = activeConns?.[0];
+    const isConnected = activeConn?.status === "connected";
+    setWhatsappConnected(isConnected);
+    const isBaileys = (activeConn?.provider_config as { driver?: string })?.driver === "baileys";
+    setIsUazApi(!isBaileys && activeConn?.provider !== "meta");
+  }, []);
+
+  useEffect(() => {
+    void checkConnection();
+  }, [checkConnection, resyncToken]);
+
+  // Periodic background resync (every 10s when tab is visible) as a safety net
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        setResyncToken((n) => n + 1);
+      }
+    }, 10000);
+    return () => clearInterval(timer);
   }, []);
 
   // Handle realtime message events
@@ -391,6 +467,25 @@ function InboxPageInner() {
   }, []);
 
   /**
+   * Realtime bridge for WhatsApp events (Baileys + UazAPI + Webhooks).
+   * Ingests messages directly with 0ms delay and syncs conversation summaries.
+   */
+  useUazApiSse({
+    enabled: true,
+    onMessage: useCallback((payload: Record<string, unknown>) => {
+      // If event contains message data from internal whatsappBus or upstream
+      if (payload.message && typeof payload.message === "object") {
+        handleMessageEvent({
+          eventType: (payload.eventType as string) || "INSERT",
+          new: payload.message as Message,
+          old: {},
+        });
+      }
+      setResyncToken((n) => n + 1);
+    }, [handleMessageEvent]),
+  });
+
+  /**
    * Manual refresh trigger for the thread-header refresh button.
    * Bumps the same resyncToken the reconnect / visibility paths use,
    * so it goes through the existing dedupe & refetch plumbing — no
@@ -428,7 +523,12 @@ function InboxPageInner() {
         if (match) {
           setActiveConversation(match);
           setActiveContact(match.contact ?? null);
-          setMessages([]);
+          const cached = messagesCacheRef.current.get(match.id);
+          if (cached && cached.length > 0) {
+            setMessages(cached);
+          } else {
+            setMessages([]);
+          }
           // Mirror the optimistic unread reset that handleSelectConversation
           // does — the user just deep-linked into this conv, treat that the
           // same as a click. Leaves activeConversation.unread_count alone so
@@ -455,16 +555,16 @@ function InboxPageInner() {
       if (activeConversation?.id === conv.id) return;
       setActiveConversation(conv);
       setActiveContact(conv.contact ?? null);
-      setMessages([]);
-      // Optimistically clear the unread badge for this conv. The
-      // server-side reset is fired by the unread-reset effect inside
-      // MessageThread (which reads activeConversation.unread_count, not
-      // the list copy — so we deliberately leave that intact below to
-      // keep the effect firing), and the realtime UPDATE that comes
-      // back will sync to 0 again as a no-op. Zeroing the list copy
-      // here means the user sees the badge disappear the instant they
-      // click instead of waiting for the round-trip — and it persists
-      // even if the realtime UPDATE is dropped.
+      
+      // Instant switch using memory cache to eliminate delay
+      const cached = messagesCacheRef.current.get(conv.id);
+      if (cached && cached.length > 0) {
+        setMessages(cached);
+      } else {
+        setMessages([]);
+      }
+
+      // Optimistically clear the unread badge for this conv.
       setConversations((prev) =>
         prev.map((c) =>
           c.id === conv.id && c.unread_count > 0
@@ -473,12 +573,7 @@ function InboxPageInner() {
         ),
       );
       // Record the selection on the deep-link ref BEFORE we change the
-      // URL. The router.replace below flips `deepLinkConvId`, which can
-      // in turn cause ConversationList to refetch and eventually call
-      // handleConversationsLoaded again. Without this line, the ref
-      // still points at the previous value, the auto-select block
-      // sees `ref !== deepLinkConvId`, fires a second time, and
-      // clobbers the messages MessageThread just fetched.
+      // URL.
       autoSelectedForDeepLinkRef.current = conv.id;
       // Reflect the selection in the URL so a refresh lands the user
       // back in the same thread, and so copy-paste links work. Use
@@ -504,20 +599,32 @@ function InboxPageInner() {
 
   const handleMessagesLoaded = useCallback((loaded: Message[]) => {
     setMessages(loaded);
+    if (loaded && loaded.length > 0 && loaded[0]?.conversation_id) {
+      messagesCacheRef.current.set(loaded[0].conversation_id, loaded);
+    }
   }, []);
 
   const handleNewMessage = useCallback((msg: Message) => {
     setMessages((prev) => {
       if (prev.some((m) => m.id === msg.id)) return prev;
-      return [...prev, msg];
+      const withoutOptimistic = prev.filter((m) => !m.id.startsWith("temp-"));
+      const next = [...withoutOptimistic, msg];
+      if (msg.conversation_id) {
+        messagesCacheRef.current.set(msg.conversation_id, next);
+      }
+      return next;
     });
   }, []);
 
   const handleUpdateMessage = useCallback(
     (id: string, updates: Partial<Message>) => {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === id ? { ...m, ...updates } : m))
-      );
+      setMessages((prev) => {
+        const next = prev.map((m) => (m.id === id ? { ...m, ...updates } : m));
+        if (next.length > 0 && next[0]?.conversation_id) {
+          messagesCacheRef.current.set(next[0].conversation_id, next);
+        }
+        return next;
+      });
     },
     []
   );
@@ -566,11 +673,19 @@ function InboxPageInner() {
       {/* WhatsApp connection banner — in the flex column, not absolute,
           so it pushes the panels down instead of overlapping them. */}
       {whatsappConnected === false && (
-        <div className="flex shrink-0 items-center justify-center gap-2 border-b border-amber-500/20 bg-amber-500/10 px-4 py-2">
-          <WifiOff className="h-4 w-4 text-amber-400" />
-          <p className="text-xs text-amber-400">
-            {t("whatsappNotConnected")}
-          </p>
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-amber-500/20 bg-amber-500/10 px-4 py-2">
+          <div className="flex items-center gap-2">
+            <WifiOff className="h-4 w-4 text-amber-400 shrink-0" />
+            <p className="text-xs text-amber-400">
+              {t("whatsappNotConnected")}
+            </p>
+          </div>
+          <a
+            href="/settings?tab=whatsapp"
+            className="text-xs font-semibold text-amber-400 hover:text-amber-300 underline underline-offset-2 shrink-0 transition-colors"
+          >
+            Conectar conta
+          </a>
         </div>
       )}
 
@@ -623,6 +738,7 @@ function InboxPageInner() {
             onRefresh={handleManualRefresh}
             contactPanelOpen={contactPanelOpen}
             onToggleContactPanel={handleToggleContactPanel}
+            isUazApi={isUazApi}
           />
         </div>
 

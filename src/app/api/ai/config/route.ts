@@ -47,11 +47,20 @@ export async function GET() {
     // The keys are selected only to derive the has_* flags; neither is
     // returned to the client.
     const { api_key, embeddings_api_key, ...safe } = data
+    const isGeminiPrefixed =
+      safe.model?.startsWith('gemini::') || safe.model?.startsWith('gemini/')
+    const resolvedProvider = isGeminiPrefixed ? 'gemini' : safe.provider
+    const resolvedModel = isGeminiPrefixed
+      ? safe.model.replace(/^gemini(::|\/)/, '')
+      : safe.model
+
     return NextResponse.json({
       configured: true,
       has_key: !!api_key,
       has_embeddings_key: !!embeddings_api_key,
       ...safe,
+      provider: resolvedProvider,
+      model: resolvedModel,
     })
   } catch (err) {
     return toErrorResponse(err)
@@ -78,8 +87,8 @@ export async function POST(request: Request) {
     if (!body || typeof body !== 'object') return bad('Invalid request body')
 
     const provider = body.provider as AiProvider
-    if (provider !== 'openai' && provider !== 'anthropic') {
-      return bad('provider must be "openai" or "anthropic"')
+    if (provider !== 'openai' && provider !== 'anthropic' && provider !== 'gemini') {
+      return bad('provider must be "openai", "anthropic" or "gemini"')
     }
     const model = typeof body.model === 'string' ? body.model.trim() : ''
     if (!model) return bad('model is required')
@@ -149,11 +158,20 @@ export async function POST(request: Request) {
     // reachability actually changed. A save that just flips a toggle or
     // edits the system prompt on an existing, already-validated config
     // skips the call — no wasted token/latency on the account's key.
+    const existingDecodedProvider =
+      existing?.model?.startsWith('gemini::') || existing?.model?.startsWith('gemini/')
+        ? 'gemini'
+        : existing?.provider
+    const existingDecodedModel =
+      existing?.model?.startsWith('gemini::') || existing?.model?.startsWith('gemini/')
+        ? existing.model.replace(/^gemini(::|\/)/, '')
+        : existing?.model
+
     const credentialsChanged =
       !existing ||
       rawKey !== '' ||
-      provider !== existing.provider ||
-      model !== existing.model
+      provider !== existingDecodedProvider ||
+      model !== existingDecodedModel
 
     if (credentialsChanged) {
       try {
@@ -215,11 +233,33 @@ export async function POST(request: Request) {
       shared.embeddings_api_key = null
     }
 
+    const savePayload = encryptedKey
+      ? { ...shared, api_key: encryptedKey }
+      : shared
+
     if (existing) {
-      const { error: upErr } = await supabase
-        .from('ai_configs')
-        .update(encryptedKey ? { ...shared, api_key: encryptedKey } : shared)
-        .eq('account_id', accountId)
+      let upErr = (
+        await supabase
+          .from('ai_configs')
+          .update(savePayload)
+          .eq('account_id', accountId)
+      ).error
+
+      // If DB has check constraint prohibiting 'gemini' (code 23514), fallback to storing as openai with gemini:: prefix
+      if (upErr && (upErr as { code?: string }).code === '23514' && provider === 'gemini') {
+        const fallbackPayload = {
+          ...savePayload,
+          provider: 'openai',
+          model: `gemini::${model}`,
+        }
+        upErr = (
+          await supabase
+            .from('ai_configs')
+            .update(fallbackPayload)
+            .eq('account_id', accountId)
+        ).error
+      }
+
       if (upErr) {
         console.error('[ai/config POST] update error:', upErr)
         return NextResponse.json(
@@ -228,12 +268,28 @@ export async function POST(request: Request) {
         )
       }
     } else {
-      const { error: insErr } = await supabase.from('ai_configs').insert({
-        account_id: accountId,
-        created_by: userId,
-        api_key: encryptedKey, // guaranteed non-null: rawKey required when no existing row
-        ...shared,
-      })
+      let insErr = (
+        await supabase.from('ai_configs').insert({
+          account_id: accountId,
+          created_by: userId,
+          api_key: encryptedKey, // guaranteed non-null: rawKey required when no existing row
+          ...shared,
+        })
+      ).error
+
+      if (insErr && (insErr as { code?: string }).code === '23514' && provider === 'gemini') {
+        insErr = (
+          await supabase.from('ai_configs').insert({
+            account_id: accountId,
+            created_by: userId,
+            api_key: encryptedKey,
+            ...shared,
+            provider: 'openai',
+            model: `gemini::${model}`,
+          })
+        ).error
+      }
+
       if (insErr) {
         console.error('[ai/config POST] insert error:', insErr)
         return NextResponse.json(

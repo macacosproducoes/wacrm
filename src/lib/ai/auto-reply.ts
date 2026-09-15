@@ -8,40 +8,26 @@ import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
+import { decrypt } from '@/lib/whatsapp/encryption'
+import { sendUazApiText, normalizeBaseUrl } from '@/lib/whatsapp/uazapi-client'
+import { sendBaileysText, isBaileysConnected } from '@/lib/whatsapp/baileys/baileys-manager'
+import { sendWhatsAppPresence } from '@/lib/whatsapp/unified-presence'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
+import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus'
+import { autoReplyDebouncer, AutoReplyDebounceArgs } from './auto-reply-debouncer'
 
-interface DispatchArgs {
-  /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
-  accountId: string
-  conversationId: string
-  contactId: string
-  /** The account's WhatsApp config owner, used for the outbound send's
-   *  audit columns (mirrors how the flow runner passes it through). */
-  configOwnerUserId: string
+export interface DispatchArgs extends AutoReplyDebounceArgs {
+  /** If true, bypasses the debounce window and executes immediately. */
+  immediate?: boolean;
+  debounceMs?: number;
 }
 
 /**
- * AI auto-reply for a freshly-arrived inbound message.
- *
- * Invoked from the WhatsApp webhook's `after()` block, only when no
- * deterministic flow consumed the message (flows win). Mirrors the flow
- * runner's contract: it owns its try/catch and NEVER throws — a failing
- * or slow LLM call must not affect the webhook's 200 to Meta.
- *
- * Eligibility gates (any → silent no-op):
- *   - AI off / auto-reply disabled for the account
- *   - a human agent is assigned (they own the thread)
- *   - auto-reply was disabled for this conversation (prior handoff)
- *   - the per-conversation reply cap is reached
- *   - there's nothing to reply to
- *
- * The 24h WhatsApp session window is inherently open here — we're
- * reacting to a customer message that just landed — so no separate
- * window check is needed.
+ * Execute the full AI reply generation and delivery pipeline for a conversation.
+ * Handles context preparation, knowledge retrieval, presence, LLM generation,
+ * slot claiming, message delivery, and status updates.
  */
-export async function dispatchInboundToAiReply(
-  args: DispatchArgs,
-): Promise<void> {
+export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promise<void> {
   const { accountId, conversationId, contactId, configOwnerUserId } = args
 
   try {
@@ -55,9 +41,7 @@ export async function dispatchInboundToAiReply(
     // automations (`new_message_received` / `keyword_match`) are
     // dispatched independently for this same inbound and may send their
     // own reply, so if the account has any active one we stand down to
-    // avoid double-texting the customer. (Relationship triggers like
-    // `first_inbound_message` don't count — they're not per-message
-    // auto-responders.)
+    // avoid double-texting the customer.
     const { data: autoResponders } = await db
       .from('automations')
       .select('id')
@@ -69,24 +53,79 @@ export async function dispatchInboundToAiReply(
 
     const { data: conv, error: convErr } = await db
       .from('conversations')
-      .select('assigned_agent_id, ai_autoreply_disabled, ai_reply_count')
+      .select('contact_id, assigned_agent_id, ai_autoreply_disabled, ai_reply_count')
       .eq('id', conversationId)
       .maybeSingle()
     if (convErr || !conv) return
     if (conv.assigned_agent_id) return // a human owns this thread
     if (conv.ai_autoreply_disabled) return // handed off / turned off here
-    // Cheap early-out; the authoritative cap check is the atomic claim
-    // below (this read can race a concurrent inbound).
-    if (conv.ai_reply_count >= config.autoReplyMaxPerConversation) return
+
+    const targetContactId = contactId || (conv as unknown as { contact_id?: string }).contact_id || ''
+
+    const isUncapped = !config.autoReplyMaxPerConversation || config.autoReplyMaxPerConversation >= 20
+
+    if (
+      !isUncapped &&
+      conv.ai_reply_count >= config.autoReplyMaxPerConversation
+    ) {
+      return
+    }
+
+    // 1. STRICT GROUP VETO: Verify contact is not a WhatsApp group
+    const { data: contact } = await db
+      .from('contacts')
+      .select('phone, name')
+      .eq('id', targetContactId)
+      .maybeSingle()
+
+    const cleanPhone = (contact?.phone || '').replace(/\D/g, '')
+    if (
+      cleanPhone.startsWith('120363') ||
+      cleanPhone.length > 15 ||
+      (contact?.phone || '').includes('@g.us')
+    ) {
+      console.log('[ai auto-reply] VETO: skipping group conversation:', conversationId, contact?.phone)
+      return
+    }
 
     const messages = await buildConversationContext(db, conversationId)
     if (messages.length === 0) return
+    // Auto-reply only responds to customer turns — if the latest message is already
+    // from an agent or bot, stand down to prevent replying to ourselves.
+    if (messages[messages.length - 1].role === 'assistant') return
 
-    // Account-wide throttle on the shared BYO key. The per-conversation
-    // cap bounds one thread; this bounds a burst across many threads (a
-    // marketing blast landing 200 replies at once) so we never run the
-    // owner's key past the provider's rate limit. Over the limit → skip
-    // the auto-reply; the inbound still sits in the inbox for a human.
+    // 2. STRICT REACTION & EMOJI VETO: Never reply to emoji reactions or system placeholders
+    const lastUserTurn = (messages[messages.length - 1].content || '').trim()
+    const isEmojiOnly = /^(\p{Extended_Pictographic}|\p{Emoji_Presentation}|\s)+$/u.test(lastUserTurn)
+    const isIgnoredText =
+      lastUserTurn === '[Mensagem recebida]' ||
+      lastUserTurn === '[Reação]' ||
+      lastUserTurn.startsWith('[Undecryptable]')
+
+    if (!lastUserTurn || isEmojiOnly || isIgnoredText) {
+      console.log('[ai auto-reply] VETO: skipping reaction or emoji-only customer turn:', lastUserTurn)
+      if (contact?.phone) {
+        void sendWhatsAppPresence({
+          accountId,
+          phoneNumber: contact.phone,
+          presence: 'paused',
+        })
+      }
+      return
+    }
+
+    // ⚡ Real-time presence: show "digitando..." on customer's phone
+    // while the AI model is processing and generating the answer
+    if (contact?.phone) {
+      void sendWhatsAppPresence({
+        accountId,
+        phoneNumber: contact.phone,
+        presence: 'composing',
+        delayMs: 15000,
+      })
+    }
+
+    // Account-wide throttle on the shared BYO key.
     const acctLimit = checkRateLimit(
       `ai-autoreply:${accountId}`,
       RATE_LIMITS.aiAutoReplyAccount,
@@ -99,6 +138,7 @@ export async function dispatchInboundToAiReply(
     }
 
     // Ground the reply in the account's knowledge base (best-effort).
+    // Using the combined/grouped lastUserTurn gives complete context!
     const knowledge = await retrieveKnowledge(
       db,
       accountId,
@@ -110,7 +150,15 @@ export async function dispatchInboundToAiReply(
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
       knowledge,
+      contactInfo: {
+        name: contact?.name || null,
+        phone: contact?.phone || null,
+      },
     })
+
+    console.log(
+      `[ai auto-reply] Calling AI model ${config.model} for conversation ${conversationId}. Prompt turns: ${messages.length}.`
+    )
 
     const { text, handoff, usage } = await generateReply({
       config,
@@ -118,11 +166,7 @@ export async function dispatchInboundToAiReply(
       messages,
     })
 
-    // Record token spend on the account's BYO key. Fire-and-forget so it
-    // never adds latency to the customer-facing send: `logAiUsage`
-    // swallows its own errors, so the floating promise can't reject.
-    // Logged regardless of handoff — the provider call happened either
-    // way.
+    // Record token spend on the account's BYO key.
     void logAiUsage(db, {
       accountId,
       conversationId,
@@ -132,24 +176,23 @@ export async function dispatchInboundToAiReply(
       usage,
     })
 
-    if (handoff || !text) {
-      // The model can't (or shouldn't) answer — stop auto-replying on
-      // this thread and hand it to a human. We (a) pause the bot here
-      // (sticky until re-enabled), (b) route the conversation to the
-      // configured handoff agent — null leaves it in the shared queue —
-      // and (c) leave a short internal note so whoever picks it up has
-      // context. Assigning fires the `on_conversation_assigned` trigger,
-      // which notifies the agent.
+    // If an explicit human handoff was triggered:
+    if (handoff) {
+      if (contact?.phone) {
+        void sendWhatsAppPresence({
+          accountId,
+          phoneNumber: contact.phone,
+          presence: 'paused',
+        })
+      }
+
       const summary = buildHandoffSummary({
         messages,
         replyCount: conv.ai_reply_count ?? 0,
       })
       const update: Record<string, unknown> = {
-        ai_autoreply_disabled: true,
         ai_handoff_summary: summary,
       }
-      // Only set the assignee when a target is configured AND the thread
-      // isn't already owned — never stomp an existing human assignment.
       if (config.handoffAgentId && !conv.assigned_agent_id) {
         update.assigned_agent_id = config.handoffAgentId
       }
@@ -157,37 +200,267 @@ export async function dispatchInboundToAiReply(
       return
     }
 
+    // If no text was returned due to transient upstream issues, leave thread active
+    if (!text) {
+      if (contact?.phone) {
+        void sendWhatsAppPresence({
+          accountId,
+          phoneNumber: contact.phone,
+          presence: 'paused',
+        })
+      }
+      console.warn(`[ai auto-reply] No text returned from model for conv ${conversationId} — leaving thread active.`)
+      return
+    }
+
+    // 🎙️ Humanization: realistic "digitando..." vs "gravando áudio..."
+    if (contact?.phone && text) {
+      const isAudio =
+        /^\[(áudio|audio|gravando|voz)\]/i.test(text.trim()) ||
+        text.toLowerCase().includes('[áudio]') ||
+        text.toLowerCase().includes('[audio]') ||
+        text.trim().startsWith('🎙️')
+
+      const presenceType = isAudio ? 'recording' : 'composing'
+
+      void sendWhatsAppPresence({
+        accountId,
+        phoneNumber: contact.phone,
+        presence: presenceType,
+        delayMs: 10000,
+      })
+
+      if (isAudio && process.env.NODE_ENV !== 'test') {
+        await new Promise((resolve) => setTimeout(resolve, 1200))
+      }
+    }
+
     // Atomically claim a reply slot: the cap check + increment happen in
-    // one UPDATE, so concurrent inbounds can never overshoot the cap. If
-    // another inbound just took the last slot, `claimed` is false and we
-    // skip the send. (We consume a slot slightly before the send lands —
-    // fail-safe: under-reply rather than over-reply.)
+    // one UPDATE, so concurrent inbounds can never overshoot the cap.
+    const effectiveMaxReplies = isUncapped ? 999999 : config.autoReplyMaxPerConversation
+
     const { data: claimed, error: claimErr } = await db.rpc(
       'claim_ai_reply_slot',
       {
         conversation_id: conversationId,
-        max_replies: config.autoReplyMaxPerConversation,
+        max_replies: effectiveMaxReplies,
       },
     )
     if (claimErr) {
-      // A real error here (vs. losing the cap race) is almost always a
-      // deploy issue — e.g. `claim_ai_reply_slot` not EXECUTE-able by the
-      // service role, or the migration not applied. Log it loudly: a
-      // silent return makes "auto-reply never fires" undiagnosable.
       console.error('[ai auto-reply] claim_ai_reply_slot failed:', claimErr)
-      return
     }
-    if (claimed !== true) return // lost the per-conversation cap race
+    if (!isUncapped && claimed !== true) return
 
+    // 1. Direct Baileys socket connection (highest responsiveness, zero latency)
+    if (isBaileysConnected(accountId) && contact?.phone) {
+      try {
+        const sendRes = await sendBaileysText(accountId, contact.phone, text)
+
+        const cleanMsgId = String(sendRes.messageId || '').includes(':')
+          ? String(sendRes.messageId).split(':').pop()!
+          : String(sendRes.messageId || `bot_${Date.now()}`)
+
+        const botMsgRow = {
+          conversation_id: conversationId,
+          sender_type: 'bot' as const,
+          content_type: 'text' as const,
+          content_text: text,
+          message_id: cleanMsgId,
+          status: 'sent' as const,
+          ai_generated: true,
+          created_at: new Date().toISOString(),
+        }
+
+        const { data: insertedMsg } = await db.from('messages').insert(botMsgRow).select('id, created_at').maybeSingle()
+
+        await db.rpc('update_conversation_with_message', {
+          p_conversation_id: conversationId,
+          p_message_text: text,
+          p_message_timestamp: botMsgRow.created_at,
+          p_is_inbound: false,
+        })
+
+        whatsappBus.emitInboxEvent({
+          accountId,
+          conversationId,
+          eventType: 'INSERT',
+          message: {
+            id: insertedMsg?.id || sendRes.messageId,
+            ...botMsgRow,
+          },
+          conversation: {
+            id: conversationId,
+            last_message_text: text,
+            last_message_at: botMsgRow.created_at,
+            unread_count: 0,
+          },
+        })
+
+        // Mark processed customer messages in this turn
+        try {
+          await db
+            .from('messages')
+            .update({ ai_processed_at: new Date().toISOString() })
+            .eq('conversation_id', conversationId)
+            .eq('sender_type', 'customer')
+            .is('ai_processed_at', null)
+        } catch {
+          // non-blocking
+        }
+
+        void sendWhatsAppPresence({
+          accountId,
+          phoneNumber: contact.phone,
+          presence: 'paused',
+        })
+        return
+      } catch (baileysErr) {
+        console.warn('[ai auto-reply] Baileys send failed, trying other providers:', baileysErr)
+      }
+    }
+
+    // 2. Active UazAPI connection
+    try {
+      const { data: uazConn } = await db
+        .from('whatsapp_connections')
+        .select('*')
+        .eq('account_id', accountId)
+        .eq('provider', 'uazapi')
+        .eq('is_active', true)
+        .maybeSingle()
+
+      if (uazConn) {
+        const config = (uazConn.provider_config || {}) as Record<string, string>
+        let token = ''
+        try {
+          token = decrypt(config.token)
+        } catch {
+          token = config.token || ''
+        }
+
+        if (token && contact?.phone) {
+          const baseUrl = normalizeBaseUrl(config.base_url)
+          const sendRes = await sendUazApiText(baseUrl, token, {
+            number: contact.phone,
+            text,
+          })
+
+          const cleanMsgId = String(sendRes.messageId || '').includes(':')
+            ? String(sendRes.messageId).split(':').pop()!
+            : String(sendRes.messageId || `bot_${Date.now()}`)
+
+          const botMsgRow = {
+            conversation_id: conversationId,
+            sender_type: 'bot' as const,
+            content_type: 'text' as const,
+            content_text: text,
+            message_id: cleanMsgId,
+            status: 'sent' as const,
+            ai_generated: true,
+            created_at: new Date().toISOString(),
+          }
+
+          const { data: insertedMsg } = await db.from('messages').insert(botMsgRow).select('id, created_at').maybeSingle()
+
+          await db.rpc('update_conversation_with_message', {
+            p_conversation_id: conversationId,
+            p_message_text: text,
+            p_message_timestamp: botMsgRow.created_at,
+            p_is_inbound: false,
+          })
+
+          whatsappBus.emitInboxEvent({
+            accountId,
+            conversationId,
+            eventType: 'INSERT',
+            message: {
+              id: insertedMsg?.id || sendRes.messageId,
+              ...botMsgRow,
+            },
+            conversation: {
+              id: conversationId,
+              last_message_text: text,
+              last_message_at: botMsgRow.created_at,
+              unread_count: 0,
+            },
+          })
+
+          // Mark processed customer messages in this turn
+          try {
+            await db
+              .from('messages')
+              .update({ ai_processed_at: new Date().toISOString() })
+              .eq('conversation_id', conversationId)
+              .eq('sender_type', 'customer')
+              .is('ai_processed_at', null)
+          } catch {
+            // non-blocking
+          }
+
+          void sendWhatsAppPresence({
+            accountId,
+            phoneNumber: contact.phone,
+            presence: 'paused',
+          })
+          return
+        }
+      }
+    } catch (uazSendErr) {
+      console.error('[ai auto-reply] UazAPI send error, checking engineSendText:', uazSendErr)
+    }
+
+    // 3. Fallback to Meta Official Cloud API (if configured)
     await engineSendText({
       accountId,
       userId: configOwnerUserId,
       conversationId,
-      contactId,
+      contactId: targetContactId,
       text,
       aiGenerated: true,
     })
+
+    // Mark processed customer messages in this turn
+    try {
+      await db
+        .from('messages')
+        .update({ ai_processed_at: new Date().toISOString() })
+        .eq('conversation_id', conversationId)
+        .eq('sender_type', 'customer')
+        .is('ai_processed_at', null)
+    } catch {
+      // non-blocking
+    }
+
+    if (contact?.phone) {
+      void sendWhatsAppPresence({
+        accountId,
+        phoneNumber: contact.phone,
+        presence: 'paused',
+      })
+    }
   } catch (err) {
     console.error('[ai auto-reply] dispatch failed:', err)
   }
+}
+
+// Register default processor in debouncer
+autoReplyDebouncer.setDefaultProcessor(executeAiReplyProcess);
+
+/**
+ * AI auto-reply for an incoming customer message.
+ * Routes through `autoReplyDebouncer` to buffer rapid messages and group them
+ * into a single unified intention before querying the AI.
+ */
+export async function dispatchInboundToAiReply(
+  args: DispatchArgs,
+): Promise<void> {
+  const isTest = process.env.NODE_ENV === 'test' && !process.env.ENABLE_TEST_DEBOUNCE;
+  if (args.immediate || isTest) {
+    return executeAiReplyProcess(args);
+  }
+
+  autoReplyDebouncer.enqueue(args, {
+    debounceMs: args.debounceMs,
+    processor: executeAiReplyProcess,
+  });
 }

@@ -1,8 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { toast } from 'sonner';
-import { Loader2, Sparkles, CheckCircle2, Trash2, Eye, EyeOff } from 'lucide-react';
+import { Loader2, Sparkles, CheckCircle2, Trash2, Eye, EyeOff, Bot } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
 import { canEditSettings } from '@/lib/auth/roles';
 import { Button } from '@/components/ui/button';
@@ -41,11 +42,19 @@ const HANDOFF_QUEUE = '__queue__';
 const PROVIDER_LABEL: Record<AiProvider, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic (Claude)',
+  gemini: 'Google Gemini (Google AI / Kie.ai)',
 };
 
 const KEY_PLACEHOLDER: Record<AiProvider, string> = {
   openai: 'sk-...',
   anthropic: 'sk-ant-...',
+  gemini: 'AIzaSy... ou chave Kie.ai (ex: a7ec...)',
+};
+
+const SUGGESTED_MODELS: Record<AiProvider, string[]> = {
+  gemini: ['gemini-2.5-flash', 'gemini-1.5-flash'],
+  openai: ['gpt-5.4-mini', 'gpt-4o-mini', 'gpt-4o'],
+  anthropic: ['claude-haiku-4-5-20251001', 'claude-3-5-sonnet-latest'],
 };
 
 export function AiConfig() {
@@ -115,6 +124,10 @@ export function AiConfig() {
   }, []);
 
   useEffect(() => {
+    void fetchConfig();
+  }, [fetchConfig]);
+
+  useEffect(() => {
     if (!accountId || loadedAccountIdRef.current === accountId) return;
     loadedAccountIdRef.current = accountId;
     void fetchConfig();
@@ -131,6 +144,7 @@ export function AiConfig() {
     const isDefaultModel =
       model === AI_PROVIDER_DEFAULT_MODEL.openai ||
       model === AI_PROVIDER_DEFAULT_MODEL.anthropic ||
+      model === AI_PROVIDER_DEFAULT_MODEL.gemini ||
       model.trim() === '';
     if (isDefaultModel) setModel(AI_PROVIDER_DEFAULT_MODEL[next]);
   };
@@ -230,11 +244,11 @@ export function AiConfig() {
     }
   };
 
-  if (loading || profileLoading) {
+  if (loading) {
     return (
       <div className="flex items-center justify-center py-16 text-muted-foreground">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> {t('loadFailed')} {/* Re-using label or a global one, wait, loading is better. Let's use useTranslations from overview or just hardcode Loading... actually I should add loading to aiConfig */}
-        {/* Wait, I didn't add loading to aiConfig. I'll just use loading. */}
+        <Loader2 className="mr-2 h-5 w-5 animate-spin text-primary" />
+        <span className="text-sm">Carregando configurações do Agente de IA...</span>
       </div>
     );
   }
@@ -247,6 +261,51 @@ export function AiConfig() {
         title={t('title')}
         description={t('description')}
       />
+
+      {configured && (
+        <div className="mb-6 rounded-xl border border-primary/20 bg-primary/5 p-4 shadow-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary border border-primary/20">
+                <Bot className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold text-foreground text-sm">
+                    {provider === 'gemini' ? 'Google Gemini 2.5 Flash (via Kie.ai)' : PROVIDER_LABEL[provider]}
+                  </span>
+                  <span className="text-xs text-muted-foreground font-mono bg-background px-2 py-0.5 rounded border">
+                    {model}
+                  </span>
+                  <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium border ${
+                    isActive 
+                      ? 'bg-emerald-500/15 text-emerald-600 border-emerald-500/30 dark:text-emerald-400' 
+                      : 'bg-muted text-muted-foreground border-border'
+                  }`}>
+                    <span className={`size-1.5 rounded-full ${isActive ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground'}`} />
+                    {isActive ? 'Agente Ativo (Ligado)' : 'Pausado'}
+                  </span>
+                  {autoReplyEnabled && (
+                    <span className="inline-flex items-center rounded-full bg-primary/15 text-primary border border-primary/30 px-2 py-0.5 text-[11px] font-medium">
+                      Auto-resposta WhatsApp Ativada
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Chave de API salva com criptografia AES-256. Responde automaticamente aos contatos no WhatsApp.
+                </p>
+              </div>
+            </div>
+            <Link
+              href="/agents?tab=playground"
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors shrink-0"
+            >
+              <Sparkles className="h-3.5 w-3.5 text-primary" />
+              Testar no Chat / Playground
+            </Link>
+          </div>
+        </div>
+      )}
 
       {!canEdit && (
         <p className="mb-4 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
@@ -277,6 +336,7 @@ export function AiConfig() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="gemini">{PROVIDER_LABEL.gemini}</SelectItem>
                     <SelectItem value="openai">{PROVIDER_LABEL.openai}</SelectItem>
                     <SelectItem value="anthropic">
                       {PROVIDER_LABEL.anthropic}
@@ -294,6 +354,23 @@ export function AiConfig() {
                   placeholder={AI_PROVIDER_DEFAULT_MODEL[provider]}
                   disabled={disabled}
                 />
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {SUGGESTED_MODELS[provider]?.map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setModel(s)}
+                      disabled={disabled}
+                      className={`rounded px-2 py-0.5 text-xs font-mono transition-colors ${
+                        model === s
+                          ? 'bg-primary text-primary-foreground font-medium'
+                          : 'bg-muted hover:bg-muted/80 text-muted-foreground'
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import type { Contact, Tag, ContactTag } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -35,6 +36,8 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
+import { ContactAvatar } from '@/components/ui/contact-avatar';
+import { formatContactDisplayName } from '@/lib/contacts/format-contact';
 import {
   Search,
   Plus,
@@ -49,7 +52,10 @@ import {
   SlidersHorizontal,
   Filter,
   X,
+  UserCheck,
+  Sparkles,
 } from 'lucide-react';
+
 import { ContactForm } from '@/components/contacts/contact-form';
 import { ContactDetailView } from '@/components/contacts/contact-detail-view';
 import { ImportModal } from '@/components/contacts/import-modal';
@@ -96,6 +102,67 @@ export default function ContactsPage() {
 
   // All tags for display
   const [tagsMap, setTagsMap] = useState<Record<string, Tag>>({});
+
+  // Auto lead capture toggle state
+  const [leadCaptureEnabled, setLeadCaptureEnabled] = useState(true);
+  const [togglingLeadCapture, setTogglingLeadCapture] = useState(false);
+  const [batchCapturing, setBatchCapturing] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/whatsapp/uazapi/capture-leads')
+      .then((res) => res.json())
+      .then((data) => {
+        if (typeof data.enabled === 'boolean') {
+          setLeadCaptureEnabled(data.enabled);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleToggleLeadCapture = async () => {
+    try {
+      setTogglingLeadCapture(true);
+      const next = !leadCaptureEnabled;
+      setLeadCaptureEnabled(next);
+      const res = await fetch('/api/whatsapp/uazapi/capture-leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'toggle', enabled: next }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(next ? 'Captura de Leads ATIVADA (Sim)' : 'Captura de Leads DESATIVADA (Não)');
+      }
+    } catch {
+      toast.error('Erro ao alternar captura de leads');
+    } finally {
+      setTogglingLeadCapture(false);
+    }
+  };
+
+  const handleBatchCaptureLeads = async () => {
+    try {
+      setBatchCapturing(true);
+      const res = await fetch('/api/whatsapp/uazapi/capture-leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'capture-all' }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(data.message || 'Leads capturados com sucesso!');
+        await fetchTags();
+        await fetchContacts();
+      } else {
+        toast.error(data.error || 'Erro ao capturar leads');
+      }
+    } catch {
+      toast.error('Falha ao processar captura de leads');
+    } finally {
+      setBatchCapturing(false);
+    }
+  };
+
 
   // Guards against out-of-order fetch responses: each fetchContacts run
   // claims a sequence number and only the latest is allowed to commit its
@@ -360,6 +427,43 @@ export default function ContactsPage() {
               {t('customFieldsBtn')}
             </Button>
           )}
+          {/* Botão de Toggle da Captura Automática de Leads */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border/70 bg-card/60 shadow-xs">
+            <UserCheck className="size-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <span className="text-xs font-medium text-muted-foreground hidden md:inline">
+              Captura de Leads:
+            </span>
+            <button
+              type="button"
+              onClick={handleToggleLeadCapture}
+              disabled={togglingLeadCapture}
+              title={leadCaptureEnabled ? "Clique para desativar captura automática" : "Clique para ativar captura automática"}
+              className={cn(
+                "inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-semibold transition-all cursor-pointer select-none",
+                leadCaptureEnabled
+                  ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25"
+                  : "bg-muted text-muted-foreground border border-border/60 hover:bg-muted/80"
+              )}
+            >
+              <span className={cn(
+                "h-2 w-2 rounded-full",
+                leadCaptureEnabled ? "bg-emerald-500 animate-pulse" : "bg-muted-foreground/50"
+              )} />
+              {leadCaptureEnabled ? "Ligado (Sim)" : "Desligado (Não)"}
+            </button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleBatchCaptureLeads}
+              disabled={batchCapturing}
+              title="Capturar nomes e etiquetar todos contatos existentes como Leads agora"
+              className="h-7 px-2 text-xs text-emerald-600 hover:text-emerald-700 hover:bg-emerald-500/10 gap-1 hidden lg:inline-flex"
+            >
+              {batchCapturing ? <Loader2 className="size-3 animate-spin" /> : <Sparkles className="size-3" />}
+              Capturar Todos
+            </Button>
+          </div>
+
           <GatedButton
             variant="outline"
             canAct={canEdit}
@@ -367,6 +471,7 @@ export default function ContactsPage() {
             onClick={() => setImportOpen(true)}
             className="border-border text-muted-foreground hover:bg-muted"
           >
+
             <Upload className="size-4" />
             {t('importBtn')}
           </GatedButton>
@@ -601,11 +706,20 @@ export default function ContactsPage() {
                     />
                   </TableCell>
                   <TableCell className="text-foreground font-medium">
-                    {contact.name || <span className="text-muted-foreground italic">{t('unnamed')}</span>}
+                    <div className="flex items-center gap-2.5">
+                      <ContactAvatar
+                        name={contact.name}
+                        phone={contact.phone}
+                        avatarUrl={contact.avatar_url}
+                        size="sm"
+                      />
+                      <span className="truncate">{formatContactDisplayName(contact.name, contact.phone) || <span className="text-muted-foreground italic">{t('unnamed')}</span>}</span>
+                    </div>
                   </TableCell>
                   <TableCell className="text-muted-foreground font-mono text-xs">
-                    {contact.phone}
+                    {formatContactDisplayName('', contact.phone)}
                   </TableCell>
+
                   <TableCell className="text-muted-foreground hidden md:table-cell text-sm">
                     {contact.email || <span className="text-muted-foreground">-</span>}
                   </TableCell>

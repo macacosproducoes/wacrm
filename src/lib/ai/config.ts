@@ -1,9 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { decrypt } from '@/lib/whatsapp/encryption'
-import type { AiConfig } from './types'
+import type { AiConfig, AiProvider } from './types'
 
 interface AiConfigRow {
-  provider: 'openai' | 'anthropic'
+  provider: AiProvider
   model: string
   api_key: string
   system_prompt: string | null
@@ -69,9 +69,18 @@ export async function loadAiConfig(
     }
   }
 
+  const isGeminiPrefixed =
+    row.model.startsWith('gemini::') || row.model.startsWith('gemini/')
+  const provider: AiProvider = isGeminiPrefixed
+    ? 'gemini'
+    : (row.provider as AiProvider)
+  const model = isGeminiPrefixed
+    ? row.model.replace(/^gemini(::|\/)/, '')
+    : row.model
+
   return {
-    provider: row.provider,
-    model: row.model,
+    provider,
+    model,
     apiKey: decrypt(row.api_key),
     systemPrompt: row.system_prompt,
     isActive: row.is_active,

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/hooks/use-auth";
-import { LogOut, Menu, Settings as SettingsIcon, User } from "lucide-react";
+import { LogOut, Menu, Settings as SettingsIcon, User, Bot } from "lucide-react";
 import {
   Avatar,
   AvatarFallback,
@@ -120,6 +120,17 @@ export function Header({ onOpenSidebar }: HeaderProps) {
           >
             <User className="size-4" />
             {t("menuProfile")}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            render={
+              <Link
+                href="/agents"
+                className="text-popover-foreground focus:bg-accent focus:text-accent-foreground"
+              />
+            }
+          >
+            <Bot className="size-4" />
+            Agente de IA
           </DropdownMenuItem>
           <DropdownMenuItem
             render={

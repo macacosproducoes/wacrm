@@ -29,6 +29,11 @@ import {
 import { resolveTemplateRow } from '@/lib/whatsapp/template-body';
 import type { MessageTemplate } from '@/types';
 import { findOrCreateContact } from '@/lib/api/v1/contacts';
+import {
+  sendUazApiText,
+  sendUazApiMedia,
+  normalizeBaseUrl,
+} from '@/lib/whatsapp/uazapi-client';
 
 /** Thrown by createBroadcast on a caller-visible failure; route maps it. */
 export class BroadcastError extends Error {
@@ -66,12 +71,17 @@ export interface BroadcastPlan {
   broadcastId: string;
   templateName: string;
   templateLanguage: string;
-  phoneNumberId: string;
-  accessToken: string;
+  phoneNumberId?: string;
+  accessToken?: string;
   templateRow: MessageTemplate | null;
   planned: PlannedRecipient[];
   /** Phones rejected up front (invalid E.164) — counted as failed. */
   rejected: number;
+  provider?: 'meta' | 'uazapi';
+  uazapi?: {
+    baseUrl: string;
+    token: string;
+  };
 }
 
 const MAX_RECIPIENTS = 1000;
@@ -115,14 +125,30 @@ export async function createBroadcast(
     .select('*')
     .eq('account_id', accountId)
     .single();
+
+  let uazConn: any = null;
   if (configError || !config) {
+    try {
+      const { data: conn } = await db
+        .from('whatsapp_connections')
+        .select('*')
+        .eq('account_id', accountId)
+        .eq('provider', 'uazapi')
+        .eq('is_active', true)
+        .single();
+      uazConn = conn;
+    } catch {
+      uazConn = null;
+    }
+  }
+
+  if (!uazConn && (configError || !config)) {
     throw new BroadcastError(
       'whatsapp_not_configured',
       'WhatsApp not configured. Please set up your WhatsApp integration first.',
       400
     );
   }
-  const accessToken = decrypt(config.access_token);
 
   // Template row (once) for header/button components; guard a
   // malformed local row rather than N identical opaque failures.
@@ -230,15 +256,39 @@ export async function createBroadcast(
     }
   );
 
+  if (uazConn) {
+    const uazConfig = uazConn.provider_config || {};
+    let token = '';
+    try {
+      token = decrypt(uazConfig.token);
+    } catch {
+      token = uazConfig.token;
+    }
+    const baseUrl = normalizeBaseUrl(uazConfig.base_url);
+
+    return {
+      broadcastId,
+      templateName,
+      templateLanguage: resolvedTemplate.language || 'pt_BR',
+      templateRow,
+      planned,
+      rejected,
+      provider: 'uazapi',
+      uazapi: { baseUrl, token },
+    };
+  }
+
+  const accessToken = decrypt(config!.access_token);
   return {
     broadcastId,
     templateName,
     templateLanguage: resolvedTemplate.language,
-    phoneNumberId: config.phone_number_id,
+    phoneNumberId: config!.phone_number_id,
     accessToken,
     templateRow,
     planned,
     rejected,
+    provider: 'meta',
   };
 }
 
@@ -259,6 +309,69 @@ export async function deliverBroadcast(
   db: SupabaseClient,
   plan: BroadcastPlan
 ): Promise<void> {
+  if (plan.provider === 'uazapi' && plan.uazapi) {
+    for (const recipient of plan.planned) {
+      let sentMessageId: string | null = null;
+      let lastError: string | null = null;
+
+      try {
+        let text = plan.templateRow?.body_text || plan.templateName;
+        recipient.params.forEach((val, idx) => {
+          text = text.replaceAll(`{{${idx + 1}}}`, val);
+        });
+
+        if (plan.templateRow?.header_content) {
+          text = `*${plan.templateRow.header_content}*\n\n${text}`;
+        }
+        if (plan.templateRow?.footer_text) {
+          text = `${text}\n\n_${plan.templateRow.footer_text}_`;
+        }
+
+        const mediaUrl = plan.templateRow?.header_media_url;
+        if (mediaUrl) {
+          const res = await sendUazApiMedia(plan.uazapi.baseUrl, plan.uazapi.token, {
+            number: recipient.phone,
+            url: mediaUrl,
+            type: 'image',
+            caption: text,
+          });
+          sentMessageId = res.messageId;
+        } else {
+          const res = await sendUazApiText(plan.uazapi.baseUrl, plan.uazapi.token, {
+            number: recipient.phone,
+            text,
+          });
+          sentMessageId = res.messageId;
+        }
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : 'UazAPI delivery failed';
+      }
+
+      if (sentMessageId) {
+        await db
+          .from('broadcast_recipients')
+          .update({
+            status: 'sent',
+            sent_at: new Date().toISOString(),
+            whatsapp_message_id: sentMessageId,
+            error_message: null,
+          })
+          .eq('id', recipient.recipientRowId);
+      } else {
+        await db
+          .from('broadcast_recipients')
+          .update({
+            status: 'failed',
+            error_message: lastError || 'Unknown error',
+          })
+          .eq('id', recipient.recipientRowId);
+      }
+    }
+
+    await finalizeBroadcastStatus(db, plan.broadcastId);
+    return;
+  }
+
   for (const recipient of plan.planned) {
     const variants = phoneVariants(recipient.phone);
     let sentMessageId: string | null = null;
@@ -267,8 +380,8 @@ export async function deliverBroadcast(
     for (const variant of variants) {
       try {
         const result = await sendTemplateMessage({
-          phoneNumberId: plan.phoneNumberId,
-          accessToken: plan.accessToken,
+          phoneNumberId: plan.phoneNumberId!,
+          accessToken: plan.accessToken!,
           to: variant,
           templateName: plan.templateName,
           language: plan.templateLanguage,

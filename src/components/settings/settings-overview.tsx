@@ -51,6 +51,13 @@ export function SettingsOverview({
   // from blanking the rest of the landing.
   const [whatsapp, setWhatsapp] = useState<WhatsAppStatus | null>(null);
   const [whatsappLoading, setWhatsappLoading] = useState(true);
+  const [aiStatus, setAiStatus] = useState<{
+    configured: boolean;
+    model?: string;
+    isActive?: boolean;
+    autoReply?: boolean;
+  } | null>(null);
+  const [aiLoading, setAiLoading] = useState(true);
 
   useEffect(() => {
     if (!user || !accountId) return;
@@ -58,6 +65,27 @@ export function SettingsOverview({
     const supabase = createClient();
     const userId = user.id;
     const acctId = accountId;
+
+    // AI Agent status
+    (async () => {
+      setAiLoading(true);
+      try {
+        const res = await fetch('/api/ai/config', { cache: 'no-store' });
+        const data = await res.json().catch(() => ({}));
+        if (!cancelled) {
+          setAiStatus({
+            configured: Boolean(data.configured),
+            model: data.model,
+            isActive: Boolean(data.is_active),
+            autoReply: Boolean(data.auto_reply_enabled),
+          });
+        }
+      } catch {
+        if (!cancelled) setAiStatus({ configured: false });
+      } finally {
+        if (!cancelled) setAiLoading(false);
+      }
+    })();
 
     // Cheap counts — resolve fast, render immediately.
     (async () => {
@@ -117,21 +145,33 @@ export function SettingsOverview({
       setCountsLoading(false);
     })();
 
-    // WhatsApp connection status — slower, independent.
+    // WhatsApp connection status — includes Direct QR Code (Baileys), UazAPI, and Meta
     (async () => {
       setWhatsappLoading(true);
-      const [row, health] = await Promise.allSettled([
+      const [row, health, connRows, baileysRes] = await Promise.allSettled([
         supabase
           .from('whatsapp_config')
           .select('phone_number_id')
           .eq('account_id', acctId)
           .maybeSingle(),
-        fetch('/api/whatsapp/config', { cache: 'no-store' }).then((r) => r.json()),
+        fetch('/api/whatsapp/config', { cache: 'no-store' }).then((r) => r.json()).catch(() => null),
+        supabase
+          .from('whatsapp_connections')
+          .select('id, status, phone_number')
+          .eq('account_id', acctId)
+          .eq('status', 'connected')
+          .limit(1),
+        fetch('/api/whatsapp/baileys/status', { cache: 'no-store' }).then((r) => r.json()).catch(() => null),
       ]);
       if (cancelled) return;
+      const isMetaConnected = health.status === 'fulfilled' && !!health.value?.connected;
+      const isDbConnected = connRows.status === 'fulfilled' && Array.isArray(connRows.value.data) && connRows.value.data.length > 0;
+      const isBaileysConnected = baileysRes.status === 'fulfilled' && baileysRes.value?.status === 'connected';
+      const isAnyConnected = isMetaConnected || isDbConnected || isBaileysConnected;
+
       setWhatsapp({
-        configured: row.status === 'fulfilled' && !!row.value.data?.phone_number_id,
-        connected: health.status === 'fulfilled' && !!health.value?.connected,
+        configured: (row.status === 'fulfilled' && !!row.value.data?.phone_number_id) || isDbConnected || isBaileysConnected,
+        connected: isAnyConnected,
       });
       setWhatsappLoading(false);
     })();
@@ -170,6 +210,21 @@ export function SettingsOverview({
       ) : (
         <>
           <StatusDot tone="muted" /> {t('needsReconnecting')}
+        </>
+      ),
+    },
+    {
+      section: 'ai',
+      loading: aiLoading,
+      subtitle: !aiStatus?.configured ? (
+        'Não configurado'
+      ) : aiStatus.isActive ? (
+        <>
+          <StatusDot tone="ok" /> {aiStatus.model || 'Gemini 2.5 Flash'} · Ativo
+        </>
+      ) : (
+        <>
+          <StatusDot tone="muted" /> {aiStatus.model || 'Gemini 2.5 Flash'} · Pausado
         </>
       ),
     },

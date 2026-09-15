@@ -13,7 +13,17 @@ interface Turn {
   handoff?: boolean;
 }
 
-export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
+interface AiPlaygroundProps {
+  onGoToSetup?: () => void;
+  modelName?: string;
+  providerName?: string;
+}
+
+export function AiPlayground({
+  onGoToSetup,
+  modelName = 'gemini-2.5-flash',
+  providerName = 'gemini',
+}: AiPlaygroundProps) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -43,9 +53,9 @@ export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         if (data.code === 'ai_not_configured') {
-          toast.error('No agent configured yet — finish Setup first.');
+          toast.error('Agente ainda não configurado — configure na aba Opções.');
         } else {
-          toast.error(data.error ?? "Couldn't get a reply.");
+          toast.error(data.error ?? "Não foi possível obter resposta do agente.");
         }
         // Roll the unsent user turn back so the transcript stays clean.
         setTurns(turns);
@@ -64,7 +74,7 @@ export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
         },
       ]);
     } catch {
-      toast.error("Couldn't reach the agent.");
+      toast.error("Não foi possível conectar com o agente.");
       setTurns(turns);
       setInput(text);
     } finally {
@@ -83,42 +93,68 @@ export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
     <div className="flex h-[60vh] min-h-[420px] flex-col rounded-xl border border-border bg-card">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <div className="flex items-center gap-2">
-          <Bot className="h-4 w-4 text-primary" />
-          <span className="text-sm font-medium text-foreground">Playground</span>
-          <span className="text-xs text-muted-foreground">
-            — test replies as if you were a customer
-          </span>
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary border border-primary/20">
+            <Bot className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-foreground">Playground (Simulador)</span>
+              <span className="rounded bg-muted px-1.5 py-0.2 text-[11px] font-mono text-muted-foreground border">
+                {modelName}
+              </span>
+            </div>
+            <span className="text-xs text-muted-foreground">
+              Simule conversas reais no WhatsApp com o seu assistente de IA
+            </span>
+          </div>
         </div>
         <Button
           variant="ghost"
           size="sm"
           onClick={() => setTurns([])}
           disabled={turns.length === 0 || sending}
-          className="text-muted-foreground"
+          className="text-muted-foreground text-xs"
         >
-          <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Reset
+          <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Limpar conversa
         </Button>
       </div>
 
       {/* Transcript */}
       <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-4">
         {turns.length === 0 && (
-          <div className="flex h-full flex-col items-center justify-center text-center text-sm text-muted-foreground">
-            <Bot className="mb-2 h-8 w-8 text-muted-foreground/60" />
-            <p>Send a message to see how your agent would reply.</p>
-            <p className="mt-1 text-xs">
-              It uses your knowledge base and behaves exactly like the
-              auto-reply bot — including handoff.
+          <div className="flex h-full flex-col items-center justify-center text-center text-sm text-muted-foreground max-w-md mx-auto p-4">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary mb-3 border border-primary/20">
+              <Bot className="h-6 w-6" />
+            </div>
+            <p className="font-semibold text-foreground">Envie uma mensagem para testar as respostas do Agente</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              O agente responde com a inteligência do Google Gemini 2.5 Flash via Kie.ai e segue o prompt e regras definidos para o seu WhatsApp.
             </p>
+            <div className="mt-4 flex flex-wrap gap-2 justify-center">
+              <button
+                type="button"
+                onClick={() => setInput('Olá! Gostaria de mais informações sobre seus serviços.')}
+                className="rounded-full border border-border bg-muted/60 hover:bg-muted px-3 py-1 text-xs text-foreground transition-colors"
+              >
+                &ldquo;Olá! Gostaria de mais informações...&rdquo;
+              </button>
+              <button
+                type="button"
+                onClick={() => setInput('Quais são os horários de atendimento?')}
+                className="rounded-full border border-border bg-muted/60 hover:bg-muted px-3 py-1 text-xs text-foreground transition-colors"
+              >
+                &ldquo;Quais são os horários de atendimento?&rdquo;
+              </button>
+            </div>
             {onGoToSetup && (
               <Button
                 variant="link"
                 size="sm"
                 onClick={onGoToSetup}
-                className="mt-1 h-auto p-0 text-xs"
+                className="mt-3 h-auto p-0 text-xs text-primary"
               >
-                Not set up yet? Go to Setup <ArrowRight className="ml-1 h-3 w-3" />
+                Configurar opções e prompts do agente <ArrowRight className="ml-1 h-3 w-3" />
               </Button>
             )}
           </div>
@@ -152,7 +188,7 @@ export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
                   )}
                 >
                   <UserCircle2 className="h-3.5 w-3.5" />
-                  Would hand off to a human here
+                  Transferiria para atendente humano aqui
                 </p>
               )}
             </div>
@@ -165,7 +201,7 @@ export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
         {sending && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Bot className="h-5 w-5 text-primary" />
-            <Loader2 className="h-4 w-4 animate-spin" /> Thinking…
+            <Loader2 className="h-4 w-4 animate-spin" /> Digitando resposta...
           </div>
         )}
       </div>
@@ -176,7 +212,7 @@ export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Type a customer message…"
+          placeholder="Digite uma mensagem como cliente no WhatsApp... (pressione Enter para enviar)"
           rows={1}
           className="flex-1 resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
         />

@@ -5,6 +5,7 @@ import {
   useRef,
   useCallback,
   useEffect,
+  useMemo,
   KeyboardEvent,
 } from "react";
 import {
@@ -22,6 +23,7 @@ import {
   Plus,
   MessageSquareDashed,
   Zap,
+  Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
@@ -55,6 +57,8 @@ import {
 import { validateInteractivePayload } from "@/lib/whatsapp/interactive";
 import type { InteractiveMessagePayload, QuickReply } from "@/types";
 import { QuickReplyPicker } from "./quick-reply-picker";
+import { SlashCommandMenu } from "./slash-command-menu";
+import { replaceQuickReplyVariables, type VariableContext } from "@/lib/inbox/quick-reply-variables";
 
 /** Media content types an agent can send from the composer. */
 export type ComposerMediaKind = "image" | "video" | "document" | "audio";
@@ -89,10 +93,6 @@ interface ReplyDraft {
   preview: string;
 }
 
-// Mirrors the chat-media bucket's allowed_mime_types (migration 023) for
-// the file picker so unsupported files are rejected before upload rather
-// than failing with a confusing Storage error. Audio has no picker — it's
-// captured via the recorder.
 const PICKER_ACCEPT: Record<"image" | "video" | "document", string> = {
   image: "image/png,image/jpeg,image/webp",
   video: "video/mp4,video/3gpp",
@@ -109,6 +109,17 @@ interface MediaDraft {
   caption: string;
 }
 
+export interface InsertedTextPayload {
+  text: string;
+  id: number;
+}
+
+export interface ExternalAudioActionPayload {
+  qr: QuickReply;
+  simulate: boolean;
+  id: number;
+}
+
 interface MessageComposerProps {
   conversationId: string;
   sessionExpired: boolean;
@@ -118,6 +129,11 @@ interface MessageComposerProps {
   onOpenTemplates: () => void;
   replyTo?: ReplyDraft | null;
   onClearReply?: () => void;
+  isUazApi?: boolean;
+  contactName?: string;
+  contactPhone?: string;
+  insertedTextPayload?: InsertedTextPayload | null;
+  externalAudioAction?: ExternalAudioActionPayload | null;
 }
 
 function formatDuration(seconds: number): string {
@@ -131,6 +147,12 @@ function formatDuration(seconds: number): string {
  *  Meta-accepted format means no server ffmpeg / transcode step. */
 const OPUS_ENCODER_PATH = "/opus/encoderWorker.min.js";
 
+interface SimulatingAudioState {
+  qr: QuickReply;
+  remainingSeconds: number;
+  totalSeconds: number;
+}
+
 export function MessageComposer({
   conversationId,
   sessionExpired,
@@ -140,12 +162,18 @@ export function MessageComposer({
   onOpenTemplates,
   replyTo,
   onClearReply,
+  isUazApi = true,
+  contactName,
+  contactPhone,
+  insertedTextPayload,
+  externalAudioAction,
 }: MessageComposerProps) {
   const t = useTranslations("Inbox.composer");
 
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [drafting, setDrafting] = useState(false);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Interactive-message builder dialog + quick-reply picker.
@@ -155,6 +183,15 @@ export function MessageComposer({
   const [savingQuickReply, setSavingQuickReply] = useState(false);
   const [quickReplyOpen, setQuickReplyOpen] = useState(false);
 
+  // Quick replies list & slash command autocomplete
+  const [quickRepliesList, setQuickRepliesList] = useState<QuickReply[]>([]);
+  const [showSlashMenu, setShowSlashMenu] = useState(false);
+  const [slashFilter, setSlashFilter] = useState("");
+
+  // Simulated voice message ("Gravando áudio...") state
+  const [simulatingAudio, setSimulatingAudio] = useState<SimulatingAudioState | null>(null);
+  const simulationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // Media attachment state. `draft` holds an uploaded-but-not-yet-sent
   // attachment; `busy` covers the upload/transcode window.
   const [draft, setDraft] = useState<MediaDraft | null>(null);
@@ -162,9 +199,6 @@ export function MessageComposer({
   const imageInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const documentInputRef = useRef<HTMLInputElement>(null);
-  // Mirror of `draft` for the unmount cleanup, which can't read render
-  // state. Kept in sync below so navigating away with a staged-but-unsent
-  // attachment GCs the orphaned object.
   const draftRef = useRef<MediaDraft | null>(null);
   useEffect(() => {
     draftRef.current = draft;
@@ -177,20 +211,16 @@ export function MessageComposer({
   }, []);
 
   // Voice recording state. The recorder encodes Ogg/Opus in-browser
-  // (opus-recorder) so there's no server-side transcode.
   const [recording, setRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
   const recorderRef = useRef<import("opus-recorder").default | null>(null);
   const cancelledRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Viewers (read-only role) can browse the inbox but never send.
-  // For solo users this is always true — single-owner accounts pass
-  // every capability — so the disabled branch is a no-op there.
   const canSend = useCan("send-messages");
   const readOnly = !canSend;
-  // Media (like free-form text) is only allowed inside the 24h window.
-  const inputsDisabled = readOnly || sessionExpired;
+  const effectivelyExpired = isUazApi ? false : sessionExpired;
+  const inputsDisabled = readOnly || effectivelyExpired;
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -199,14 +229,41 @@ export function MessageComposer({
     }
   }, []);
 
-  // Tear down any live recording + timer on unmount so a mid-record
-  // navigation doesn't leak the mic, and GC a staged-but-unsent
-  // attachment so it doesn't orphan in the bucket.
+  // Variable context for template substitution
+  const variableContext: VariableContext = useMemo(
+    () => ({
+      name: contactName || "Cliente",
+      phone: contactPhone || "",
+    }),
+    [contactName, contactPhone]
+  );
+
+  // Load quick replies for slash commands & picker
+  const loadQuickRepliesList = useCallback(async () => {
+    try {
+      const res = await fetch("/api/quick-replies", { cache: "no-store" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && Array.isArray(data.quick_replies)) {
+        setQuickRepliesList(data.quick_replies);
+      }
+    } catch {
+      // non-critical
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadQuickRepliesList();
+  }, [loadQuickRepliesList]);
+
+  // Clean up on unmount
   useEffect(() => {
     return () => {
       clearTimer();
+      if (simulationTimerRef.current) {
+        clearInterval(simulationTimerRef.current);
+        simulationTimerRef.current = null;
+      }
       cancelledRef.current = true;
-      // stop() releases the mic stream + audio context inside opus-recorder.
       void recorderRef.current?.stop().catch(() => {});
       removeStaged(draftRef.current?.path);
     };
@@ -216,47 +273,221 @@ export function MessageComposer({
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    // Max 4 lines (~96px)
     el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
   }, []);
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending || sessionExpired) return;
+    if (!trimmed || sending || effectivelyExpired) return;
 
     setSending(true);
     try {
       onSend(trimmed, replyTo?.id);
       setText("");
+      setShowSlashMenu(false);
       if (textareaRef.current) {
         textareaRef.current.style.height = "auto";
       }
     } finally {
       setSending(false);
     }
-  }, [text, sending, sessionExpired, onSend, replyTo?.id]);
+  }, [text, sending, effectivelyExpired, onSend, replyTo?.id]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      // If slash command menu is open, it handles ArrowUp, ArrowDown, Enter, Tab
+      if (showSlashMenu && ["ArrowUp", "ArrowDown", "Enter", "Tab", "Escape"].includes(e.key)) {
+        return;
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSend();
       }
     },
-    [handleSend]
+    [handleSend, showSlashMenu]
   );
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      setText(e.target.value);
+      const val = e.target.value;
+      setText(val);
       adjustHeight();
+
+      if (val.startsWith("/")) {
+        setShowSlashMenu(true);
+        setSlashFilter(val);
+      } else {
+        setShowSlashMenu(false);
+      }
     },
     [adjustHeight]
   );
 
-  // Ask the AI assistant for a suggested reply and drop it into the
-  // composer for the agent to edit + send. Read-only server-side —
-  // nothing is sent until the agent hits Send.
+  // ---- ZapPlus Simulated Audio with "Gravando áudio..." Presence ---
+
+  const handleSendAudioWithPresence = useCallback(
+    async (qr: QuickReply, simulateRecording = true) => {
+      if (!qr.media_url) {
+        toast.error("Áudio sem URL de mídia.");
+        return;
+      }
+
+      const durationSec = Math.max(1, Number(qr.media_duration) || 5);
+
+      if (!simulateRecording) {
+        // Direct send as native voice message (PTT)
+        onSendMedia({
+          kind: "audio",
+          mediaUrl: qr.media_url,
+          path: "",
+          filename: qr.title,
+          replyToId: replyTo?.id,
+        });
+        toast.success(`🎙️ Áudio "${qr.title}" enviado!`);
+        return;
+      }
+
+      // 1. Send live WhatsApp presence "recording" to customer
+      try {
+        void fetch("/api/whatsapp/presence", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            conversationId,
+            presence: "recording",
+            delayMs: durationSec * 1000,
+          }),
+        });
+      } catch (err) {
+        console.error("Presence recording error:", err);
+      }
+
+      // 2. Start simulation countdown state in UI
+      setSimulatingAudio({
+        qr,
+        remainingSeconds: durationSec,
+        totalSeconds: durationSec,
+      });
+
+      if (simulationTimerRef.current) {
+        clearInterval(simulationTimerRef.current);
+      }
+
+      simulationTimerRef.current = setInterval(() => {
+        setSimulatingAudio((prev) => {
+          if (!prev) return null;
+          if (prev.remainingSeconds <= 1) {
+            // Done! Send audio as PTT
+            if (simulationTimerRef.current) {
+              clearInterval(simulationTimerRef.current);
+              simulationTimerRef.current = null;
+            }
+
+            // Clear presence
+            void fetch("/api/whatsapp/presence", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                conversationId,
+                presence: "paused",
+              }),
+            }).catch(() => {});
+
+            // Send voice message
+            onSendMedia({
+              kind: "audio",
+              mediaUrl: prev.qr.media_url!,
+              path: "",
+              filename: prev.qr.title,
+              replyToId: replyTo?.id,
+            });
+            toast.success(`🎙️ Áudio "${prev.qr.title}" enviado com sucesso!`);
+            return null;
+          }
+
+          return {
+            ...prev,
+            remainingSeconds: prev.remainingSeconds - 1,
+          };
+        });
+      }, 1000);
+    },
+    [conversationId, onSendMedia, replyTo?.id]
+  );
+
+  // External text insertion from Top Bar or shortcuts
+  const lastInsertedIdRef = useRef<number>(0);
+  useEffect(() => {
+    if (insertedTextPayload && insertedTextPayload.id !== lastInsertedIdRef.current) {
+      lastInsertedIdRef.current = insertedTextPayload.id;
+      setText((prev) => (prev ? `${prev}\n${insertedTextPayload.text}` : insertedTextPayload.text));
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+          textareaRef.current.scrollTop = textareaRef.current.scrollHeight;
+        }
+      }, 50);
+    }
+  }, [insertedTextPayload]);
+
+  // External audio simulation trigger from Top Bar or Audio Library Modal
+  const lastAudioActionIdRef = useRef<number>(0);
+  useEffect(() => {
+    if (externalAudioAction && externalAudioAction.id !== lastAudioActionIdRef.current) {
+      lastAudioActionIdRef.current = externalAudioAction.id;
+      void handleSendAudioWithPresence(externalAudioAction.qr, externalAudioAction.simulate);
+    }
+  }, [externalAudioAction, handleSendAudioWithPresence]);
+
+
+  const handleCancelSimulation = useCallback(() => {
+    if (simulationTimerRef.current) {
+      clearInterval(simulationTimerRef.current);
+      simulationTimerRef.current = null;
+    }
+    setSimulatingAudio(null);
+
+    void fetch("/api/whatsapp/presence", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        conversationId,
+        presence: "paused",
+      }),
+    }).catch(() => {});
+
+    toast.info("Envio de áudio cancelado.");
+  }, [conversationId]);
+
+  const handleSendNowSimulation = useCallback(() => {
+    if (!simulatingAudio) return;
+    if (simulationTimerRef.current) {
+      clearInterval(simulationTimerRef.current);
+      simulationTimerRef.current = null;
+    }
+    const currentQr = simulatingAudio.qr;
+    setSimulatingAudio(null);
+
+    void fetch("/api/whatsapp/presence", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        conversationId,
+        presence: "paused",
+      }),
+    }).catch(() => {});
+
+    onSendMedia({
+      kind: "audio",
+      mediaUrl: currentQr.media_url!,
+      path: "",
+      filename: currentQr.title,
+      replyToId: replyTo?.id,
+    });
+    toast.success(`🎙️ Áudio "${currentQr.title}" enviado imediatamente!`);
+  }, [simulatingAudio, conversationId, onSendMedia, replyTo?.id]);
+
+  // AI draft reply
   const handleDraft = useCallback(async () => {
     if (drafting) return;
     setDrafting(true);
@@ -281,8 +512,6 @@ export function MessageComposer({
         return;
       }
       setText(draftText);
-      // Let the textarea grow to fit and drop the cursor at the end so
-      // the agent can tweak immediately.
       requestAnimationFrame(() => {
         adjustHeight();
         const el = textareaRef.current;
@@ -298,14 +527,13 @@ export function MessageComposer({
     }
   }, [drafting, conversationId, adjustHeight]);
 
-  // ---- Interactive message + quick replies --------------------------
-
+  // Interactive builder
   const openInteractiveBuilder = useCallback(
     (seed?: InteractiveMessagePayload) => {
       setInteractivePayload(seed ?? blankButtonsPayload());
       setInteractiveOpen(true);
     },
-    [],
+    []
   );
 
   const sendInteractive = useCallback(() => {
@@ -319,16 +547,13 @@ export function MessageComposer({
     onClearReply?.();
   }, [interactivePayload, onSendInteractive, replyTo?.id, onClearReply]);
 
-  // Persist the current builder payload as a reusable interactive snippet.
   const saveAsQuickReply = useCallback(async () => {
     const result = validateInteractivePayload(interactivePayload);
     if (!result.ok) {
       toast.error(result.error);
       return;
     }
-    const title = window
-      .prompt(t("quickReplyNamePrompt"))
-      ?.trim();
+    const title = window.prompt(t("quickReplyNamePrompt"))?.trim();
     if (!title) return;
     setSavingQuickReply(true);
     try {
@@ -347,15 +572,15 @@ export function MessageComposer({
         return;
       }
       toast.success(t("quickReplySaved"));
+      void loadQuickRepliesList();
     } catch {
       toast.error(t("quickReplySaveError"));
     } finally {
       setSavingQuickReply(false);
     }
-  }, [interactivePayload, t]);
+  }, [interactivePayload, t, loadQuickRepliesList]);
 
-  // A picked quick reply: text fills the composer; interactive opens the
-  // builder pre-filled so the agent can tweak before sending.
+  // Pick quick reply from picker
   const handlePickQuickReply = useCallback(
     (qr: QuickReply) => {
       setQuickReplyOpen(false);
@@ -363,11 +588,14 @@ export function MessageComposer({
         openInteractiveBuilder(qr.interactive_payload);
         return;
       }
-      const body = qr.content_text ?? "";
-      // Separate the snippet from any existing draft with a newline so the
-      // words don't run together ("Thanks" + "we'll…" → "Thankswe'll…").
+      if (qr.kind === "audio") {
+        void handleSendAudioWithPresence(qr, true);
+        return;
+      }
+      const raw = qr.content_text ?? "";
+      const body = replaceQuickReplyVariables(raw, variableContext);
       setText((prev) =>
-        prev && !/\s$/.test(prev) ? `${prev}\n${body}` : `${prev}${body}`,
+        prev && !/\s$/.test(prev) ? `${prev}\n${body}` : `${prev}${body}`
       );
       requestAnimationFrame(() => {
         adjustHeight();
@@ -378,28 +606,24 @@ export function MessageComposer({
         }
       });
     },
-    [openInteractiveBuilder, adjustHeight],
+    [openInteractiveBuilder, adjustHeight, handleSendAudioWithPresence, variableContext]
   );
 
-  // Upload a captured file to chat-media and stage it as a draft.
+  // File attachments
   const stageUpload = useCallback(
     async (kind: ComposerMediaKind, file: File) => {
-      // Per-kind ceiling mirrors Meta's caps (image 5 MB, etc.) so we
-      // reject before upload rather than orphaning an object that Meta
-      // would then refuse at send.
       const max = MEDIA_MAX_BYTES_BY_KIND[kind];
       if (file.size > max) {
         toast.error(
           `File is ${(file.size / 1024 / 1024).toFixed(1)} MB — ${kind} limit is ${Math.round(
-            max / 1024 / 1024,
-          )} MB.`,
+            max / 1024 / 1024
+          )} MB.`
         );
         return;
       }
       setBusy(true);
       try {
         const { publicUrl, path } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
-        // Replacing an existing draft? GC the previous object first.
         removeStaged(draftRef.current?.path);
         setDraft({ kind, mediaUrl: publicUrl, path, filename: file.name, caption: "" });
       } catch (err) {
@@ -408,28 +632,23 @@ export function MessageComposer({
         setBusy(false);
       }
     },
-    [removeStaged],
+    [removeStaged]
   );
 
   const handlePicked = useCallback(
     (kind: "image" | "video" | "document", file: File | undefined) => {
       if (file) void stageUpload(kind, file);
     },
-    [stageUpload],
+    [stageUpload]
   );
 
-  // ---- Voice recording (client-side Ogg/Opus, no server transcode) ---
-
-  // The encoded Ogg/Opus file from opus-recorder → upload as an audio
-  // draft. WhatsApp renders Ogg/Opus as a playable voice note.
+  // In-composer live mic recording
   const finalizeRecording = useCallback(
     async (bytes: Uint8Array) => {
-      // Uint8Array is a valid BlobPart at runtime; the cast sidesteps the
-      // lib.dom ArrayBufferLike-vs-ArrayBuffer generic mismatch.
       const file = new File([bytes as unknown as BlobPart], `voice-${Date.now()}.ogg`, {
         type: "audio/ogg",
       });
-      if (file.size === 0) return; // cancelled / empty take
+      if (file.size === 0) return;
       if (file.size > MEDIA_MAX_BYTES_BY_KIND.audio) {
         toast.error("Recording is too long (over 16 MB).");
         return;
@@ -445,7 +664,7 @@ export function MessageComposer({
         setBusy(false);
       }
     },
-    [removeStaged],
+    [removeStaged]
   );
 
   const startRecording = useCallback(async () => {
@@ -455,15 +674,13 @@ export function MessageComposer({
       return;
     }
     try {
-      // Lazy-load the encoder (≈400 KB worker) only when the user records,
-      // keeping it out of the main bundle.
       const { default: Recorder } = await import("opus-recorder");
       const recorder = new Recorder({
         encoderPath: OPUS_ENCODER_PATH,
         numberOfChannels: 1,
-        encoderApplication: 2048, // VOIP — tuned for speech
+        encoderApplication: 2048,
         encoderSampleRate: 48000,
-        streamPages: false, // one callback with the complete file on stop
+        streamPages: false,
       });
       cancelledRef.current = false;
       recorder.ondataavailable = (bytes) => {
@@ -495,15 +712,11 @@ export function MessageComposer({
     void recorderRef.current?.stop().catch(() => {});
   }, [clearTimer]);
 
-  // Auto-stop at the cap so a forgotten recording can't blow the
-  // upload size limit.
   useEffect(() => {
     if (recording && recordSeconds >= MAX_RECORDING_SECONDS) {
       stopRecording();
     }
   }, [recording, recordSeconds, stopRecording]);
-
-  // ---- Draft send / discard -----------------------------------------
 
   const sendDraft = useCallback(() => {
     if (!draft || busy) return;
@@ -511,19 +724,14 @@ export function MessageComposer({
       kind: draft.kind,
       mediaUrl: draft.mediaUrl,
       path: draft.path,
-      // Audio takes no caption (Meta rejects it). Everything else: the
-      // trimmed caption, or undefined when blank.
-      caption:
-        draft.kind === "audio" ? undefined : draft.caption.trim() || undefined,
+      caption: draft.kind === "audio" ? undefined : draft.caption.trim() || undefined,
       filename: draft.kind === "document" ? draft.filename : undefined,
       replyToId: replyTo?.id,
     });
-    // The object is now owned by the sent message — clear without GC.
     setDraft(null);
     onClearReply?.();
   }, [draft, busy, onSendMedia, replyTo?.id, onClearReply]);
 
-  // Discard GCs the staged object — it was uploaded but never sent.
   const discardDraft = useCallback(() => {
     removeStaged(draft?.path);
     setDraft(null);
@@ -533,10 +741,30 @@ export function MessageComposer({
     setDraft((d) => (d ? { ...d, caption } : d));
   }, []);
 
-  // ---- Render --------------------------------------------------------
-
   return (
-    <div className="border-t border-border bg-card p-3">
+    <div className="relative border-t border-border bg-card p-3">
+      {/* Floating Slash Command Autocomplete Popover */}
+      <SlashCommandMenu
+        open={showSlashMenu}
+        filterText={slashFilter}
+        items={quickRepliesList}
+        context={variableContext}
+        onSelectText={(interpolated) => {
+          setText(interpolated);
+          setShowSlashMenu(false);
+          requestAnimationFrame(() => {
+            adjustHeight();
+            textareaRef.current?.focus();
+          });
+        }}
+        onSelectAudio={(qr) => {
+          setText("");
+          setShowSlashMenu(false);
+          void handleSendAudioWithPresence(qr, true);
+        }}
+        onClose={() => setShowSlashMenu(false)}
+      />
+
       {replyTo && (
         <div className="mb-2">
           <ReplyQuote
@@ -546,7 +774,8 @@ export function MessageComposer({
           />
         </div>
       )}
-      {sessionExpired && (
+
+      {!isUazApi && sessionExpired && (
         <div className="mb-2 flex items-center justify-between rounded-lg bg-amber-500/10 px-3 py-2">
           <p className="text-xs text-amber-400">
             {t("sessionExpiredHint")}
@@ -563,7 +792,7 @@ export function MessageComposer({
         </div>
       )}
 
-      {/* Hidden file inputs driven by the attach menu. */}
+      {/* Hidden file inputs */}
       <input
         ref={imageInputRef}
         type="file"
@@ -595,7 +824,63 @@ export function MessageComposer({
         }}
       />
 
-      {draft ? (
+      {/* ZapPlus Realistic "Gravando áudio..." Presence Simulation Bar */}
+      {simulatingAudio ? (
+        <div className="flex items-center gap-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 shadow-sm animate-in fade-in duration-200">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-xs">
+            <Mic className="h-4 w-4 animate-bounce" />
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold text-foreground truncate flex items-center gap-1.5">
+                <span>🎙️ Gravando áudio para {contactName || "cliente"}...</span>
+                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono bg-emerald-500/20 px-1.5 py-0.5 rounded">
+                  {simulatingAudio.qr.title}
+                </span>
+              </span>
+              <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                {simulatingAudio.remainingSeconds}s restantes
+              </span>
+            </div>
+
+            {/* Waveform animation */}
+            <div className="mt-1.5 flex items-center gap-1 h-3 overflow-hidden">
+              {[35, 75, 100, 60, 85, 45, 90, 70, 50, 95, 80, 65, 40, 75, 90, 55, 80, 70, 45, 85, 95, 60].map((h, i) => (
+                <span
+                  key={i}
+                  className="flex-1 bg-emerald-500 rounded-full animate-pulse"
+                  style={{
+                    height: `${h}%`,
+                    animationDelay: `${(i % 6) * 120}ms`,
+                    animationDuration: "800ms",
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={handleCancelSimulation}
+            className="h-8 text-xs text-muted-foreground hover:text-foreground border-border"
+          >
+            Cancelar
+          </Button>
+
+          <Button
+            type="button"
+            size="sm"
+            onClick={handleSendNowSimulation}
+            className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-medium shadow-xs"
+          >
+            <Send className="mr-1 h-3 w-3" />
+            Enviar Agora
+          </Button>
+        </div>
+      ) : draft ? (
         <MediaDraftPreview
           draft={draft}
           busy={busy}
@@ -606,7 +891,6 @@ export function MessageComposer({
           t={t}
         />
       ) : recording ? (
-        // Recording bar — replaces the composer while the mic is live.
         <div className="flex items-center gap-3 rounded-xl border border-border bg-muted px-4 py-2.5">
           <span className="flex h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-red-500" />
           <span className="flex-1 text-sm text-foreground">
@@ -630,17 +914,11 @@ export function MessageComposer({
         </div>
       ) : (
         <div className="flex items-end gap-2">
-          {/* Attach menu — photo / video / document / voice. */}
+          {/* Attach menu */}
           <DropdownMenu>
             <DropdownMenuTrigger
               disabled={inputsDisabled || busy}
-              title={
-                readOnly
-                  ? t("readOnlyTitle")
-                  : inputsDisabled
-                    ? undefined
-                    : t("attachMedia")
-              }
+              title={readOnly ? t("readOnlyTitle") : inputsDisabled ? undefined : t("attachMedia")}
               className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             >
               {busy ? (
@@ -669,18 +947,28 @@ export function MessageComposer({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* + menu — interactive messages + quick replies. Gated on the
-              24h window like free-form text (interactive requires it). */}
+          {/* ZapPlus Trigger Button */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={inputsDisabled}
+            title="ZapPlus - Respostas Rápidas & Áudios Gravados"
+            onClick={() => {
+              void loadQuickRepliesList();
+              setQuickReplyOpen(true);
+            }}
+            className="h-9 px-2.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 hover:text-emerald-700 dark:hover:text-emerald-300 rounded-lg flex items-center gap-1.5 shrink-0 transition-colors border border-emerald-500/20"
+          >
+            <Zap className="h-4 w-4 fill-emerald-500 text-emerald-500" />
+            <span className="hidden sm:inline font-mono">ZapPlus</span>
+          </Button>
+
+          {/* + menu — interactive messages */}
           <DropdownMenu>
             <DropdownMenuTrigger
               disabled={inputsDisabled}
-              title={
-                readOnly
-                  ? t("readOnlyTitle")
-                  : inputsDisabled
-                    ? undefined
-                    : t("moreActions")
-              }
+              title={readOnly ? t("readOnlyTitle") : inputsDisabled ? undefined : t("moreActions")}
               className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Plus className="h-4 w-4" />
@@ -734,19 +1022,16 @@ export function MessageComposer({
             placeholder={
               readOnly
                 ? t("readOnlyPlaceholder")
-                : sessionExpired
+                : effectivelyExpired
                   ? t("sessionExpiredPlaceholder")
-                  : t("typeMessagePlaceholder")
+                  : "Digite uma mensagem ou digite / para respostas rápidas..."
             }
-            disabled={sessionExpired || readOnly}
+            disabled={effectivelyExpired || readOnly}
             rows={1}
-            // Textarea keeps its own inline title — the GatedButton
-            // wrapping pattern doesn't apply to non-button inputs.
-            // The placeholder text also surfaces the read-only state.
             title={readOnly ? t("readOnlyTitle") : undefined}
             className={cn(
               "flex-1 resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50",
-              (sessionExpired || readOnly) && "cursor-not-allowed opacity-50"
+              (effectivelyExpired || readOnly) && "cursor-not-allowed opacity-50"
             )}
           />
 
@@ -754,7 +1039,7 @@ export function MessageComposer({
             size="sm"
             canAct={!readOnly}
             gateReason="send messages"
-            disabled={!text.trim() || sessionExpired || sending}
+            disabled={!text.trim() || effectivelyExpired || sending}
             onClick={handleSend}
             className="h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90 disabled:opacity-40"
           >
@@ -763,16 +1048,13 @@ export function MessageComposer({
         </div>
       )}
 
-      {/* Hint sits outside the flex row so its height doesn't push
-          `items-end` buttons below the textarea. Indented to line up
-          under the textarea left edge. */}
-      {!draft && !recording && (
-        <p className="mt-1 pl-[5.5rem] text-[10px] text-muted-foreground">
-          {t("draftHint")}
+      {!draft && !recording && !simulatingAudio && (
+        <p className="mt-1 pl-[7.5rem] text-[10px] text-muted-foreground">
+          Dica: Digite <span className="font-mono text-emerald-500 font-semibold">/</span> para abrir o menu do ZapPlus com atalhos de áudios e textos
         </p>
       )}
 
-      {/* Interactive-message builder dialog. */}
+      {/* Interactive message builder dialog */}
       <Dialog open={interactiveOpen} onOpenChange={setInteractiveOpen}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
@@ -805,22 +1087,19 @@ export function MessageComposer({
         </DialogContent>
       </Dialog>
 
-      {/* Quick-reply picker. */}
+      {/* ZapPlus Quick Reply Picker */}
       <QuickReplyPicker
         open={quickReplyOpen}
         onOpenChange={setQuickReplyOpen}
         onPick={handlePickQuickReply}
+        onSendAudio={handleSendAudioWithPresence}
+        onSendTextDirect={(txt) => onSend(txt, replyTo?.id)}
+        contactContext={variableContext}
       />
     </div>
   );
 }
 
-/**
- * Staged-attachment preview with caption + send/discard. Declared at
- * module scope (not nested in MessageComposer) so React keeps it mounted
- * across the parent's re-renders — a nested component would remount the
- * caption input on every keystroke and drop focus.
- */
 function MediaDraftPreview({
   draft,
   busy,
@@ -897,7 +1176,7 @@ function MediaDraftPreview({
           onClick={onSend}
           className={cn(
             "h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90 disabled:opacity-40",
-            draft.kind === "audio" && "ml-auto",
+            draft.kind === "audio" && "ml-auto"
           )}
         >
           <Send className="h-4 w-4" />

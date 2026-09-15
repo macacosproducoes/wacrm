@@ -15,6 +15,13 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit'
+import {
+  sendUazApiText,
+  sendUazApiMedia,
+  normalizeBaseUrl,
+  formatUazApiNumber,
+} from '@/lib/whatsapp/uazapi-client'
+import { supabaseAdmin } from '@/lib/flows/admin-client'
 
 interface BroadcastResult {
   phone: string
@@ -120,18 +127,165 @@ export async function POST(request: Request) {
       )
     }
 
-    const { data: config, error: configError } = await supabase
+    // Check for active UazAPI connection
+    const admin = supabaseAdmin()
+    const { data: uazConn } = await admin
+      .from('whatsapp_connections')
+      .select('*')
+      .eq('account_id', accountId)
+      .eq('provider', 'uazapi')
+      .eq('is_active', true)
+      .maybeSingle()
+
+    const { data: config } = await supabase
       .from('whatsapp_config')
       .select('*')
       .eq('account_id', accountId)
-      .single()
+      .maybeSingle()
 
-    if (configError || !config) {
+    if (!uazConn && !config) {
       return NextResponse.json(
         {
           error:
-            'WhatsApp not configured. Please set up your WhatsApp integration first.',
+            'WhatsApp not configured. Please connect your WhatsApp via Settings first.',
         },
+        { status: 400 }
+      )
+    }
+
+    // --- UAZAPI DELIVERY PATH ---
+    if (uazConn) {
+      const uazConfig = uazConn.provider_config || {}
+      let token = ''
+      try {
+        token = decrypt(uazConfig.token)
+      } catch {
+        token = uazConfig.token
+      }
+      const baseUrl = normalizeBaseUrl(uazConfig.base_url)
+
+      const { data: templateRow } = await admin
+        .from('message_templates')
+        .select('*')
+        .eq('account_id', accountId)
+        .eq('name', template_name)
+        .maybeSingle()
+
+      const results: BroadcastResult[] = []
+      let sentCount = 0
+      let failedCount = 0
+
+      for (const recipient of recipients) {
+        const formatted = formatUazApiNumber(recipient.phone)
+        if (!formatted || formatted.length < 8) {
+          results.push({
+            phone: recipient.phone,
+            status: 'failed',
+            error: 'Invalid phone number format',
+          })
+          failedCount++
+          continue
+        }
+
+        try {
+          let text = templateRow?.body_text || template_name
+          const paramsList = recipient.messageParams?.body || recipient.params || []
+          paramsList.forEach((val, idx) => {
+            text = text.replaceAll(`{{${idx + 1}}}`, val)
+          })
+
+          if (templateRow?.header_content) {
+            text = `*${templateRow.header_content}*\n\n${text}`
+          }
+          if (templateRow?.footer_text) {
+            text = `${text}\n\n_${templateRow.footer_text}_`
+          }
+
+          const mediaUrl =
+            recipient.messageParams?.headerMediaUrl ||
+            templateRow?.header_media_url
+
+          let sendRes: { messageId: string; status: string }
+          if (mediaUrl) {
+            sendRes = await sendUazApiMedia(baseUrl, token, {
+              number: formatted,
+              url: mediaUrl,
+              type: 'image',
+              caption: text,
+            })
+          } else {
+            sendRes = await sendUazApiText(baseUrl, token, {
+              number: formatted,
+              text,
+            })
+          }
+
+          // Persist message so it shows in inbox
+          try {
+            const { data: contactId } = await admin.rpc('find_or_create_contact', {
+              p_account_id: accountId,
+              p_user_id: userId,
+              p_phone: formatted,
+              p_name: formatted,
+            })
+            if (contactId) {
+              const { data: convId } = await admin.rpc('find_or_create_conversation', {
+                p_account_id: accountId,
+                p_user_id: userId,
+                p_contact_id: contactId,
+                p_connection_id: uazConn.id,
+              })
+              if (convId) {
+                await admin.from('messages').insert({
+                  conversation_id: convId,
+                  sender_type: 'agent',
+                  sender_id: userId,
+                  content_type: mediaUrl ? 'image' : 'text',
+                  content_text: text,
+                  media_url: mediaUrl || null,
+                  template_name,
+                  message_id: sendRes.messageId,
+                  status: 'delivered',
+                })
+                await admin.from('conversations').update({
+                  last_message_text: text,
+                  last_message_at: new Date().toISOString(),
+                }).eq('id', convId)
+              }
+            }
+          } catch (dbErr) {
+            console.error('[Broadcast UazAPI] DB record error:', dbErr)
+          }
+
+          results.push({
+            phone: recipient.phone,
+            status: 'sent',
+            whatsapp_message_id: sendRes.messageId,
+          })
+          sentCount++
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : 'Send error'
+          results.push({
+            phone: recipient.phone,
+            status: 'failed',
+            error: errMsg,
+          })
+          failedCount++
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        total: recipients.length,
+        sent: sentCount,
+        failed: failedCount,
+        results,
+      })
+    }
+
+    if (!config) {
+      return NextResponse.json(
+        { error: 'Meta WhatsApp not configured.' },
         { status: 400 }
       )
     }

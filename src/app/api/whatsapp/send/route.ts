@@ -11,6 +11,31 @@ import {
   validateSendMessageParams,
   SendMessageError,
 } from '@/lib/whatsapp/send-message'
+import { createClient as createAdminClient } from '@supabase/supabase-js'
+import { decrypt } from '@/lib/whatsapp/encryption'
+import {
+  sendUazApiText,
+  sendUazApiMedia,
+  normalizeBaseUrl,
+} from '@/lib/whatsapp/uazapi-client'
+import {
+  sendBaileysText,
+  sendBaileysMedia,
+  isBaileysConnected,
+} from '@/lib/whatsapp/baileys/baileys-manager'
+import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus'
+import { autoReplyDebouncer } from '@/lib/ai/auto-reply-debouncer'
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getAdminClient(fallbackClient: any) {
+  if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return createAdminClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    )
+  }
+  return fallbackClient
+}
 
 // The dashboard's outbound-send endpoint. It owns auth, per-user rate
 // limiting, and the two ways the UI targets a thread — an existing
@@ -148,6 +173,199 @@ export async function POST(request: Request) {
       )
     }
 
+    // ⚡ Cancel any pending AI debounce for this conversation (human intervention took over)
+    autoReplyDebouncer.cancel(conversationId);
+
+
+    // Check if account is configured with active WhatsApp connection (Baileys or UazAPI)
+    try {
+      const admin = getAdminClient(supabase)
+      const baileysActive = isBaileysConnected(accountId);
+
+      const { data: activeConns } = await admin
+        .from('whatsapp_connections')
+        .select('*')
+        .eq('account_id', accountId)
+        .eq('is_active', true)
+        .limit(1);
+      const uazConn = activeConns?.[0] || null;
+
+      if (baileysActive || uazConn) {
+        const config = (uazConn?.provider_config || {}) as Record<string, unknown>
+
+        const { data: convData } = await admin
+          .from('conversations')
+          .select('id, contact_id, contacts (id, phone, name)')
+          .eq('id', conversationId)
+          .single()
+
+        const contactPhone = (convData as unknown as { contacts?: { phone?: string } })?.contacts?.phone
+        if (!contactPhone) {
+          return NextResponse.json({ error: 'Contact has no phone number' }, { status: 400 })
+        }
+
+        // 1. Check if Baileys (direct WhatsApp QR Code) is active
+        if (baileysActive || config.driver === 'baileys') {
+        let sendRes: { messageId: string }
+        if (media_url && message_type !== 'text') {
+          const mediaType = (['image', 'video', 'audio', 'document'].includes(message_type)
+            ? message_type
+            : 'image') as 'image' | 'video' | 'audio' | 'document'
+
+          sendRes = await sendBaileysMedia(accountId, contactPhone, media_url, mediaType, content_text)
+        } else {
+          sendRes = await sendBaileysText(accountId, contactPhone, content_text || '', reply_to_message_id)
+        }
+
+        // Persist message in database
+        const { data: newMsg } = await admin
+          .from('messages')
+          .insert({
+            conversation_id: conversationId,
+            sender_type: 'agent',
+            sender_id: userId,
+            content_type: message_type === 'template' ? 'text' : message_type,
+            content_text: content_text || '[Mensagem]',
+            media_url: media_url || null,
+            message_id: sendRes.messageId,
+            status: 'sent',
+            created_at: new Date().toISOString(),
+          })
+          .select('id')
+          .single()
+
+        // Update conversation summary
+        await admin.rpc('update_conversation_with_message', {
+          p_conversation_id: conversationId,
+          p_message_text: content_text || '[Mensagem]',
+          p_message_timestamp: new Date().toISOString(),
+          p_is_inbound: false,
+        })
+
+        whatsappBus.emitInboxEvent({
+          accountId,
+          conversationId,
+          eventType: 'INSERT',
+          message: {
+            id: newMsg?.id || sendRes.messageId,
+            conversation_id: conversationId,
+            sender_type: 'agent',
+            sender_id: userId,
+            content_type: message_type === 'template' ? 'text' : message_type,
+            content_text: content_text || '[Mensagem]',
+            media_url: media_url || null,
+            message_id: sendRes.messageId,
+            status: 'sent',
+            created_at: new Date().toISOString(),
+          },
+          conversation: {
+            id: conversationId,
+            last_message_text: content_text || '[Mensagem]',
+            last_message_at: new Date().toISOString(),
+          },
+        })
+
+        return NextResponse.json({
+          success: true,
+          message_id: newMsg?.id || sendRes.messageId,
+          whatsapp_message_id: sendRes.messageId,
+        })
+      }
+
+      let token = ''
+      try {
+        token = decrypt(config.token as string)
+      } catch {
+        token = (config.token as string) || ''
+      }
+
+      if (token) {
+        const baseUrl = normalizeBaseUrl(config.base_url as string)
+        let sendRes: { messageId: string; status: string }
+
+        try {
+          if (media_url && message_type !== 'text') {
+            const mediaType = (['image', 'video', 'audio', 'document'].includes(message_type)
+              ? message_type
+              : 'image') as 'image' | 'video' | 'audio' | 'document'
+
+            sendRes = await sendUazApiMedia(baseUrl, token, {
+              number: contactPhone,
+              url: media_url,
+              type: mediaType,
+              caption: content_text,
+            })
+          } else {
+            sendRes = await sendUazApiText(baseUrl, token, {
+              number: contactPhone,
+              text: content_text || '',
+              replyId: reply_to_message_id,
+            })
+          }
+
+          // Persist message in database
+          const { data: newMsg } = await admin
+            .from('messages')
+            .insert({
+              conversation_id: conversationId,
+              sender_type: 'agent',
+              sender_id: userId,
+              content_type: message_type === 'template' ? 'text' : message_type,
+              content_text: content_text || '[Mensagem]',
+              media_url: media_url || null,
+              message_id: sendRes.messageId,
+              status: 'sent',
+              created_at: new Date().toISOString(),
+            })
+            .select('id')
+            .single()
+
+          // Update conversation summary
+          await admin.rpc('update_conversation_with_message', {
+            p_conversation_id: conversationId,
+            p_message_text: content_text || '[Mensagem]',
+            p_message_timestamp: new Date().toISOString(),
+            p_is_inbound: false,
+          })
+
+          whatsappBus.emitInboxEvent({
+            accountId,
+            conversationId,
+            eventType: 'INSERT',
+            message: {
+              id: newMsg?.id || sendRes.messageId,
+              conversation_id: conversationId,
+              sender_type: 'agent',
+              sender_id: userId,
+              content_type: message_type === 'template' ? 'text' : message_type,
+              content_text: content_text || '[Mensagem]',
+              media_url: media_url || null,
+              message_id: sendRes.messageId,
+              status: 'sent',
+              created_at: new Date().toISOString(),
+            },
+            conversation: {
+              id: conversationId,
+              last_message_text: content_text || '[Mensagem]',
+              last_message_at: new Date().toISOString(),
+            },
+          })
+
+          return NextResponse.json({
+            success: true,
+            message_id: newMsg?.id || sendRes.messageId,
+            whatsapp_message_id: sendRes.messageId,
+          })
+        } catch (uazErr) {
+          const msg = uazErr instanceof Error ? uazErr.message : 'UazAPI sending failed'
+          return NextResponse.json({ error: msg }, { status: 502 })
+        }
+      }
+    }
+  } catch {
+    // Fall through to Meta provider if UazAPI check fails or is unconfigured in test
+  }
+
     // Delegate to the shared send core (validates, sends to Meta with
     // phone-variant retry, persists, pauses active flow runs). Its
     // `SendMessageError` carries a machine code + HTTP status; the
@@ -165,6 +383,29 @@ export async function POST(request: Request) {
         templateMessageParams: template_message_params,
         interactivePayload: interactive_payload,
         replyToMessageId: reply_to_message_id,
+      })
+
+      whatsappBus.emitInboxEvent({
+        accountId,
+        conversationId,
+        eventType: 'INSERT',
+        message: {
+          id: result.messageId,
+          conversation_id: conversationId,
+          sender_type: 'agent',
+          sender_id: userId,
+          content_type: message_type === 'template' ? 'text' : message_type,
+          content_text: content_text || '[Mensagem]',
+          media_url: media_url || null,
+          message_id: result.whatsappMessageId,
+          status: 'sent',
+          created_at: new Date().toISOString(),
+        },
+        conversation: {
+          id: conversationId,
+          last_message_text: content_text || '[Mensagem]',
+          last_message_at: new Date().toISOString(),
+        },
       })
 
       return NextResponse.json({

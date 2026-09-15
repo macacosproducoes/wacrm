@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import {
   Eye,
@@ -13,6 +14,8 @@ import {
   Zap,
   AlertTriangle,
   RotateCcw,
+  QrCode,
+  Smartphone,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
@@ -22,7 +25,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
+import { cn } from '@/lib/utils';
 import { SettingsPanelHead } from './settings-panel-head';
 import {
   Accordion,
@@ -30,6 +35,8 @@ import {
   AccordionTrigger,
   AccordionContent,
 } from '@/components/ui/accordion';
+import { UazApiConfigPanel } from './uazapi-config';
+import { BaileysConfigPanel } from './baileys-config';
 import type { WhatsAppConfig as WhatsAppConfigType } from '@/types';
 
 const MASKED_TOKEN = '••••••••••••••••';
@@ -62,6 +69,30 @@ export function WhatsAppConfig() {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('unknown');
   const [resetReason, setResetReason] = useState<ResetReason>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
+
+  const searchParams = useSearchParams();
+  const [provider, setProvider] = useState<'baileys' | 'uazapi' | 'meta'>('baileys');
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const fromUrl = searchParams?.get('provider');
+      if (fromUrl === 'meta' || fromUrl === 'uazapi' || fromUrl === 'baileys') {
+        setProvider(fromUrl as 'baileys' | 'uazapi' | 'meta');
+        return;
+      }
+      const saved = localStorage.getItem('wacrm_whatsapp_provider');
+      if (saved === 'meta' || saved === 'uazapi' || saved === 'baileys') {
+        setProvider(saved as 'baileys' | 'uazapi' | 'meta');
+      }
+    }
+  }, [searchParams]);
+
+  const handleSelectProvider = (p: 'baileys' | 'uazapi' | 'meta') => {
+    setProvider(p);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('wacrm_whatsapp_provider', p);
+    }
+  };
   // Guards against re-hydrating the form when the load effect below
   // re-runs for reasons unrelated to actually switching accounts —
   // e.g. Supabase's onAuthStateChange fires a token refresh (new
@@ -415,20 +446,6 @@ export function WhatsAppConfig() {
     toast.success('Webhook URL copied to clipboard');
   }
 
-  if (loading) {
-    return (
-      <section className="animate-in fade-in-50 duration-200">
-        <SettingsPanelHead
-          title={t("title")}
-          description={t("description")}
-        />
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="size-6 animate-spin text-primary" />
-        </div>
-      </section>
-    );
-  }
-
   const showResetBanner = resetReason === 'token_corrupted';
 
   return (
@@ -437,7 +454,63 @@ export function WhatsAppConfig() {
         title={t("title")}
         description={t("description")}
       />
-      <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
+
+      {/* Provider Selector Tabs */}
+      <div className="flex flex-wrap items-center gap-2 p-1.5 bg-muted/60 backdrop-blur border border-border/60 rounded-xl w-fit mb-6">
+        <button
+          type="button"
+          onClick={() => handleSelectProvider('baileys')}
+          className={cn(
+            "px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2.5",
+            provider === 'baileys'
+              ? "bg-background text-foreground shadow-sm ring-1 ring-border/50 font-semibold"
+              : "text-muted-foreground hover:text-foreground"
+          )}
+        >
+          <QrCode className="size-4 text-emerald-500" />
+          <span>WhatsApp Direto (QR Code)</span>
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20">
+            Recomendado / Sem UazAPI
+          </Badge>
+        </button>
+        <button
+          type="button"
+          onClick={() => handleSelectProvider('uazapi')}
+          className={cn(
+            "px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2.5",
+            provider === 'uazapi'
+              ? "bg-background text-foreground shadow-sm ring-1 ring-border/50 font-semibold"
+              : "text-muted-foreground hover:text-foreground"
+          )}
+        >
+          <Smartphone className="size-4 text-primary" />
+          <span>UazAPI (Gateway)</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => handleSelectProvider('meta')}
+          className={cn(
+            "px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2.5",
+            provider === 'meta'
+              ? "bg-background text-foreground shadow-sm ring-1 ring-border/50 font-semibold"
+              : "text-muted-foreground hover:text-foreground"
+          )}
+        >
+          <Zap className="size-4 text-blue-500" />
+          <span>Meta Cloud API (Oficial)</span>
+        </button>
+      </div>
+
+      {provider === 'baileys' ? (
+        <BaileysConfigPanel />
+      ) : provider === 'uazapi' ? (
+        <UazApiConfigPanel />
+      ) : loading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="size-6 animate-spin text-primary" />
+        </div>
+      ) : (
+        <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
       {/* Main config form */}
       <div className="space-y-6">
         {/* Corrupted-token reset banner */}
@@ -916,6 +989,7 @@ export function WhatsAppConfig() {
         </Card>
       </div>
     </div>
+      )}
     </section>
   );
 }

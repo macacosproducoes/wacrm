@@ -8,6 +8,7 @@ import {
 import { HANDOFF_SENTINEL, aiRequestTimeoutMs } from './defaults'
 import { generateOpenAi } from './providers/openai'
 import { generateAnthropic } from './providers/anthropic'
+import { generateGemini, isKieAi } from './providers/gemini'
 
 export interface GenerateArgs {
   config: AiConfig
@@ -34,18 +35,25 @@ export async function generateReply(args: GenerateArgs): Promise<GenerateResult>
   }
 
   let result: { text: string; usage: AiUsage | null }
-  switch (config.provider) {
-    case 'openai':
-      result = await generateOpenAi(providerArgs)
-      break
-    case 'anthropic':
-      result = await generateAnthropic(providerArgs)
-      break
-    default:
-      throw new AiError(`Unsupported AI provider: ${config.provider}`, {
-        code: 'unsupported_provider',
-        status: 400,
-      })
+  if (isKieAi(config.apiKey, config.model)) {
+    result = await generateGemini(providerArgs)
+  } else {
+    switch (config.provider) {
+      case 'openai':
+        result = await generateOpenAi(providerArgs)
+        break
+      case 'anthropic':
+        result = await generateAnthropic(providerArgs)
+        break
+      case 'gemini':
+        result = await generateGemini(providerArgs)
+        break
+      default:
+        throw new AiError(`Unsupported AI provider: ${config.provider}`, {
+          code: 'unsupported_provider',
+          status: 400,
+        })
+    }
   }
 
   return parseGeneration(result.text, result.usage)
