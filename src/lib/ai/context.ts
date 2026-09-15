@@ -37,7 +37,14 @@ export async function buildConversationContext(
 
   const rows = ((data ?? []) as DbMessage[]).reverse()
   const rawList = rows
-    .filter((m) => m.content_text && m.content_text.trim())
+    .filter((m) => {
+      const text = m.content_text?.trim()
+      if (!text) return false
+      if (text === '[Mensagem recebida]' || text === '[Reação]' || text.startsWith('[Undecryptable]')) {
+        return false
+      }
+      return true
+    })
     .map((m) => ({
       role: m.sender_type === 'customer' ? ('user' as const) : ('assistant' as const),
       content: m.content_text!.trim(),

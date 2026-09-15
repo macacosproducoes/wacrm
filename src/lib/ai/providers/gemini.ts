@@ -115,127 +115,117 @@ async function generateKie(args: ProviderArgs): Promise<ProviderResult> {
     modelsToTry.push('gemini-3-8-flash-openai', 'gemini-3-7-flash-openai')
   }
 
-  const perAttemptTimeout = Math.min(timeoutMs, 7000)
   let lastError: unknown = null
 
   for (const currentModel of modelsToTry) {
     const isFlash25 = currentModel === 'gemini-2.5-flash'
     // gemini-2.5-flash on Kie.ai requires non-streaming; 3.x models support fast SSE streaming
     const shouldStream = !isFlash25
-    const maxAttempts = isFlash25 ? 2 : 1
+    const perAttemptTimeout = isFlash25 ? 3000 : Math.min(timeoutMs, 15000)
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const res = await fetch('https://api.kie.ai/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey.trim()}`,
-          },
-          body: JSON.stringify({
-            model: currentModel,
-            messages: formattedMessages,
-            temperature: 0.7,
-            max_tokens: 150,
-            stream: shouldStream,
-          }),
-          signal: AbortSignal.timeout(perAttemptTimeout),
-        })
+    try {
+      const res = await fetch('https://api.kie.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey.trim()}`,
+        },
+        body: JSON.stringify({
+          model: currentModel,
+          messages: formattedMessages,
+          temperature: 0.7,
+          max_tokens: 250,
+          stream: shouldStream,
+        }),
+        signal: AbortSignal.timeout(perAttemptTimeout),
+      })
 
-        if (!res?.ok) {
-          if (res?.status === 401) {
+      if (!res?.ok) {
+        if (res?.status === 401) {
+          throw new AiError('Chave de API Kie.ai inválida ou não autorizada.', { code: 'invalid_key', status: 401 })
+        }
+        lastError = await providerHttpError('Kie.ai (Gemini)', res)
+        continue
+      }
+
+      const contentType =
+        res.headers && typeof res.headers.get === 'function'
+          ? res.headers.get('content-type') || ''
+          : ''
+      const isSseStream = contentType.includes('text/event-stream')
+
+      // 1. Handle SSE stream
+      if (isSseStream && res.body && typeof (res.body as unknown as { getReader: unknown }).getReader === 'function') {
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let text = ''
+        let buffer = ''
+        let usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+
+          for (const line of lines) {
+            const trimmedLine = line.trim()
+            if (!trimmedLine.startsWith('data:')) continue
+            const dataStr = trimmedLine.slice(5).trim()
+            if (!dataStr || dataStr === '[DONE]') continue
+            try {
+              const json = JSON.parse(dataStr)
+              if (json.code && json.code !== 200) {
+                continue
+              }
+              const delta = json.choices?.[0]?.delta?.content
+              if (delta) text += delta
+              if (json.usage) usage = json.usage
+            } catch {
+              // Ignore non-JSON line
+            }
+          }
+        }
+
+        const trimmedText = text.trim()
+        if (trimmedText) {
+          return {
+            text: trimmedText,
+            usage: normalizeUsage({
+              prompt: usage.prompt_tokens,
+              completion: usage.completion_tokens,
+              total: usage.total_tokens,
+            }),
+          }
+        }
+      } else {
+        // 2. Handle JSON response
+        const data = await res.json().catch(() => null)
+        if (data?.code && data.code !== 200) {
+          if (data.code === 401) {
             throw new AiError('Chave de API Kie.ai inválida ou não autorizada.', { code: 'invalid_key', status: 401 })
           }
-          lastError = await providerHttpError('Kie.ai (Gemini)', res)
+          lastError = new AiError(data.msg || `Kie.ai error: ${data.code}`, { code: 'provider_error', status: 500 })
           continue
         }
 
-        const contentType =
-          res.headers && typeof res.headers.get === 'function'
-            ? res.headers.get('content-type') || ''
-            : ''
-        const isSseStream = contentType.includes('text/event-stream')
-
-        // 1. Handle SSE stream
-        if (isSseStream && res.body && typeof (res.body as unknown as { getReader: unknown }).getReader === 'function') {
-          const reader = res.body.getReader()
-          const decoder = new TextDecoder()
-          let text = ''
-          let buffer = ''
-          let usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
-
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            buffer += decoder.decode(value, { stream: true })
-            const lines = buffer.split('\n')
-            buffer = lines.pop() || ''
-
-            for (const line of lines) {
-              const trimmedLine = line.trim()
-              if (!trimmedLine.startsWith('data:')) continue
-              const dataStr = trimmedLine.slice(5).trim()
-              if (!dataStr || dataStr === '[DONE]') continue
-              try {
-                const json = JSON.parse(dataStr)
-                if (json.code && json.code !== 200) {
-                  continue
-                }
-                const delta = json.choices?.[0]?.delta?.content
-                if (delta) text += delta
-                if (json.usage) usage = json.usage
-              } catch {
-                // Ignore non-JSON line
-              }
-            }
+        const text = data?.choices?.[0]?.message?.content?.trim()
+        if (text) {
+          return {
+            text,
+            usage: normalizeUsage({
+              prompt: data?.usage?.prompt_tokens,
+              completion: data?.usage?.completion_tokens,
+              total: data?.usage?.total_tokens,
+            }),
           }
-
-          const trimmedText = text.trim()
-          if (trimmedText) {
-            return {
-              text: trimmedText,
-              usage: normalizeUsage({
-                prompt: usage.prompt_tokens,
-                completion: usage.completion_tokens,
-                total: usage.total_tokens,
-              }),
-            }
-          }
-        } else {
-          // 2. Handle JSON response
-          const data = await res.json().catch(() => null)
-          if (data?.code && data.code !== 200) {
-            if (data.code === 401) {
-              throw new AiError('Chave de API Kie.ai inválida ou não autorizada.', { code: 'invalid_key', status: 401 })
-            }
-            lastError = new AiError(data.msg || `Kie.ai error: ${data.code}`, { code: 'provider_error', status: 500 })
-            if (attempt < maxAttempts && (data.code === 500 || data.code === 524 || data.code === 429)) {
-              await new Promise((r) => setTimeout(r, 50))
-              continue
-            }
-            continue
-          }
-
-          const text = data?.choices?.[0]?.message?.content?.trim()
-          if (text) {
-            return {
-              text,
-              usage: normalizeUsage({
-                prompt: data?.usage?.prompt_tokens,
-                completion: data?.usage?.completion_tokens,
-                total: data?.usage?.total_tokens,
-              }),
-            }
-          }
-        }
-      } catch (err) {
-        lastError = err
-        if (err instanceof AiError && err.code === 'invalid_key') throw err
-        if (attempt < maxAttempts) {
-          await new Promise((r) => setTimeout(r, 50))
-          continue
         }
       }
+    } catch (err) {
+      lastError = err
+      if (err instanceof AiError && err.code === 'invalid_key') throw err
+      continue
     }
   }
 

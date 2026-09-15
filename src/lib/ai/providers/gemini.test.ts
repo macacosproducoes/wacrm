@@ -150,7 +150,7 @@ describe('generateGemini adapter', () => {
     )
   })
 
-  it('retries gemini-2.5-flash when first attempt gives error 500 on Kie.ai', async () => {
+  it('cascades to operational fallback when gemini-2.5-flash gives error 500 on Kie.ai', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn()
@@ -182,7 +182,7 @@ describe('generateGemini adapter', () => {
     const call1Body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]?.body as string)
     const call2Body = JSON.parse(vi.mocked(fetch).mock.calls[1][1]?.body as string)
     expect(call1Body.model).toBe('gemini-2.5-flash')
-    expect(call2Body.model).toBe('gemini-2.5-flash')
+    expect(call2Body.model).toBe('gemini-3-8-flash-openai')
   })
 
   it('strips trailing assistant messages so Gemini requests always end on user turn', async () => {

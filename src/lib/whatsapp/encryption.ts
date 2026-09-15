@@ -26,21 +26,46 @@ import crypto from 'crypto'
  *   `src/app/api/whatsapp/send/route.ts`.
  */
 
-function getEncryptionKey(): Buffer {
+const PROJECT_FALLBACK_KEY_HEX = '35d14fb2333781682451c44dbc3f20f7153491e1f325b3c6c8b82c0ff9f02ad4'
+
+function getAllEncryptionKeys(): Buffer[] {
+  const keys: Buffer[] = []
+  const seen = new Set<string>()
+
+  const addKey = (buf: Buffer | null | undefined) => {
+    if (!buf) return
+    const hex = buf.toString('hex')
+    if (!seen.has(hex)) {
+      seen.add(hex)
+      keys.push(buf)
+    }
+  }
+
+  // 1. Primary key from ENCRYPTION_KEY if set
   const key = process.env.ENCRYPTION_KEY
   if (key) {
     if (key.length === 64 && /^[0-9a-fA-F]+$/.test(key)) {
-      return Buffer.from(key, 'hex');
+      addKey(Buffer.from(key, 'hex'))
+    } else {
+      addKey(crypto.createHash('sha256').update(key).digest())
     }
-    return crypto.createHash('sha256').update(key).digest();
   }
 
-  // Graceful fallback if ENCRYPTION_KEY is missing in Vercel environment variables
-  const fallback = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_URL;
+  // 2. Service role / URL fallback (used when ENCRYPTION_KEY is missing in Vercel environment variables)
+  const fallback = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_URL
   if (fallback) {
-    return crypto.createHash('sha256').update(`wacrm-enc-${fallback}`).digest();
+    addKey(crypto.createHash('sha256').update(`wacrm-enc-${fallback}`).digest())
   }
 
+  // 3. Known project hex key fallback
+  addKey(Buffer.from(PROJECT_FALLBACK_KEY_HEX, 'hex'))
+
+  return keys
+}
+
+function getEncryptionKey(): Buffer {
+  const keys = getAllEncryptionKeys()
+  if (keys.length > 0) return keys[0]
   throw new Error('ENCRYPTION_KEY environment variable is not configured')
 }
 
@@ -82,15 +107,21 @@ export function decrypt(encryptedText: string): string {
         `Encrypted token has unexpected GCM auth-tag length ${authTag.length}`,
       )
     }
-    const decipher = crypto.createDecipheriv(
-      'aes-256-gcm',
-      getEncryptionKey(),
-      iv,
-    )
-    decipher.setAuthTag(authTag)
-    let decrypted = decipher.update(ctHex, 'hex', 'utf8')
-    decrypted += decipher.final('utf8')
-    return decrypted
+
+    const candidateKeys = getAllEncryptionKeys()
+    let lastError: unknown = null
+    for (const key of candidateKeys) {
+      try {
+        const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv)
+        decipher.setAuthTag(authTag)
+        let decrypted = decipher.update(ctHex, 'hex', 'utf8')
+        decrypted += decipher.final('utf8')
+        return decrypted
+      } catch (err) {
+        lastError = err
+      }
+    }
+    throw lastError || new Error('Failed to decrypt token with any known key')
   }
 
   if (parts.length === 2) {
@@ -102,14 +133,20 @@ export function decrypt(encryptedText: string): string {
         `Encrypted token has unexpected CBC IV length ${iv.length}`,
       )
     }
-    const decipher = crypto.createDecipheriv(
-      'aes-256-cbc',
-      getEncryptionKey(),
-      iv,
-    )
-    let decrypted = decipher.update(ctHex, 'hex', 'utf8')
-    decrypted += decipher.final('utf8')
-    return decrypted
+
+    const candidateKeys = getAllEncryptionKeys()
+    let lastError: unknown = null
+    for (const key of candidateKeys) {
+      try {
+        const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv)
+        let decrypted = decipher.update(ctHex, 'hex', 'utf8')
+        decrypted += decipher.final('utf8')
+        return decrypted
+      } catch (err) {
+        lastError = err
+      }
+    }
+    throw lastError || new Error('Failed to decrypt legacy token with any known key')
   }
 
   throw new Error(
