@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -21,9 +21,10 @@ import {
   Sparkles,
   Loader2,
   Star,
+  Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { QuickReplyKind, QuickReplySequenceStep } from "@/types";
+import type { QuickReply, QuickReplyKind, QuickReplySequenceStep } from "@/types";
 import { uploadAccountMedia } from "@/lib/storage/upload-media";
 import { getDefaultColorForKind } from "@/lib/inbox/quick-reply-colors";
 import { CHAT_MEDIA_BUCKET } from "./message-composer";
@@ -32,29 +33,35 @@ interface QuickReplyCreateModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   defaultKind?: QuickReplyKind;
+  initialData?: QuickReply | null;
   onCreated: () => void;
 }
 
 const CATEGORIES = [
-  "Geral",
-  "Saudação",
+  "Boas-vindas",
+  "Apresentação",
+  "Qualificação",
   "Vendas",
   "Preço",
-  "Pagamento",
   "Produtos",
+  "Serviços",
+  "Pagamento",
   "Objeções",
   "Follow-up",
   "Pós-venda",
   "Suporte",
-  "Qualificação",
-  "Apresentação",
   "Documentos",
+  "Agendamento",
+  "Reativação",
+  "Outros",
+  "Geral",
 ];
 
 export function QuickReplyCreateModal({
   open,
   onOpenChange,
   defaultKind = "text",
+  initialData = null,
   onCreated,
 }: QuickReplyCreateModalProps) {
   const [kind, setKind] = useState<QuickReplyKind>(defaultKind);
@@ -67,12 +74,40 @@ export function QuickReplyCreateModal({
   const [isFavorite, setIsFavorite] = useState(false);
   const [scope, setScope] = useState<"team" | "personal">("team");
   const [uploading, setUploading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // Sequence items state
   const [sequenceItems, setSequenceItems] = useState<QuickReplySequenceStep[]>([
     { id: "1", order: 1, type: "text", content: "Olá {{primeiro_nome}}, tudo bem?", delay_seconds: 0 },
     { id: "2", order: 2, type: "text", content: "Como posso te ajudar hoje?", delay_seconds: 3 },
   ]);
+
+  useEffect(() => {
+    if (open) {
+      if (initialData) {
+        setKind(initialData.kind || defaultKind);
+        setTitle(initialData.title || "");
+        setShortcut(initialData.shortcut || "");
+        setCategory(initialData.category || "Vendas");
+        setContentText(initialData.content_text || "");
+        setMediaUrl(initialData.media_url || "");
+        setMediaDuration(initialData.media_duration || 0);
+        setIsFavorite(Boolean(initialData.is_favorite));
+        setScope(initialData.scope || "team");
+        if (Array.isArray(initialData.sequence_items) && initialData.sequence_items.length > 0) {
+          setSequenceItems(initialData.sequence_items);
+        } else {
+          setSequenceItems([
+            { id: "1", order: 1, type: "text", content: "Olá {{primeiro_nome}}, tudo bem?", delay_seconds: 0 },
+            { id: "2", order: 2, type: "text", content: "Como posso te ajudar hoje?", delay_seconds: 3 },
+          ]);
+        }
+      } else {
+        reset();
+        setKind(defaultKind);
+      }
+    }
+  }, [open, initialData, defaultKind]);
 
   // Audio recording
   const [isRecording, setIsRecording] = useState(false);
@@ -187,6 +222,32 @@ export function QuickReplyCreateModal({
     setSequenceItems(sequenceItems.filter((_, i) => i !== index));
   };
 
+  const handleDelete = async () => {
+    if (!initialData?.id) return;
+    if (!window.confirm(`Tem certeza que deseja excluir permanentemente "${initialData.title}"?`)) return;
+
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/quick-replies/${initialData.id}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Falha ao excluir.");
+      }
+
+      toast.success(`"${initialData.title}" foi excluída.`);
+      onOpenChange(false);
+      onCreated();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Erro ao excluir";
+      toast.error(msg);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!title.trim()) {
       toast.error("Defina um título para a resposta rápida.");
@@ -210,8 +271,12 @@ export function QuickReplyCreateModal({
 
     setUploading(true);
     try {
-      const res = await fetch("/api/quick-replies", {
-        method: "POST",
+      const isEditing = Boolean(initialData?.id);
+      const url = isEditing ? `/api/quick-replies/${initialData!.id}` : "/api/quick-replies";
+      const method = isEditing ? "PATCH" : "POST";
+
+      const res = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: title.trim(),
@@ -230,10 +295,10 @@ export function QuickReplyCreateModal({
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Falha ao criar resposta rápida.");
+        throw new Error(data.error || (isEditing ? "Falha ao atualizar resposta rápida." : "Falha ao criar resposta rápida."));
       }
 
-      toast.success("Resposta rápida criada com sucesso!");
+      toast.success(isEditing ? "Resposta rápida ajustada com sucesso!" : "Resposta rápida criada com sucesso!");
       reset();
       onOpenChange(false);
       onCreated();
@@ -250,8 +315,8 @@ export function QuickReplyCreateModal({
       <DialogContent className="max-w-xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden border-border bg-card">
         <DialogHeader className="px-5 py-3.5 border-b border-border/70 flex flex-row items-center justify-between">
           <DialogTitle className="text-base font-semibold text-foreground flex items-center gap-2">
-            <span>✨</span>
-            <span>Nova Resposta Rápida / Atalho</span>
+            <span>{initialData?.id ? "✏️" : "✨"}</span>
+            <span>{initialData?.id ? "Ajustar / Editar Resposta Rápida" : "Nova Resposta Rápida / Atalho"}</span>
           </DialogTitle>
           <button
             type="button"
@@ -578,26 +643,43 @@ export function QuickReplyCreateModal({
           )}
         </div>
 
-        <DialogFooter className="px-5 py-3 border-t border-border/70 bg-muted/20 flex flex-row items-center justify-end gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => onOpenChange(false)}
-            className="h-8 text-xs"
-          >
-            Cancelar
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            disabled={uploading || !title.trim()}
-            onClick={handleSave}
-            className="h-8 text-xs bg-primary text-primary-foreground gap-1"
-          >
-            {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-            Salvar Resposta
-          </Button>
+        <DialogFooter className="px-5 py-3 border-t border-border/70 bg-muted/20 flex flex-row items-center justify-between gap-2">
+          <div>
+            {initialData?.id && (
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                disabled={uploading || deleting}
+                onClick={handleDelete}
+                className="h-8 text-xs gap-1.5"
+              >
+                {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                Excluir Resposta
+              </Button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => onOpenChange(false)}
+              className="h-8 text-xs"
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={uploading || deleting || !title.trim()}
+              onClick={handleSave}
+              className="h-8 text-xs bg-primary text-primary-foreground gap-1"
+            >
+              {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+              {initialData?.id ? "Salvar Ajustes" : "Salvar Resposta"}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -20,6 +20,8 @@ import {
   X,
   Send,
   Folder,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { QuickReply, QuickReplyKind } from "@/types";
@@ -48,8 +50,9 @@ interface QuickReplyTopBarProps {
   onSelectMedia: (qr: QuickReply) => void;
   onSelectSequence: (qr: QuickReply) => void;
   onOpenAudioLibrary: () => void;
-  onOpenCreateReply: (defaultKind?: QuickReplyKind) => void;
+  onOpenCreateReply: (defaultKind?: QuickReplyKind, itemToEdit?: QuickReply) => void;
   onToggleFavorite?: (id: string, currentFav: boolean) => void;
+  onRefreshReplies?: () => void;
 }
 
 type FilterType = "all" | "favorite" | "text" | "audio" | "sequence" | "media";
@@ -131,15 +134,51 @@ export function QuickReplyTopBar({
   onOpenAudioLibrary,
   onOpenCreateReply,
   onToggleFavorite,
+  onRefreshReplies,
 }: QuickReplyTopBarProps) {
   const [filter, setFilter] = useState<FilterType>("all");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [categories, setCategories] = useState<QuickReplyCategory[]>([]);
+  const [localItems, setLocalItems] = useState<QuickReply[]>(quickReplies);
 
-  // 3-second instant send state
+  // Active 3-second instant send countdown state
   const [pendingSend, setPendingSend] = useState<PendingSend | null>(null);
-  const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const countdownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Sync quickReplies prop
+  useEffect(() => {
+    setLocalItems(quickReplies);
+  }, [quickReplies]);
+
+  const loadItems = async () => {
+    try {
+      const res = await fetch("/api/quick-replies");
+      if (res.ok) {
+        const data = await res.json();
+        setLocalItems(data.data || data.quick_replies || []);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleDeleteItem = async (e: React.MouseEvent, item: QuickReply) => {
+    e.stopPropagation();
+    if (pendingSend?.qr.id === item.id) {
+      cancelPendingSend();
+    }
+    if (!window.confirm(`Deseja realmente excluir permanentemente "${item.title}"?`)) return;
+    try {
+      const res = await fetch(`/api/quick-replies/${item.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Falha ao excluir");
+      toast.success(`"${item.title}" foi excluída com sucesso!`);
+      await loadItems();
+      onRefreshReplies?.();
+    } catch {
+      toast.error("Erro ao excluir resposta rápida.");
+    }
+  };
 
   // Load categories
   useEffect(() => {
@@ -480,6 +519,29 @@ export function QuickReplyTopBar({
                   {isFav && (
                     <Star className="h-3 w-3 fill-amber-400 text-amber-400 shrink-0 ml-0.5" />
                   )}
+
+                  {/* Action buttons: Editar e Excluir */}
+                  <div className="flex items-center gap-0.5 ml-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      type="button"
+                      title="Ajustar / Editar resposta"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenCreateReply(item.kind, item);
+                      }}
+                      className="p-1 rounded hover:bg-foreground/15 text-foreground/70 hover:text-foreground transition-colors"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                    <button
+                      type="button"
+                      title="Excluir resposta"
+                      onClick={(e) => handleDeleteItem(e, item)}
+                      className="p-1 rounded hover:bg-red-500/20 text-muted-foreground hover:text-red-500 transition-colors"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
                 </div>
               );
             })

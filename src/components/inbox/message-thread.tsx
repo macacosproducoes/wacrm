@@ -917,6 +917,7 @@ export function MessageThread({
   const [loadingQuickReplies, setLoadingQuickReplies] = useState(false);
   const [audioLibraryOpen, setAudioLibraryOpen] = useState(false);
   const [createQuickReplyOpen, setCreateQuickReplyOpen] = useState(false);
+  const [editingQuickReply, setEditingQuickReply] = useState<QuickReply | null>(null);
   const [createDefaultKind, setCreateDefaultKind] = useState<QuickReplyKind>("text");
   const [insertedTextPayload, setInsertedTextPayload] = useState<InsertedTextPayload | null>(null);
   const [externalAudioAction, setExternalAudioAction] = useState<ExternalAudioActionPayload | null>(null);
@@ -976,8 +977,9 @@ export function MessageThread({
     });
   }, [handleSendMedia]);
 
-  const handleOpenCreateReply = useCallback((defaultKind: QuickReplyKind = "text") => {
-    setCreateDefaultKind(defaultKind);
+  const handleOpenCreateReply = useCallback((defaultKind: QuickReplyKind = "text", itemToEdit?: QuickReply) => {
+    setEditingQuickReply(itemToEdit || null);
+    setCreateDefaultKind(itemToEdit?.kind || defaultKind);
     setCreateQuickReplyOpen(true);
   }, []);
 
@@ -1541,6 +1543,7 @@ export function MessageThread({
         onSelectSequence={startSequence}
         onOpenAudioLibrary={() => setAudioLibraryOpen(true)}
         onOpenCreateReply={handleOpenCreateReply}
+        onRefreshReplies={loadQuickReplies}
       />
 
       {/* Composer */}
@@ -1584,11 +1587,15 @@ export function MessageThread({
         onRefreshReplies={loadQuickReplies}
       />
 
-      {/* Quick Reply Create Modal */}
+      {/* Quick Reply Create / Edit Modal */}
       <QuickReplyCreateModal
         open={createQuickReplyOpen}
-        onOpenChange={setCreateQuickReplyOpen}
+        onOpenChange={(open) => {
+          setCreateQuickReplyOpen(open);
+          if (!open) setEditingQuickReply(null);
+        }}
         defaultKind={createDefaultKind}
+        initialData={editingQuickReply}
         onCreated={loadQuickReplies}
       />
 
