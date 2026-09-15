@@ -6,6 +6,8 @@ import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
 import { notifyClientPresence } from '@/lib/ai/auto-reply-debouncer';
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
 import { sendWhatsAppPresence } from '@/lib/whatsapp/unified-presence';
+import { cancelPendingFollowUps } from '@/lib/automations/follow-up-engine';
+import { checkAndDispatchWelcomeMessage } from '@/lib/automations/welcome-engine';
 
 function supabaseAdmin() {
   return createAdminClient(
@@ -510,8 +512,9 @@ export async function processUazApiEvent(
     p_is_inbound: !fromMe,
   });
 
-  // For inbound customer messages, refresh ai_reply_count to 0 so conversation never gets muted
+  // For inbound customer messages, cancel any pending follow-ups and refresh ai counter
   if (!fromMe) {
+    void cancelPendingFollowUps(conversationId, 'client_replied');
     void admin
       .from('conversations')
       .update({ ai_reply_count: 0 })
@@ -536,7 +539,7 @@ export async function processUazApiEvent(
     },
   });
 
-  // Trigger AI auto-reply for inbound customer messages (strictly for real-time text turns within last 5m, never reactions/emojis or historical syncs)
+  // Evaluate Welcome Message Automation for inbound customer messages
   const trimmed = (messageText || '').trim();
   const isEmojiOnly = /^(\p{Extended_Pictographic}|\p{Emoji_Presentation}|\s)+$/u.test(trimmed);
   const isIgnoredText =
@@ -545,6 +548,24 @@ export async function processUazApiEvent(
     trimmed.startsWith('[Undecryptable]');
   const isFreshMessage = messageAgeMs < 5 * 60 * 1000;
 
+  if (!fromMe && !isIgnoredText && isFreshMessage) {
+    try {
+      const welcomeResult = await checkAndDispatchWelcomeMessage({
+        accountId: connection.account_id,
+        conversationId,
+        contactId,
+        connection,
+        pushName,
+      });
+      if (welcomeResult.dispatched) {
+        console.log(`[UazAPI Event Processor] Welcome message successfully dispatched for conv ${conversationId}`);
+      }
+    } catch (err) {
+      console.error('[UazAPI Event Processor] Error evaluating welcome message:', err);
+    }
+  }
+
+  // Trigger AI auto-reply for inbound customer messages (strictly for real-time text turns within last 5m, never reactions/emojis or historical syncs)
   if (!fromMe && trimmed && !isEmojiOnly && !isIgnoredText && isFreshMessage) {
     void dispatchInboundToAiReply({
       accountId: connection.account_id,

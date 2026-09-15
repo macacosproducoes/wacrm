@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import {
   MessageSquare,
   Zap,
@@ -17,9 +17,12 @@ import {
   Check,
   ChevronRight,
   Filter,
+  X,
+  Send,
+  Folder,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { QuickReply, QuickReplyKind, QuickReplySequenceStep } from "@/types";
+import type { QuickReply, QuickReplyKind } from "@/types";
 import {
   Tooltip,
   TooltipContent,
@@ -28,16 +31,19 @@ import {
 } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
 import {
   replaceQuickReplyVariables,
   type VariableContext,
 } from "@/lib/inbox/quick-reply-variables";
+import type { QuickReplyCategory } from "@/lib/inbox/categories";
 
 interface QuickReplyTopBarProps {
   quickReplies: QuickReply[];
   loading?: boolean;
   contactContext: VariableContext;
   onSelectText: (text: string) => void;
+  onDirectSendText?: (text: string) => void;
   onSelectAudio: (qr: QuickReply, simulateRecording: boolean) => void;
   onSelectMedia: (qr: QuickReply) => void;
   onSelectSequence: (qr: QuickReply) => void;
@@ -48,13 +54,14 @@ interface QuickReplyTopBarProps {
 
 type FilterType = "all" | "favorite" | "text" | "audio" | "sequence" | "media";
 
-const KIND_COLORS: Record<string, { bg: string; text: string; border: string; label: string; icon: string }> = {
+const KIND_COLORS: Record<string, { bg: string; text: string; border: string; label: string; icon: string; dot: string }> = {
   text: {
     bg: "bg-amber-500/10 hover:bg-amber-500/20",
     text: "text-amber-600 dark:text-amber-400",
     border: "border-amber-500/30",
     label: "Texto",
     icon: "🟨",
+    dot: "bg-amber-500",
   },
   audio: {
     bg: "bg-purple-500/10 hover:bg-purple-500/20",
@@ -62,6 +69,7 @@ const KIND_COLORS: Record<string, { bg: string; text: string; border: string; la
     border: "border-purple-500/30",
     label: "Áudio",
     icon: "🟪",
+    dot: "bg-purple-500",
   },
   sequence: {
     bg: "bg-orange-500/10 hover:bg-orange-500/20",
@@ -69,6 +77,7 @@ const KIND_COLORS: Record<string, { bg: string; text: string; border: string; la
     border: "border-orange-500/30",
     label: "Sequência",
     icon: "🟧",
+    dot: "bg-orange-500",
   },
   image: {
     bg: "bg-blue-500/10 hover:bg-blue-500/20",
@@ -76,6 +85,7 @@ const KIND_COLORS: Record<string, { bg: string; text: string; border: string; la
     border: "border-blue-500/30",
     label: "Imagem",
     icon: "🟦",
+    dot: "bg-blue-500",
   },
   video: {
     bg: "bg-cyan-500/10 hover:bg-cyan-500/20",
@@ -83,6 +93,7 @@ const KIND_COLORS: Record<string, { bg: string; text: string; border: string; la
     border: "border-cyan-500/30",
     label: "Vídeo",
     icon: "🟩",
+    dot: "bg-cyan-500",
   },
   document: {
     bg: "bg-red-500/10 hover:bg-red-500/20",
@@ -90,6 +101,7 @@ const KIND_COLORS: Record<string, { bg: string; text: string; border: string; la
     border: "border-red-500/30",
     label: "Documento",
     icon: "🟥",
+    dot: "bg-red-500",
   },
   interactive: {
     bg: "bg-emerald-500/10 hover:bg-emerald-500/20",
@@ -97,14 +109,14 @@ const KIND_COLORS: Record<string, { bg: string; text: string; border: string; la
     border: "border-emerald-500/30",
     label: "Interativo",
     icon: "⚡",
+    dot: "bg-emerald-500",
   },
 };
 
-function formatAudioTime(seconds?: number | null): string {
-  if (!seconds || seconds <= 0) return "0:00";
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
+interface PendingSend {
+  qr: QuickReply;
+  substitutedText?: string;
+  secondsLeft: number;
 }
 
 export function QuickReplyTopBar({
@@ -112,6 +124,7 @@ export function QuickReplyTopBar({
   loading = false,
   contactContext,
   onSelectText,
+  onDirectSendText,
   onSelectAudio,
   onSelectMedia,
   onSelectSequence,
@@ -120,10 +133,46 @@ export function QuickReplyTopBar({
   onToggleFavorite,
 }: QuickReplyTopBarProps) {
   const [filter, setFilter] = useState<FilterType>("all");
+  const [selectedCategory, setSelectedCategory] = useState<string>("all");
+  const [categories, setCategories] = useState<QuickReplyCategory[]>([]);
+
+  // 3-second instant send state
+  const [pendingSend, setPendingSend] = useState<PendingSend | null>(null);
+  const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Load categories
+  useEffect(() => {
+    async function loadCategories() {
+      try {
+        const res = await fetch("/api/quick-replies/categories");
+        const data = await res.json();
+        if (data.categories) {
+          setCategories(data.categories);
+        }
+      } catch (err) {
+        console.warn("[QuickReplyTopBar] Could not load categories:", err);
+      }
+    }
+    loadCategories();
+  }, []);
+
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, []);
 
   const filteredItems = useMemo(() => {
     return quickReplies.filter((item) => {
       if (item.is_active === false) return false;
+      if (selectedCategory !== "all") {
+        if (item.category !== selectedCategory && item.category_id !== selectedCategory) {
+          return false;
+        }
+      }
       if (filter === "favorite") return Boolean(item.is_favorite);
       if (filter === "text") return item.kind === "text";
       if (filter === "audio") return item.kind === "audio";
@@ -131,19 +180,24 @@ export function QuickReplyTopBar({
       if (filter === "media") return ["image", "video", "document", "media"].includes(item.kind);
       return true;
     });
-  }, [quickReplies, filter]);
+  }, [quickReplies, filter, selectedCategory]);
 
   const favoritesCount = useMemo(() => {
     return quickReplies.filter((i) => i.is_favorite && i.is_active !== false).length;
   }, [quickReplies]);
 
-  const handleCardClick = (qr: QuickReply) => {
+  // Execute actual send after 3 seconds
+  const executeDispatch = (qr: QuickReply, textToSend?: string) => {
+    // Record usage count
+    void fetch(`/api/quick-replies/${qr.id}/use`, { method: "POST" }).catch(() => {});
+
     if (qr.kind === "text") {
-      const rawText = qr.content_text || "";
-      const substituted = replaceQuickReplyVariables(rawText, contactContext);
-      onSelectText(substituted);
+      if (onDirectSendText && textToSend) {
+        onDirectSendText(textToSend);
+      } else if (textToSend) {
+        onSelectText(textToSend);
+      }
     } else if (qr.kind === "audio") {
-      // 1-Click Instant Dispatch!
       onSelectAudio(qr, false);
     } else if (qr.kind === "sequence") {
       onSelectSequence(qr);
@@ -152,213 +206,284 @@ export function QuickReplyTopBar({
     }
   };
 
+  const cancelPendingSend = () => {
+    if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    setPendingSend(null);
+    toast.info("Envio cancelado.");
+  };
+
+  const handleCardClick = (qr: QuickReply, isShiftPressed: boolean) => {
+    const rawText = qr.content_text || "";
+    const substituted = replaceQuickReplyVariables(rawText, contactContext);
+
+    // If SHIFT is pressed: Place into composer for manual editing
+    if (isShiftPressed) {
+      if (qr.kind === "text") {
+        onSelectText(substituted);
+        toast.info("Texto inserido no campo para edição antes de enviar.");
+      } else if (["image", "video", "document", "media"].includes(qr.kind)) {
+        onSelectMedia(qr);
+      } else {
+        toast.info("Esta resposta pronta foi selecionada.");
+      }
+      return;
+    }
+
+    // NORMAL CLICK: 3-Second Instant Send with CANCEL option!
+    if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
+    if (intervalRef.current) clearInterval(intervalRef.current);
+
+    setPendingSend({
+      qr,
+      substitutedText: substituted,
+      secondsLeft: 3,
+    });
+
+    // Tick every 1 second
+    let currentSeconds = 3;
+    intervalRef.current = setInterval(() => {
+      currentSeconds -= 1;
+      if (currentSeconds > 0) {
+        setPendingSend((prev) => (prev ? { ...prev, secondsLeft: currentSeconds } : null));
+      }
+    }, 1000);
+
+    // Dispatch after 3 seconds
+    countdownTimerRef.current = setTimeout(() => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      setPendingSend(null);
+      executeDispatch(qr, substituted);
+    }, 3000);
+  };
+
   return (
     <TooltipProvider delay={200}>
-      <div className="relative border-t border-border/60 bg-card/85 dark:bg-card/65 backdrop-blur-md opacity-90 hover:opacity-100 transition-opacity duration-200 z-10 select-none shadow-2xs">
-        <div className="flex items-center justify-between gap-1.5 px-3 py-1.5 overflow-hidden">
-          {/* Action pills & category toggles */}
-          <div className="flex items-center gap-1 shrink-0">
-            {/* Audio library shortcut */}
-            <button
-              type="button"
-              onClick={onOpenAudioLibrary}
-              title="Biblioteca de Áudios Gravados (PTT)"
-              className="inline-flex items-center gap-1 h-6 px-2 text-[11px] font-medium rounded-full bg-purple-500/15 text-purple-600 dark:text-purple-300 hover:bg-purple-500/25 border border-purple-500/30 transition-colors shadow-xs"
-            >
-              <Mic className="h-3 w-3" />
-              <span>🎙️ Áudios</span>
-            </button>
+      <div className="relative border-t border-border/60 bg-card/85 dark:bg-card/65 backdrop-blur-md transition-opacity duration-200 z-10 select-none shadow-2xs">
+        {/* Active 3-Second Instant Send Countdown Banner */}
+        {pendingSend && (
+          <div className="flex items-center justify-between gap-3 border-b border-amber-500/40 bg-amber-500/15 px-3 py-2 text-xs font-medium text-amber-900 dark:text-amber-200 animate-in fade-in slide-in-from-top-1 duration-200">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="flex h-2.5 w-2.5 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
+              </span>
+              <span className="truncate">
+                Enviando <strong>&quot;{pendingSend.qr.title}&quot;</strong> em{" "}
+                <span className="font-mono text-sm font-bold text-amber-600 dark:text-amber-400">
+                  {pendingSend.secondsLeft}s
+                </span>
+                ...
+              </span>
+            </div>
 
-            {/* Favorite chip */}
-            <button
-              type="button"
-              onClick={() => setFilter(filter === "favorite" ? "all" : "favorite")}
-              className={cn(
-                "inline-flex items-center gap-1 h-6 px-2 text-[11px] font-medium rounded-full border transition-colors",
-                filter === "favorite"
-                  ? "bg-amber-500 text-white border-amber-600 shadow-xs"
-                  : "bg-muted/60 text-muted-foreground hover:bg-muted border-border/50"
-              )}
-            >
-              <Star className={cn("h-3 w-3", filter === "favorite" ? "fill-white" : "fill-amber-400 text-amber-500")} />
-              <span>Favoritos</span>
-              {favoritesCount > 0 && (
-                <span className="ml-0.5 text-[9px] opacity-80">({favoritesCount})</span>
-              )}
-            </button>
-
-            {/* Filter pills */}
-            <div className="hidden sm:flex items-center gap-1 pl-1 border-l border-border/40">
-              <button
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="hidden sm:inline text-[11px] opacity-70">
+                (Shift+Clique edita antes)
+              </span>
+              <Button
                 type="button"
-                onClick={() => setFilter("all")}
-                className={cn(
-                  "h-5 px-1.5 text-[10px] rounded font-medium transition-colors",
-                  filter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
-                )}
+                size="sm"
+                variant="destructive"
+                className="h-6 px-2.5 text-xs font-semibold gap-1 bg-red-600 hover:bg-red-700 text-white shadow-sm"
+                onClick={cancelPendingSend}
               >
-                Todos
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilter("text")}
-                className={cn(
-                  "h-5 px-1.5 text-[10px] rounded font-medium transition-colors",
-                  filter === "text" ? "bg-amber-500 text-white" : "text-muted-foreground hover:bg-muted"
-                )}
-              >
-                🟨 Textos
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilter("audio")}
-                className={cn(
-                  "h-5 px-1.5 text-[10px] rounded font-medium transition-colors",
-                  filter === "audio" ? "bg-purple-500 text-white" : "text-muted-foreground hover:bg-muted"
-                )}
-              >
-                🟪 Áudios
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilter("sequence")}
-                className={cn(
-                  "h-5 px-1.5 text-[10px] rounded font-medium transition-colors",
-                  filter === "sequence" ? "bg-orange-500 text-white" : "text-muted-foreground hover:bg-muted"
-                )}
-              >
-                🟧 Sequências
-              </button>
+                <X className="h-3.5 w-3.5" />
+                <span>Cancelar</span>
+              </Button>
             </div>
           </div>
+        )}
 
-          {/* Quick Reply Items — Horizontal Scrollable Area */}
-          <div className="flex-1 flex items-center gap-1.5 overflow-x-auto no-scrollbar scroll-smooth px-1.5">
-            {filteredItems.length === 0 ? (
-              <span className="text-[11px] text-muted-foreground italic px-2">
-                {loading ? "Carregando respostas..." : "Nenhuma resposta rápida encontrada neste filtro."}
-              </span>
-            ) : (
-              filteredItems.map((qr) => {
-                const conf = KIND_COLORS[qr.kind] || KIND_COLORS.text;
-                const previewText = qr.content_text
-                  ? replaceQuickReplyVariables(qr.content_text, contactContext)
-                  : qr.title;
+        {/* Categories & Filter Bar */}
+        <div className="flex items-center justify-between gap-1.5 px-3 py-1.5 overflow-hidden">
+          <div className="flex items-center gap-1 shrink-0 overflow-x-auto no-scrollbar">
+            {/* Kind Filters */}
+            <button
+              type="button"
+              onClick={() => setFilter("all")}
+              className={cn(
+                "px-2 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer shrink-0",
+                filter === "all"
+                  ? "bg-primary text-primary-foreground font-semibold shadow-2xs"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
+            >
+              Todos
+            </button>
 
-                return (
-                  <Tooltip key={qr.id}>
-                    <TooltipTrigger
-                      type="button"
-                      onClick={() => handleCardClick(qr)}
-                      className={cn(
-                        "inline-flex items-center gap-1.5 h-6 px-2 rounded-md border text-[11px] font-medium whitespace-nowrap transition-all shadow-2xs hover:scale-[1.02] active:scale-[0.98]",
-                        conf.bg,
-                        conf.border,
-                        conf.text
-                      )}
-                    >
-                      <span className="text-[10px] leading-none">{conf.icon}</span>
-                      <span className="truncate max-w-[120px] font-medium">{qr.title}</span>
-                      {qr.shortcut && (
-                        <span className="text-[9px] px-1 rounded bg-black/10 dark:bg-white/10 opacity-75 font-mono">
-                          /{qr.shortcut}
-                        </span>
-                      )}
-                      {qr.kind === "audio" && qr.media_duration ? (
-                        <span className="text-[9px] opacity-75">
-                          {formatAudioTime(qr.media_duration)}
-                        </span>
-                      ) : null}
-                      {qr.kind === "sequence" && qr.sequence_items?.length ? (
-                        <span className="text-[9px] px-1 rounded bg-orange-500/20 text-orange-600 dark:text-orange-300">
-                          {qr.sequence_items.length} etapas
-                        </span>
-                      ) : null}
-                    </TooltipTrigger>
-                    <TooltipContent side="top" align="start" className="max-w-xs text-xs p-2 space-y-1">
-                      <div className="flex items-center justify-between gap-2 border-b border-border/50 pb-1">
-                        <span className="font-semibold text-foreground flex items-center gap-1">
-                          <span>{conf.icon}</span>
-                          <span>{qr.title}</span>
-                        </span>
-                        {qr.shortcut && (
-                          <Badge variant="outline" className="text-[9px] py-0 px-1 font-mono">
-                            /{qr.shortcut}
-                          </Badge>
-                        )}
-                      </div>
+            {favoritesCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setFilter("favorite")}
+                className={cn(
+                  "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer shrink-0",
+                  filter === "favorite"
+                    ? "bg-amber-500 text-white font-semibold shadow-2xs"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                )}
+              >
+                <Star className="h-3 w-3 fill-current text-amber-400" />
+                <span>Favoritos ({favoritesCount})</span>
+              </button>
+            )}
 
-                      {qr.kind === "text" && (
-                        <p className="text-muted-foreground line-clamp-3 text-[11px] whitespace-pre-wrap">
-                          {previewText}
-                        </p>
-                      )}
+            <button
+              type="button"
+              onClick={() => setFilter("text")}
+              className={cn(
+                "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer shrink-0",
+                filter === "text"
+                  ? "bg-amber-500/20 text-amber-700 dark:text-amber-300 font-semibold border border-amber-500/40"
+                  : "text-muted-foreground hover:bg-muted"
+              )}
+            >
+              <span>🟨 Texto</span>
+            </button>
 
-                      {qr.kind === "audio" && (
-                        <div className="space-y-0.5 text-[11px] text-muted-foreground">
-                          <div className="flex items-center gap-2">
-                            <Play className="h-3 w-3 text-purple-500" />
-                            <span>Nota de voz nativa • {formatAudioTime(qr.media_duration)}</span>
-                          </div>
-                          <p className="text-[10px] text-purple-600 dark:text-purple-400 font-medium">
-                            ⚡ 1-Clique: Disparo Instantâneo no WhatsApp
-                          </p>
-                        </div>
-                      )}
+            <button
+              type="button"
+              onClick={() => setFilter("audio")}
+              className={cn(
+                "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer shrink-0",
+                filter === "audio"
+                  ? "bg-purple-500/20 text-purple-700 dark:text-purple-300 font-semibold border border-purple-500/40"
+                  : "text-muted-foreground hover:bg-muted"
+              )}
+            >
+              <span>🟪 Áudio</span>
+            </button>
 
-                      {qr.kind === "sequence" && (
-                        <div className="text-[11px] text-muted-foreground space-y-0.5">
-                          <p className="font-medium text-foreground">Fluxo de {qr.sequence_items?.length || 0} mensagens:</p>
-                          {(qr.sequence_items || []).slice(0, 3).map((s, idx) => (
-                            <p key={s.id || idx} className="truncate text-[10px]">
-                              {idx + 1}. [{s.type.toUpperCase()}] {s.content || s.filename || "Mídia"} (+{s.delay_seconds}s)
-                            </p>
-                          ))}
-                          {(qr.sequence_items?.length || 0) > 3 && (
-                            <p className="text-[9px] italic opacity-80">+ {(qr.sequence_items?.length || 0) - 3} mais...</p>
-                          )}
-                        </div>
-                      )}
+            <button
+              type="button"
+              onClick={() => setFilter("sequence")}
+              className={cn(
+                "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer shrink-0",
+                filter === "sequence"
+                  ? "bg-orange-500/20 text-orange-700 dark:text-orange-300 font-semibold border border-orange-500/40"
+                  : "text-muted-foreground hover:bg-muted"
+              )}
+            >
+              <span>🟧 Sequência</span>
+            </button>
 
-                      {["image", "video", "document"].includes(qr.kind) && (
-                        <p className="text-muted-foreground text-[11px]">
-                          Arquivo de {conf.label} pronto para envio.
-                        </p>
-                      )}
+            <button
+              type="button"
+              onClick={() => setFilter("media")}
+              className={cn(
+                "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer shrink-0",
+                filter === "media"
+                  ? "bg-blue-500/20 text-blue-700 dark:text-blue-300 font-semibold border border-blue-500/40"
+                  : "text-muted-foreground hover:bg-muted"
+              )}
+            >
+              <span>🟦 Mídia</span>
+            </button>
 
-                      <div className="pt-1 text-[9px] text-primary/80 flex items-center gap-1">
-                        <span>💡</span>
-                        <span>
-                          {qr.kind === "text"
-                            ? "Clique para inserir no campo de mensagem para revisar"
-                            : qr.kind === "audio"
-                            ? "Clique para envio instantâneo do áudio"
-                            : qr.kind === "sequence"
-                            ? "Clique para iniciar a sequência"
-                            : "Clique para envio instantâneo"}
-                        </span>
-                      </div>
-                    </TooltipContent>
-                  </Tooltip>
-                );
-              })
+            {/* Category Dropdown/Selector */}
+            {categories.length > 0 && (
+              <div className="ml-1 flex items-center gap-1 border-l border-border/70 pl-2">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Cat:</span>
+                <select
+                  value={selectedCategory}
+                  onChange={(e) => setSelectedCategory(e.target.value)}
+                  className="rounded border border-border bg-background px-1.5 py-0.5 text-[11px] font-medium text-foreground outline-none cursor-pointer focus:ring-1 focus:ring-primary"
+                >
+                  <option value="all">Todas as Categorias</option>
+                  {categories.map((cat) => (
+                    <option key={cat.id} value={cat.name}>
+                      {cat.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
             )}
           </div>
 
-          {/* "+ Criar atalho" Button */}
-          <div className="shrink-0 pl-1">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => onOpenCreateReply()}
-              className="h-6 px-2 text-[11px] gap-1 border-dashed border-border hover:border-primary/50 text-muted-foreground hover:text-foreground shadow-2xs"
-            >
-              <Plus className="h-3 w-3" />
-              <span className="hidden sm:inline">Criar atalho</span>
-              <span className="sm:hidden">Novo</span>
-            </Button>
+          {/* Quick Actions (Audio Library & New Quick Reply) */}
+          <div className="flex items-center gap-1 shrink-0">
+            <Tooltip>
+              <TooltipTrigger
+                type="button"
+                onClick={onOpenAudioLibrary}
+                className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-purple-600 dark:text-purple-400 hover:bg-purple-500/15 border border-purple-500/20 cursor-pointer"
+              >
+                <Mic className="h-3 w-3" />
+                <span className="hidden sm:inline">Biblioteca de Áudios</span>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                Ouvir e gerenciar áudios gravados
+              </TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger
+                type="button"
+                onClick={() => onOpenCreateReply()}
+                className="inline-flex items-center gap-1 rounded bg-primary/10 hover:bg-primary/20 text-primary px-2 py-0.5 text-[11px] font-medium border border-primary/20 cursor-pointer"
+              >
+                <Plus className="h-3 w-3" />
+                <span className="hidden sm:inline">Nova Resposta</span>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                Cadastrar texto, áudio, mídia ou sequência
+              </TooltipContent>
+            </Tooltip>
           </div>
+        </div>
+
+        {/* Scrollable Quick Reply Badges */}
+        <div className="flex items-center gap-1.5 px-3 pb-2 overflow-x-auto no-scrollbar scroll-smooth">
+          {loading ? (
+            <div className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
+              <div className="h-3 w-3 animate-spin rounded-full border border-primary border-t-transparent" />
+              <span>Carregando respostas...</span>
+            </div>
+          ) : filteredItems.length === 0 ? (
+            <div className="py-1 text-xs text-muted-foreground">
+              Nenhuma resposta rápida encontrada nesta categoria.
+            </div>
+          ) : (
+            filteredItems.map((item) => {
+              const kindCfg = KIND_COLORS[item.kind] || KIND_COLORS.text;
+              const isFav = Boolean(item.is_favorite);
+
+              return (
+                <div
+                  key={item.id}
+                  onClick={(e) => handleCardClick(item, e.shiftKey)}
+                  className={cn(
+                    "group relative flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium cursor-pointer transition-all duration-150 shrink-0 select-none shadow-2xs",
+                    kindCfg.bg,
+                    kindCfg.border,
+                    kindCfg.text,
+                    "hover:scale-[1.02] active:scale-[0.98]"
+                  )}
+                  title={`Clique: Envia em 3s | Shift+Clique: Insere no texto`}
+                >
+                  {/* Color dot indicator */}
+                  <span className={cn("h-2 w-2 rounded-full shrink-0", kindCfg.dot)} />
+
+                  {/* Title & snippet */}
+                  <span className="truncate max-w-[150px] sm:max-w-[200px] font-semibold">
+                    {item.title}
+                  </span>
+
+                  {/* Audio duration tag if applicable */}
+                  {item.kind === "audio" && item.media_duration && (
+                    <span className="text-[10px] opacity-75 font-mono">
+                      {Math.floor(Number(item.media_duration))}s
+                    </span>
+                  )}
+
+                  {/* Favorite star */}
+                  {isFav && (
+                    <Star className="h-3 w-3 fill-amber-400 text-amber-400 shrink-0 ml-0.5" />
+                  )}
+                </div>
+              );
+            })
+          )}
         </div>
       </div>
     </TooltipProvider>

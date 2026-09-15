@@ -74,6 +74,8 @@ import { QuickReplyTopBar } from "./quick-reply-top-bar";
 import { AudioLibraryModal } from "./audio-library-modal";
 import { SequenceRunnerBanner, useSequenceRunner } from "./sequence-runner";
 import { QuickReplyCreateModal } from "./quick-reply-create-modal";
+import { ManualFollowUpModal } from "./manual-follow-up-modal";
+import { FollowUpsBanner } from "./follow-ups-banner";
 import type { QuickReply, QuickReplyKind } from "@/types";
 import type { InsertedTextPayload, ExternalAudioActionPayload } from "./message-composer";
 
@@ -206,6 +208,10 @@ export function MessageThread({
   const [saveContactModalOpen, setSaveContactModalOpen] = useState(false);
   const [saveContactModalName, setSaveContactModalName] = useState("");
   const [isSavingContactModal, setIsSavingContactModal] = useState(false);
+
+  // Manual Follow-up Modal & banner refresh state
+  const [manualFollowUpModalOpen, setManualFollowUpModalOpen] = useState(false);
+  const [followUpsRefreshTrigger, setFollowUpsRefreshTrigger] = useState(0);
 
   const handleSaveContactFromModal = useCallback(async () => {
     if (!contact?.id) return;
@@ -1201,6 +1207,19 @@ export function MessageThread({
             </button>
           )}
 
+          {/* Schedule Follow-up Button */}
+          {conversation?.id && (
+            <button
+              type="button"
+              onClick={() => setManualFollowUpModalOpen(true)}
+              title="Agendar follow-up condicional para este contato"
+              className="ml-1 inline-flex items-center gap-1.5 h-7 px-2 rounded-md text-xs font-medium border border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition-all cursor-pointer"
+            >
+              <Clock className="h-3.5 w-3.5" />
+              <span className="hidden md:inline">Agendar Follow-up</span>
+            </button>
+          )}
+
           {/* Session timer / provider badge */}
           {isUazApi ? (
             <Badge
@@ -1404,6 +1423,13 @@ export function MessageThread({
         </div>
       </div>
 
+      {/* Follow-ups Banner (se houver follow-ups agendados nesta conversa) */}
+      {conversation?.id && (
+        <FollowUpsBanner
+          conversationId={conversation.id}
+          refreshTrigger={followUpsRefreshTrigger}
+        />
+      )}
 
       {/* Messages Area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
@@ -1509,6 +1535,7 @@ export function MessageThread({
         loading={loadingQuickReplies}
         contactContext={contactVariableContext}
         onSelectText={handleSelectTextFromTopBar}
+        onDirectSendText={handleSend}
         onSelectAudio={handleSelectAudioFromTopBar}
         onSelectMedia={handleSelectMediaFromTopBar}
         onSelectSequence={startSequence}
@@ -1635,6 +1662,18 @@ export function MessageThread({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Modal Agendar Follow-up Manual */}
+      {conversation?.id && (
+        <ManualFollowUpModal
+          open={manualFollowUpModalOpen}
+          onOpenChange={setManualFollowUpModalOpen}
+          conversationId={conversation.id}
+          contactId={contact?.id}
+          quickReplies={quickReplies}
+          onScheduled={() => setFollowUpsRefreshTrigger((prev) => prev + 1)}
+        />
+      )}
     </div>
   );
 }

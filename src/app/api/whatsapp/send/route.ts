@@ -25,6 +25,7 @@ import {
 } from '@/lib/whatsapp/baileys/baileys-manager'
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus'
 import { autoReplyDebouncer } from '@/lib/ai/auto-reply-debouncer'
+import { cancelPendingFollowUps } from '@/lib/automations/follow-up-engine'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getAdminClient(fallbackClient: any) {
@@ -175,6 +176,7 @@ export async function POST(request: Request) {
 
     // ⚡ Cancel any pending AI debounce for this conversation (human intervention took over)
     autoReplyDebouncer.cancel(conversationId);
+    void cancelPendingFollowUps(conversationId, 'agent_replied');
 
 
     // Check if account is configured with active WhatsApp connection (Baileys or UazAPI)

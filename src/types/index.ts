@@ -754,6 +754,10 @@ export interface QuickReply {
   shortcut?: string | null;
   /** Category or folder (e.g. "Vendas", "Atendimento", "Geral"). */
   category?: string | null;
+  /** Foreign key to quick_reply_categories if assigned. */
+  category_id?: string | null;
+  /** Total times this quick reply has been dispatched / used. */
+  usage_count?: number;
   /** Visual badge / highlight color (e.g. "#EAB308", "#A855F7", "#F97316"). */
   color?: string | null;
   /** Set when `kind === 'text'`. */

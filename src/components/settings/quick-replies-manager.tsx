@@ -88,19 +88,23 @@ function emptyDraft(): DraftState {
 }
 
 const CATEGORIES = [
-  "Geral",
-  "Saudação",
+  "Boas-vindas",
+  "Apresentação",
+  "Qualificação",
   "Vendas",
   "Preço",
-  "Pagamento",
   "Produtos",
+  "Serviços",
+  "Pagamento",
   "Objeções",
   "Follow-up",
   "Pós-venda",
   "Suporte",
-  "Qualificação",
-  "Apresentação",
   "Documentos",
+  "Agendamento",
+  "Reativação",
+  "Outros",
+  "Geral",
 ];
 
 export function QuickRepliesManager() {
@@ -515,6 +519,12 @@ export function QuickRepliesManager() {
                         {qr.scope === "personal" && (
                           <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium px-1.5 py-0.5 rounded bg-amber-500/10">
                             👤 Pessoal
+                          </span>
+                        )}
+
+                        {(qr.usage_count ?? 0) > 0 && (
+                          <span className="text-[10px] text-muted-foreground font-medium px-1.5 py-0.5 rounded bg-muted/80">
+                            🔥 {qr.usage_count} {qr.usage_count === 1 ? "uso" : "usos"}
                           </span>
                         )}
 
