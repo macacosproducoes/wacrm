@@ -22,26 +22,36 @@ export function WhatsAppRealtimeBridge() {
     enabled: true,
   });
 
-  // 2. Continuous lightweight background sync (runs in ~100ms)
+  // 2. Continuous lightweight background sync with smart throttling
   useEffect(() => {
     let timer: NodeJS.Timeout | null = null;
     let isMounted = true;
 
     async function tick() {
       if (!isMounted || isSyncingRef.current) return;
+      // Pause completely if tab is in background / hidden to save connections
+      if (typeof document !== 'undefined' && document.hidden) {
+        timer = setTimeout(tick, 10000);
+        return;
+      }
+
       isSyncingRef.current = true;
-      let nextDelay = 3000;
+      let nextDelay = 25000; // 25s base heartbeat to prevent exhausting Supabase connection pool
       try {
+        const controller = new AbortController();
+        const abortTimeout = setTimeout(() => controller.abort(), 8000);
         const res = await fetch('/api/whatsapp/uazapi/sync-realtime', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
         });
+        clearTimeout(abortTimeout);
+
         if (!res.ok) {
-          // If disconnected or error, back off to 8s to prevent hammering
-          nextDelay = 8000;
+          nextDelay = 35000;
         }
       } catch {
-        nextDelay = 10000;
+        nextDelay = 45000;
       } finally {
         isSyncingRef.current = false;
         if (isMounted) {
@@ -50,13 +60,14 @@ export function WhatsAppRealtimeBridge() {
       }
     }
 
-    // Initial trigger
-    timer = setTimeout(tick, 1000);
+    // Initial trigger after 3s to let the page settle
+    timer = setTimeout(tick, 3000);
 
-    // Resync immediately when tab becomes visible or gains focus
+    // Resync when tab becomes visible after being hidden
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        void fetch('/api/whatsapp/uazapi/sync-realtime', { method: 'POST' }).catch(() => {});
+      if (document.visibilityState === 'visible' && !isSyncingRef.current) {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(tick, 1000);
       }
     };
 

@@ -134,6 +134,23 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+const CACHE_PROFILE_KEY = "wacrm_cached_profile";
+const CACHE_ACCOUNT_KEY = "wacrm_cached_account";
+
+function getCachedAuth(): { profile: Profile | null; account: AccountSummary | null } {
+  if (typeof window === "undefined") return { profile: null, account: null };
+  try {
+    const p = sessionStorage.getItem(CACHE_PROFILE_KEY);
+    const a = sessionStorage.getItem(CACHE_ACCOUNT_KEY);
+    return {
+      profile: p ? JSON.parse(p) : null,
+      account: a ? JSON.parse(a) : null,
+    };
+  } catch {
+    return { profile: null, account: null };
+  }
+}
+
 /** Attempts at the profile lookup, including the first. */
 const PROFILE_FETCH_ATTEMPTS = 2;
 const PROFILE_FETCH_RETRY_MS = 1500;
@@ -160,18 +177,14 @@ interface ProfileRow {
  * component, avoiding internal lock contention in the Supabase client.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const [cached] = useState(() => getCachedAuth());
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [account, setAccount] = useState<AccountSummary | null>(null);
-  const [loading, setLoading] = useState(true);
-  // Why the account/role couldn't be established, when it couldn't.
-  // Null on the happy path.
+  const [profile, setProfile] = useState<Profile | null>(cached.profile);
+  const [account, setAccount] = useState<AccountSummary | null>(cached.account);
+  // If we have cached profile, skip the loading screen completely for 0ms dashboard entry
+  const [loading, setLoading] = useState(!cached.profile);
   const [statusDetail, setStatusDetail] = useState<string | null>(null);
-  // Tracked separately from `loading`. The session settles fast (one
-  // local cookie read); the profile fetch crosses the network and
-  // settles later. Callers that gate on `profile.*` need to know which
-  // window they're in — see the type doc above.
-  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(!cached.profile);
 
   // Tracks the user ID we've successfully initiated/completed fetching
   // a profile for. This prevents redundant re-fetches and toggling
@@ -183,13 +196,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // pulls the matching profile row along with its account summary.
   const fetchProfile = useCallback(async (userId: string) => {
     const supabase = createClient();
-    setProfileLoading(true);
+    if (!profile) setProfileLoading(true);
     setStatusDetail(null);
     lastFetchedUserIdRef.current = userId;
     try {
       let data: ProfileRow | null = null;
       for (let attempt = 1; ; attempt++) {
-        const result = await supabase
+        const timeoutPromise = new Promise<{ data: null; error: { message: string; details?: string; hint?: string; code?: string } }>((resolve) =>
+          setTimeout(() => resolve({ data: null, error: { message: "Supabase profile query timed out" } }), 3500)
+        );
+
+        const queryPromise = supabase
           .from("profiles")
           .select(
             "id, full_name, email, avatar_url, role, beta_features, account_id, account_role",
@@ -197,28 +214,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           .eq("user_id", userId)
           .maybeSingle();
 
-        if (!result.error) {
+        const result = await Promise.race([queryPromise, timeoutPromise]);
+
+        if (!result.error && result.data) {
           data = result.data;
           break;
         }
 
         const error = result.error;
-        console.error("[AuthProvider] fetchProfile error:", {
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-          code: error.code,
-        });
-        // One hiccup here used to lock the session read-only for good:
-        // the profile stayed null, so every `useCan` gate answered
-        // false and no page offered a way to recover (issue #471).
-        // Retry, then hand the reason to the UI.
+        console.warn("[AuthProvider] fetchProfile issue:", error?.message);
         if (attempt < PROFILE_FETCH_ATTEMPTS) {
           await sleep(PROFILE_FETCH_RETRY_MS);
           continue;
         }
         lastFetchedUserIdRef.current = null;
-        setStatusDetail(error.message);
+        if (error) setStatusDetail(error.message);
         return;
       }
 
@@ -273,21 +283,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           ? data.account_role
           : null;
 
-        setProfile({
+        const newProfile: Profile = {
           id: data.id,
           full_name: data.full_name,
           email: data.email,
           avatar_url: data.avatar_url,
           role: data.role,
-          // `beta_features` is `NOT NULL DEFAULT ARRAY[]` in the DB, but
-          // narrow defensively in case the column hasn't been migrated yet
-          // (older deployments running 011 lazily) — `null` reads as no
-          // opt-ins, which is the safe default for any future beta gate.
           beta_features: data.beta_features ?? [],
           account_id: data.account_id ?? null,
           account_role: accountRole,
-        });
+        };
+        setProfile(newProfile);
         setAccount(accountRow);
+        try {
+          sessionStorage.setItem(CACHE_PROFILE_KEY, JSON.stringify(newProfile));
+          if (accountRow) {
+            sessionStorage.setItem(CACHE_ACCOUNT_KEY, JSON.stringify(accountRow));
+          }
+        } catch {}
         if (!data.account_id || !accountRole) {
           // The row exists but carries no tenancy. Migration 017 made
           // both columns NOT NULL for new signups, so this is a user
@@ -387,6 +400,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [fetchProfile]);
 
   const signOut = useCallback(async () => {
+    try {
+      sessionStorage.removeItem(CACHE_PROFILE_KEY);
+      sessionStorage.removeItem(CACHE_ACCOUNT_KEY);
+      sessionStorage.removeItem("wacrm_dashboard_summary");
+    } catch {}
     const supabase = createClient();
     await supabase.auth.signOut();
     setUser(null);

@@ -18,36 +18,48 @@ export async function GET(request: Request) {
 
     const db = supabaseAdmin();
 
-    const [metrics, series, pipeline, responseTime, activity] = await Promise.all([
+    const queryTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000));
+
+    const queriesPromise = Promise.all([
       loadMetrics(db).catch((err) => {
-        console.error('[dashboard/summary] loadMetrics error:', err);
+        console.warn('[dashboard/summary] loadMetrics error:', err);
         return null;
       }),
       loadConversationsSeries(db, rangeDays).catch((err) => {
-        console.error('[dashboard/summary] loadConversationsSeries error:', err);
+        console.warn('[dashboard/summary] loadConversationsSeries error:', err);
         return [];
       }),
       loadPipelineDonut(db).catch((err) => {
-        console.error('[dashboard/summary] loadPipelineDonut error:', err);
+        console.warn('[dashboard/summary] loadPipelineDonut error:', err);
         return null;
       }),
       loadResponseTime(db).catch((err) => {
-        console.error('[dashboard/summary] loadResponseTime error:', err);
+        console.warn('[dashboard/summary] loadResponseTime error:', err);
         return null;
       }),
       loadActivity(db, 50).catch((err) => {
-        console.error('[dashboard/summary] loadActivity error:', err);
+        console.warn('[dashboard/summary] loadActivity error:', err);
         return [];
       }),
     ]);
 
-    return NextResponse.json({
-      metrics,
-      series,
-      pipeline,
-      responseTime,
-      activity,
-    });
+    const results = await Promise.race([queriesPromise, queryTimeout]);
+    const [metrics, series, pipeline, responseTime, activity] = results ?? [null, [], null, null, []];
+
+    return NextResponse.json(
+      {
+        metrics,
+        series,
+        pipeline,
+        responseTime,
+        activity,
+      },
+      {
+        headers: {
+          'Cache-Control': 'private, max-age=15, stale-while-revalidate=45',
+        },
+      }
+    );
   } catch (error) {
     return toErrorResponse(error);
   }

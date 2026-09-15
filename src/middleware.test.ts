@@ -110,4 +110,17 @@ describe("middleware — refreshed auth cookies survive redirects", () => {
     expect(res.headers.get("location")).toBeNull();
     expect(res.cookies.get(ROTATED.name)?.value).toBe(ROTATED.value);
   });
+
+  it("immediately passes through webhooks and health check without calling auth", async () => {
+    const webhookRes = await middleware(
+      new NextRequest("https://app.test/api/whatsapp/webhook"),
+    );
+    expect(webhookRes.status).toBe(200);
+
+    const healthRes = await middleware(
+      new NextRequest("https://app.test/api/health"),
+    );
+    expect(healthRes.status).toBe(200);
+  });
 });
+

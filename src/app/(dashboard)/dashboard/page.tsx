@@ -65,6 +65,25 @@ export default function DashboardPage() {
   const [activityLoading, setActivityLoading] = useState(true)
 
   const loadAll = useCallback(() => {
+    // 1. Instant hydration from session cache if available
+    try {
+      const cached = sessionStorage.getItem('wacrm_dashboard_summary')
+      if (cached) {
+        const data = JSON.parse(cached)
+        if (data.metrics) setMetrics(data.metrics)
+        if (data.series) setSeries((prev) => ({ ...prev, 30: data.series }))
+        if (data.pipeline) setPipeline(data.pipeline)
+        if (data.responseTime) setResponseTime(data.responseTime)
+        if (data.activity) setActivity(data.activity)
+        setMetricsLoading(false)
+        setSeriesLoading(false)
+        setPipelineLoading(false)
+        setResponseTimeLoading(false)
+        setActivityLoading(false)
+      }
+    } catch {}
+
+    // 2. Fetch fresh data in the background
     fetch('/api/dashboard/summary?range=30')
       .then((r) => r.json())
       .then((data) => {
@@ -73,16 +92,12 @@ export default function DashboardPage() {
         if (data.pipeline) setPipeline(data.pipeline)
         if (data.responseTime) setResponseTime(data.responseTime)
         if (data.activity) setActivity(data.activity)
+        try {
+          sessionStorage.setItem('wacrm_dashboard_summary', JSON.stringify(data))
+        } catch {}
       })
       .catch((err) => {
-        console.error('[dashboard] summary fetch failed:', err)
-        // Fallback to client-side queries if endpoint fails
-        const db = createClient()
-        void loadMetrics(db).then(setMetrics).catch(() => {})
-        void loadConversationsSeries(db, 30).then((s) => setSeries((prev) => ({ ...prev, 30: s }))).catch(() => {})
-        void loadPipelineDonut(db).then(setPipeline).catch(() => {})
-        void loadResponseTime(db).then(setResponseTime).catch(() => {})
-        void loadActivity(db, 50).then(setActivity).catch(() => {})
+        console.warn('[dashboard] summary fetch issue:', err)
       })
       .finally(() => {
         setMetricsLoading(false)
