@@ -147,9 +147,17 @@ export function QuickReplyTopBar({
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Sync quickReplies prop
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     setLocalItems(quickReplies);
   }, [quickReplies]);
+
+  useEffect(() => {
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollLeft = 0;
+    }
+  }, [filter, selectedCategory]);
 
   const loadItems = async () => {
     try {
@@ -472,8 +480,8 @@ export function QuickReplyTopBar({
         </div>
 
         {/* Scrollable Quick Reply Badges */}
-        <div className="flex items-center gap-1.5 px-3 pb-2 overflow-x-auto no-scrollbar scroll-smooth">
-          {loading ? (
+        <div ref={scrollContainerRef} className="flex items-center gap-1.5 px-3 pb-2 overflow-x-auto no-scrollbar scroll-smooth">
+          {loading && quickReplies.length === 0 ? (
             <div className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
               <div className="h-3 w-3 animate-spin rounded-full border border-primary border-t-transparent" />
               <span>Carregando respostas...</span>

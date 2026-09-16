@@ -104,6 +104,14 @@ export function QuickReplyPicker({
     void fetchQuickReplies();
   }, [open, fetchQuickReplies]);
 
+  const listContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (listContainerRef.current) {
+      listContainerRef.current.scrollTop = 0;
+    }
+  }, [open, currentTab, selectedCategory, search]);
+
   // Extract unique categories
   const categories = useMemo(() => {
     const set = new Set<string>();
@@ -576,8 +584,8 @@ export function QuickReplyPicker({
         )}
 
         {/* Content list */}
-        <div className="flex-1 min-h-[300px] max-h-[58vh] overflow-y-auto p-4 space-y-2.5">
-          {loading ? (
+        <div ref={listContainerRef} className="flex-1 min-h-[220px] max-h-[58vh] overflow-y-auto p-4 space-y-2.5">
+          {loading && items.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
               <Loader2 className="h-6 w-6 animate-spin text-emerald-500" />
               <span className="text-xs">Carregando respostas rápidas...</span>

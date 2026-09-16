@@ -91,6 +91,14 @@ export function AudioLibraryModal({
     });
   }, [audioReplies, selectedCategory, search]);
 
+  const listContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (listContainerRef.current) {
+      listContainerRef.current.scrollTop = 0;
+    }
+  }, [open, selectedCategory, search]);
+
   const resetForm = () => {
     setNewTitle("");
     setNewShortcut("");
@@ -435,7 +443,7 @@ export function AudioLibraryModal({
         </div>
 
         {/* Audio List */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+        <div ref={listContainerRef} className="flex-1 overflow-y-auto p-4 space-y-2.5">
           {filteredAudios.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-muted-foreground text-center">
               <div className="h-12 w-12 rounded-full bg-muted/60 flex items-center justify-center mb-2">
