@@ -297,6 +297,14 @@ export async function POST(request: Request) {
           .eq('id', id);
       }
 
+      if (statusRes.status === 'connected') {
+        // Auto-configure webhook on UazAPI instance so incoming messages and real-time events are dispatched to this server
+        const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || 'wacrm-theta-lemon.vercel.app';
+        const proto = request.headers.get('x-forwarded-proto') || 'https';
+        const targetWebhook = `${proto}://${host}/api/whatsapp/uazapi/webhook`;
+        void setUazApiWebhook(baseUrl, token, targetWebhook).catch(() => {});
+      }
+
       return NextResponse.json({
         success: true,
         status: statusRes.status,

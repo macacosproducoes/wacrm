@@ -13,6 +13,8 @@ function dbReturning(row: Record<string, unknown> | null): SupabaseClient {
     from: () => chain,
     select: () => chain,
     eq: () => chain,
+    limit: () => chain,
+    upsert: () => Promise.resolve({ data: null, error: null }),
     maybeSingle: () => Promise.resolve({ data: row, error: null }),
   }
   return chain as unknown as SupabaseClient

@@ -434,22 +434,7 @@ export function MessageThread({
     (async () => {
       // Only show full loading spinner if we don't have messages for this conversation yet
       if (!messages || messages.length === 0 || messages[0]?.conversation_id !== conversationId) {
-        if (conversation?.last_message_text) {
-          // Provide instant fallback so the user sees the preview message immediately while the full thread loads
-          const isAgent = conversation.last_message_sender === 'agent' || conversation.last_message_sender === 'bot';
-          const optimisticInitial: Message = {
-            id: `preview-${conversation.id}`,
-            conversation_id: conversation.id,
-            sender_type: isAgent ? 'agent' : 'customer',
-            content_type: 'text',
-            content_text: conversation.last_message_text,
-            status: 'delivered',
-            created_at: conversation.last_message_at || new Date().toISOString(),
-          };
-          onMessagesLoadedRef.current([optimisticInitial]);
-        } else {
-          setLoading(true);
-        }
+        setLoading(true);
       }
 
       const { data, error } = await supabase

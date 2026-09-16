@@ -15,6 +15,7 @@ import { sendWhatsAppPresence } from '@/lib/whatsapp/unified-presence'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus'
 import { autoReplyDebouncer, AutoReplyDebounceArgs } from './auto-reply-debouncer'
+import { updateConversationWithMessage } from '@/lib/whatsapp/conversation-helpers'
 
 export interface DispatchArgs extends AutoReplyDebounceArgs {
   /** If true, bypasses the debounce window and executes immediately. */
@@ -336,11 +337,12 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
 
         const { data: insertedMsg } = await db.from('messages').insert(botMsgRow).select('id, created_at').maybeSingle()
 
-        await db.rpc('update_conversation_with_message', {
-          p_conversation_id: conversationId,
-          p_message_text: text,
-          p_message_timestamp: botMsgRow.created_at,
-          p_is_inbound: false,
+        await updateConversationWithMessage(db, {
+          conversationId,
+          messageText: text,
+          messageTimestamp: botMsgRow.created_at,
+          isInbound: false,
+          senderType: 'bot',
         })
 
         whatsappBus.emitInboxEvent({
@@ -425,11 +427,12 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
 
           const { data: insertedMsg } = await db.from('messages').insert(botMsgRow).select('id, created_at').maybeSingle()
 
-          await db.rpc('update_conversation_with_message', {
-            p_conversation_id: conversationId,
-            p_message_text: text,
-            p_message_timestamp: botMsgRow.created_at,
-            p_is_inbound: false,
+          await updateConversationWithMessage(db, {
+            conversationId,
+            messageText: text,
+            messageTimestamp: botMsgRow.created_at,
+            isInbound: false,
+            senderType: 'bot',
           })
 
           whatsappBus.emitInboxEvent({

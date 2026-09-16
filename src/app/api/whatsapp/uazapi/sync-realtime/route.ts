@@ -6,6 +6,11 @@ import { normalizeBaseUrl, formatUazApiNumber } from '@/lib/whatsapp/uazapi-clie
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
 import { startUazApiListener } from '@/lib/whatsapp/uazapi-manager';
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
+import {
+  findOrCreateContact,
+  findOrCreateConversation,
+  updateConversationWithMessage,
+} from '@/lib/whatsapp/conversation-helpers';
 
 export const dynamic = 'force-dynamic';
 
@@ -195,26 +200,26 @@ async function handleSync(request: Request) {
           return;
         }
 
-        // Resolve or create contact & conversation if not found
+        // Resolve or create contact & conversation via resilient helper
         let convId = matchedConv?.id;
         let contactId = matchedConv?.contact_id;
 
         if (!convId || !contactId) {
           const contactName = String(chat.wa_name || chat.name || `+${formattedPhone}`);
-          const { data: resolvedContactId } = await admin.rpc('find_or_create_contact', {
-            p_account_id: accountId,
-            p_user_id: user.id,
-            p_phone: formattedPhone,
-            p_name: contactName,
+          const resolvedContactId = await findOrCreateContact(admin, {
+            accountId,
+            userId: user.id,
+            phone: formattedPhone,
+            name: contactName,
           });
           if (!resolvedContactId) return;
           contactId = resolvedContactId;
 
-          const { data: resolvedConvId } = await admin.rpc('find_or_create_conversation', {
-            p_account_id: accountId,
-            p_user_id: user.id,
-            p_contact_id: contactId,
-            p_connection_id: conn.id,
+          const resolvedConvId = await findOrCreateConversation(admin, {
+            accountId,
+            userId: user.id,
+            contactId,
+            connectionId: conn.id,
           });
           if (!resolvedConvId) return;
           convId = resolvedConvId;
@@ -235,7 +240,19 @@ async function handleSync(request: Request) {
 
         if (msgRes.ok) {
           const msgData = await msgRes.json();
-          const rawMsgs = (msgData.messages || []).reverse();
+          const msgList: Array<Record<string, unknown>> = Array.isArray(msgData)
+            ? msgData
+            : Array.isArray(msgData.messages)
+              ? msgData.messages
+              : [];
+
+          // Strictly sort messages chronologically (oldest to newest)
+          const rawMsgs = msgList.sort((a, b) => {
+            const tsA = Number(a.messageTimestamp || a.timestamp || 0);
+            const tsB = Number(b.messageTimestamp || b.timestamp || 0);
+            return tsA - tsB;
+          });
+
           if (rawMsgs.length > 0) {
             const rawIds = rawMsgs.map((m: Record<string, unknown>) => String(m.messageid || m.id || '')).filter(Boolean);
             const cleanIds = rawIds.map((id: string) => (id.includes(':') ? id.split(':').pop()! : id));
@@ -248,6 +265,8 @@ async function handleSync(request: Request) {
 
             const existingSet = new Set((existingRows || []).map((r) => r.message_id));
             const toInsert = [];
+
+            const ownerPhoneDigits = conn.phone_number ? String(conn.phone_number).replace(/\D/g, '') : '';
 
             for (const m of rawMsgs) {
               // STRICT REACTION VETO
@@ -265,11 +284,12 @@ async function handleSync(request: Request) {
               const cleanId = rawId.includes(':') ? rawId.split(':').pop()! : rawId;
               if (!rawId || existingSet.has(rawId) || existingSet.has(cleanId)) continue;
 
+              const mContent = m.content as Record<string, any> | undefined;
               const msgTypeStr = String(m.messageType || m.type || '');
-              const isImg = /image/i.test(msgTypeStr) || Boolean(m.content?.imageMessage) || Boolean(m.image);
-              const isAud = /audio/i.test(msgTypeStr) || Boolean(m.content?.audioMessage) || Boolean(m.audio);
-              const isVid = /video/i.test(msgTypeStr) || Boolean(m.content?.videoMessage) || Boolean(m.video);
-              const isDoc = /document/i.test(msgTypeStr) || Boolean(m.content?.documentMessage) || Boolean(m.document);
+              const isImg = /image/i.test(msgTypeStr) || Boolean(mContent?.imageMessage) || Boolean((m as any).image);
+              const isAud = /audio/i.test(msgTypeStr) || Boolean(mContent?.audioMessage) || Boolean((m as any).audio);
+              const isVid = /video/i.test(msgTypeStr) || Boolean(mContent?.videoMessage) || Boolean((m as any).video);
+              const isDoc = /document/i.test(msgTypeStr) || Boolean(mContent?.documentMessage) || Boolean((m as any).document);
 
               let cType: 'text' | 'image' | 'audio' | 'video' | 'document' = 'text';
               let defaultText = '[Mensagem]';
@@ -287,17 +307,25 @@ async function handleSync(request: Request) {
                 defaultText = '[Documento]';
               }
 
-              const text = m.text || m.content?.text || m.content?.caption || defaultText;
-              const isFromMe = Boolean(m.fromMe);
-              const msgTs = m.messageTimestamp
-                ? new Date(m.messageTimestamp).toISOString()
+              const text = m.text || mContent?.text || mContent?.caption || defaultText;
+              const isFromMe = Boolean(
+                m.fromMe === true ||
+                (m.key as Record<string, unknown> | undefined)?.fromMe === true ||
+                String(m.fromMe) === 'true' ||
+                String((m.key as Record<string, unknown> | undefined)?.fromMe) === 'true' ||
+                (ownerPhoneDigits && String(m.sender || '').replace(/\D/g, '').startsWith(ownerPhoneDigits))
+              );
+
+              const rawNumTs = Number(m.messageTimestamp || m.timestamp || 0);
+              const msgTs = rawNumTs > 0
+                ? new Date(rawNumTs > 1e11 ? rawNumTs : rawNumTs * 1000).toISOString()
                 : new Date().toISOString();
 
               const resolvedMediaUrl =
-                m.fileURL ||
-                m.content?.fileURL ||
-                (m.content?.URL && !String(m.content.URL).includes('mmg.whatsapp.net') ? m.content.URL : null) ||
-                m.content?.URL ||
+                (m as any).fileURL ||
+                mContent?.fileURL ||
+                (mContent?.URL && !String(mContent.URL).includes('mmg.whatsapp.net') ? mContent.URL : null) ||
+                mContent?.URL ||
                 null;
 
               toInsert.push({
@@ -313,29 +341,32 @@ async function handleSync(request: Request) {
               });
             }
 
+            const last = rawMsgs[rawMsgs.length - 1];
+            const lastTextMsg = String(last.text || (last.content as Record<string, any> | undefined)?.text || '[Mensagem]').trim();
+            const rawLastTs = Number(last.messageTimestamp || last.timestamp || 0);
+            const lastTs = rawLastTs > 0
+              ? new Date(rawLastTs > 1e11 ? rawLastTs : rawLastTs * 1000).toISOString()
+              : new Date().toISOString();
+
+            const lastIsFromMe = Boolean(
+              last.fromMe === true ||
+              (last.key as Record<string, unknown> | undefined)?.fromMe === true ||
+              String(last.fromMe) === 'true' ||
+              String((last.key as Record<string, unknown> | undefined)?.fromMe) === 'true' ||
+              (ownerPhoneDigits && String(last.sender || '').replace(/\D/g, '').startsWith(ownerPhoneDigits))
+            );
+
             if (toInsert.length > 0) {
               const { data: inserted } = await admin.from('messages').insert(toInsert).select('*');
               totalSyncedMessages += toInsert.length;
 
-              const last = rawMsgs[rawMsgs.length - 1];
-              const lastTextMsg = (last.text || last.content?.text || '[Mensagem]').trim();
-              const lastTs = last.messageTimestamp
-                ? new Date(last.messageTimestamp).toISOString()
-                : new Date().toISOString();
-
-              await admin.rpc('update_conversation_with_message', {
-                p_conversation_id: convId,
-                p_message_text: lastTextMsg,
-                p_message_timestamp: lastTs,
-                p_is_inbound: !last.fromMe,
+              await updateConversationWithMessage(admin, {
+                conversationId: convId,
+                messageText: lastTextMsg,
+                messageTimestamp: lastTs,
+                isInbound: !lastIsFromMe,
+                senderType: lastIsFromMe ? 'agent' : 'customer',
               });
-
-              if (!last.fromMe) {
-                void admin
-                  .from('conversations')
-                  .update({ ai_reply_count: 0 })
-                  .eq('id', convId);
-              }
 
               // Broadcast new messages through internal WhatsApp bus
               if (inserted && inserted.length > 0) {
@@ -349,14 +380,14 @@ async function handleSync(request: Request) {
                       id: convId,
                       last_message_text: lastTextMsg,
                       last_message_at: lastTs,
-                      unread_count: last.fromMe ? 0 : 1,
+                      unread_count: lastIsFromMe ? 0 : 1,
                     },
                   });
                 }
               }
 
               // Trigger AI auto-reply for newly synced inbound customer messages
-              if (!last.fromMe && toInsert.some((m) => m.sender_type === 'customer')) {
+              if (!lastIsFromMe && toInsert.some((m) => m.sender_type === 'customer')) {
                 try {
                   await dispatchInboundToAiReply({
                     accountId,
@@ -370,6 +401,15 @@ async function handleSync(request: Request) {
                   console.error('[sync-realtime] AI auto-reply dispatch error:', err);
                 }
               }
+            } else if (matchedConv?.last_message_at !== lastTs) {
+              // Ensure conversation header matches latest WhatsApp state even if messages were already inserted
+              await updateConversationWithMessage(admin, {
+                conversationId: convId,
+                messageText: lastTextMsg,
+                messageTimestamp: lastTs,
+                isInbound: !lastIsFromMe,
+                senderType: lastIsFromMe ? 'agent' : 'customer',
+              });
             }
           }
         }

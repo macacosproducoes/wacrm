@@ -41,9 +41,53 @@ export async function loadAiConfig(
     .maybeSingle()
 
   if (error) throw error
-  if (!data) return null
+  let row: AiConfigRow | null = data as AiConfigRow | null
 
-  const row = data as AiConfigRow
+  if (!row) {
+    // Fallback: look for an active AI configuration to use as template for new accounts/users
+    try {
+      let fallbackQuery: any = db
+        .from('ai_configs')
+        .select(CONFIG_COLUMNS)
+        .eq('is_active', true)
+
+      if (typeof fallbackQuery.limit === 'function') {
+        fallbackQuery = fallbackQuery.limit(1)
+      }
+
+      const { data: fallback } = await fallbackQuery.maybeSingle()
+
+      if (fallback) {
+        row = fallback as AiConfigRow
+        // Asynchronously seed this account's ai_configs so it has its own editable record
+        try {
+          if (typeof (db.from('ai_configs') as any).upsert === 'function') {
+            await (db.from('ai_configs') as any).upsert(
+              {
+                account_id: accountId,
+                provider: fallback.provider,
+                model: fallback.model,
+                api_key: fallback.api_key,
+                system_prompt: fallback.system_prompt,
+                is_active: fallback.is_active,
+                auto_reply_enabled: fallback.auto_reply_enabled,
+                auto_reply_max_per_conversation: fallback.auto_reply_max_per_conversation,
+                handoff_agent_id: fallback.handoff_agent_id,
+                embeddings_api_key: fallback.embeddings_api_key,
+              },
+              { onConflict: 'account_id' },
+            )
+          }
+        } catch (seedErr) {
+          console.warn(`[ai config] could not auto-seed ai_configs for ${accountId}:`, seedErr)
+        }
+      }
+    } catch {
+      // Swallowed: if fallback query fails, proceed with null row
+    }
+  }
+
+  if (!row) return null
   // The Playground passes requireActive:false so an admin can test the
   // agent before flipping the master switch on.
   if (requireActive && !row.is_active) return null

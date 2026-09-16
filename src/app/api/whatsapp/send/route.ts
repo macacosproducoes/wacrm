@@ -23,6 +23,7 @@ import {
   sendBaileysMedia,
   isBaileysConnected,
 } from '@/lib/whatsapp/baileys/baileys-manager'
+import { updateConversationWithMessage } from '@/lib/whatsapp/conversation-helpers'
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus'
 import { autoReplyDebouncer } from '@/lib/ai/auto-reply-debouncer'
 import { cancelPendingFollowUps } from '@/lib/automations/follow-up-engine'
@@ -265,11 +266,12 @@ export async function POST(request: Request) {
             .single()
 
           // Update conversation summary
-          await admin.rpc('update_conversation_with_message', {
-            p_conversation_id: conversationId,
-            p_message_text: content_text || '[Mensagem]',
-            p_message_timestamp: new Date().toISOString(),
-            p_is_inbound: false,
+          await updateConversationWithMessage(admin, {
+            conversationId,
+            messageText: content_text || '[Mensagem]',
+            messageTimestamp: new Date().toISOString(),
+            isInbound: false,
+            senderType: 'agent',
           })
 
           whatsappBus.emitInboxEvent({
@@ -386,11 +388,12 @@ export async function POST(request: Request) {
             .single()
 
           // Update conversation summary
-          await admin.rpc('update_conversation_with_message', {
-            p_conversation_id: conversationId,
-            p_message_text: content_text || '[Mensagem]',
-            p_message_timestamp: new Date().toISOString(),
-            p_is_inbound: false,
+          await updateConversationWithMessage(admin, {
+            conversationId,
+            messageText: content_text || '[Mensagem]',
+            messageTimestamp: new Date().toISOString(),
+            isInbound: false,
+            senderType: 'agent',
           })
 
           whatsappBus.emitInboxEvent({

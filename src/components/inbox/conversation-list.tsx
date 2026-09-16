@@ -78,6 +78,7 @@ export function ConversationList({
   const [syncing, setSyncing] = useState(false);
   const [leadCaptureEnabled, setLeadCaptureEnabled] = useState(true);
   const [togglingLeadCapture, setTogglingLeadCapture] = useState(false);
+  const hasAutoSyncedRef = useRef(false);
 
   useEffect(() => {
     fetch('/api/whatsapp/uazapi/capture-leads')
@@ -194,8 +195,30 @@ export function ConversationList({
         }
       }
 
-      onConversationsLoadedRef.current(normalizeConversations(list ?? []));
+      const normalizedList = normalizeConversations(list ?? []);
+      onConversationsLoadedRef.current(normalizedList);
       setLoading(false);
+
+      // If user has 0 conversations, auto-trigger a sync in the background so new users (like CEGCELL)
+      // don't see an empty screen and immediately get their WhatsApp chats populated!
+      if (normalizedList.length === 0 && !hasAutoSyncedRef.current) {
+        hasAutoSyncedRef.current = true;
+        fetch('/api/whatsapp/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: 100 }),
+        })
+          .then((r) => r.json())
+          .then(async (data) => {
+            if (data?.success && !cancelled) {
+              const res = await fetch('/api/inbox/conversations').then((r) => r.json());
+              if (res.conversations && res.conversations.length > 0 && !cancelled) {
+                onConversationsLoadedRef.current(res.conversations);
+              }
+            }
+          })
+          .catch(() => {});
+      }
     })();
 
     return () => {

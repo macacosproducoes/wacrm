@@ -7,6 +7,11 @@ import { processUazApiEvent } from '@/lib/whatsapp/uazapi-event-processor';
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
 import { sendWhatsAppPresence } from '@/lib/whatsapp/unified-presence';
+import {
+  findOrCreateContact,
+  findOrCreateConversation,
+  updateConversationWithMessage,
+} from '@/lib/whatsapp/conversation-helpers';
 
 function supabaseAdmin() {
   return createAdminClient(
@@ -178,26 +183,26 @@ export async function startUazApiListener(accountId: string): Promise<boolean> {
             return;
           }
 
-          // Resolve contact & conversation
+          // Resolve contact & conversation via resilient helper
           let convId = matchedConv?.id;
           let contactId = matchedConv?.contact_id;
 
           if (!convId || !contactId) {
             const contactName = String(chat.wa_name || chat.name || `+${formattedPhone}`);
-            const { data: resContactId } = await admin.rpc('find_or_create_contact', {
-              p_account_id: accountId,
-              p_user_id: ownerUserId,
-              p_phone: formattedPhone,
-              p_name: contactName,
+            const resContactId = await findOrCreateContact(admin, {
+              accountId,
+              userId: ownerUserId,
+              phone: formattedPhone,
+              name: contactName,
             });
             if (!resContactId) return;
             contactId = resContactId;
 
-            const { data: resConvId } = await admin.rpc('find_or_create_conversation', {
-              p_account_id: accountId,
-              p_user_id: ownerUserId,
-              p_contact_id: contactId,
-              p_connection_id: conn.id,
+            const resConvId = await findOrCreateConversation(admin, {
+              accountId,
+              userId: ownerUserId,
+              contactId,
+              connectionId: conn.id,
             });
             if (!resConvId) return;
             convId = resConvId;
@@ -296,11 +301,12 @@ export async function startUazApiListener(accountId: string): Promise<boolean> {
             const lastText = String(last.text || contentObj.text || '[Mensagem]').trim();
             const lastTs = last.messageTimestamp ? new Date(Number(last.messageTimestamp)).toISOString() : new Date().toISOString();
 
-            await admin.rpc('update_conversation_with_message', {
-              p_conversation_id: convId,
-              p_message_text: lastText,
-              p_message_timestamp: lastTs,
-              p_is_inbound: !last.fromMe,
+            await updateConversationWithMessage(admin, {
+              conversationId: convId,
+              messageText: lastText,
+              messageTimestamp: lastTs,
+              isInbound: !last.fromMe,
+              senderType: last.fromMe ? 'agent' : 'customer',
             });
 
             if (!last.fromMe) {

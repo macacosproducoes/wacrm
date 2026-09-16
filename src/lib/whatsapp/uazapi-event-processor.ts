@@ -8,6 +8,11 @@ import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
 import { sendWhatsAppPresence } from '@/lib/whatsapp/unified-presence';
 import { cancelPendingFollowUps } from '@/lib/automations/follow-up-engine';
 import { checkAndDispatchWelcomeMessage } from '@/lib/automations/welcome-engine';
+import {
+  findOrCreateContact,
+  findOrCreateConversation,
+  updateConversationWithMessage,
+} from '@/lib/whatsapp/conversation-helpers';
 
 async function downloadUazApiMediaDirect(
   baseUrl: string,
@@ -594,16 +599,16 @@ export async function processUazApiEvent(
     return { success: false, reason: 'account_owner_not_found' };
   }
 
-  // Call find_or_create_contact RPC
-  const { data: contactId, error: contactErr } = await admin.rpc('find_or_create_contact', {
-    p_account_id: connection.account_id,
-    p_user_id: userId,
-    p_phone: formattedPhone,
-    p_name: pushName,
+  // Resolve contact via resilient helper
+  const contactId = await findOrCreateContact(admin, {
+    accountId: connection.account_id,
+    userId,
+    phone: formattedPhone,
+    name: pushName,
   });
 
-  if (contactErr || !contactId) {
-    console.error('[UazAPI Webhook] find_or_create_contact error:', contactErr);
+  if (!contactId) {
+    console.error('[UazAPI Webhook] findOrCreateContact error for phone:', formattedPhone);
     return { success: false, reason: 'failed_to_resolve_contact' };
   }
 
@@ -688,16 +693,16 @@ export async function processUazApiEvent(
     console.warn('[uazapi] Error triggering auto contact save:', err);
   }
 
-  // Call find_or_create_conversation RPC
-  const { data: conversationId, error: convErr } = await admin.rpc('find_or_create_conversation', {
-    p_account_id: connection.account_id,
-    p_user_id: userId,
-    p_contact_id: contactId,
-    p_connection_id: connection.id,
+  // Resolve conversation via resilient helper
+  const conversationId = await findOrCreateConversation(admin, {
+    accountId: connection.account_id,
+    userId,
+    contactId,
+    connectionId: connection.id,
   });
 
-  if (convErr || !conversationId) {
-    console.error('[UazAPI Webhook] find_or_create_conversation error:', convErr);
+  if (!conversationId) {
+    console.error('[UazAPI Webhook] findOrCreateConversation failed for contact:', contactId);
     return { success: false, reason: 'failed_to_resolve_conversation' };
   }
 
@@ -797,12 +802,13 @@ export async function processUazApiEvent(
     })();
   }
 
-  // Update conversation summary via update_conversation_with_message RPC
-  await admin.rpc('update_conversation_with_message', {
-    p_conversation_id: conversationId,
-    p_message_text: messageText,
-    p_message_timestamp: messageCreatedAt,
-    p_is_inbound: !fromMe,
+  // Update conversation summary via resilient helper
+  await updateConversationWithMessage(admin, {
+    conversationId,
+    messageText,
+    messageTimestamp: messageCreatedAt,
+    isInbound: !fromMe,
+    senderType,
   });
 
   // For inbound customer messages, cancel any pending follow-ups and refresh ai counter
