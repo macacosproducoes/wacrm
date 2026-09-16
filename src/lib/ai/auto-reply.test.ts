@@ -115,7 +115,7 @@ function aiConfig(overrides: Partial<AiConfig> = {}): AiConfig {
 beforeEach(() => {
   h.state.conv = {
     assigned_agent_id: null,
-    ai_autoreply_disabled: false,
+    ai_autoreply_disabled: null,
     ai_reply_count: 0,
   }
   h.state.autoResponders = []
@@ -179,14 +179,24 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
-  it('skips when a human agent is assigned', async () => {
+  it('skips when a human agent is assigned and IA Ativa is not explicitly enabled', async () => {
+    h.state.conv = {
+      assigned_agent_id: 'agent-9',
+      ai_autoreply_disabled: null,
+      ai_reply_count: 0,
+    }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('replies when human agent is assigned if IA Ativa is explicitly enabled (ai_autoreply_disabled = false)', async () => {
     h.state.conv = {
       assigned_agent_id: 'agent-9',
       ai_autoreply_disabled: false,
       ai_reply_count: 0,
     }
     await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.engineSendText).toHaveBeenCalled()
   })
 
   it('skips when auto-reply was disabled on this conversation', async () => {
@@ -249,5 +259,15 @@ describe('dispatchInboundToAiReply — handoff', () => {
       assigned_agent_id: 'agent-7',
     })
     expect(h.state.updatePayload).not.toHaveProperty('ai_autoreply_disabled')
+  })
+
+  it('forces AI reply when IA Ativa nesta conversa is explicitly ON (ai_autoreply_disabled = false) even if assigned to human', async () => {
+    h.state.conv = {
+      assigned_agent_id: 'human-1',
+      ai_autoreply_disabled: false,
+      ai_reply_count: 0,
+    }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).toHaveBeenCalled()
   })
 })
