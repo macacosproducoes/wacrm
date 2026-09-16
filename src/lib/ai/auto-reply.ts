@@ -143,16 +143,7 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
       return
     }
 
-    // ⚡ Real-time presence: show "digitando..." on customer's phone
-    // while the AI model is processing and generating the answer
-    if (contact?.phone) {
-      void sendWhatsAppPresence({
-        accountId,
-        phoneNumber: contact.phone,
-        presence: 'composing',
-        delayMs: 15000,
-      })
-    }
+
 
     // Account-wide throttle on the shared BYO key.
     const acctLimit = checkRateLimit(
