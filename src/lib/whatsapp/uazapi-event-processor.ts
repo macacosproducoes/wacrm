@@ -860,16 +860,18 @@ export async function processUazApiEvent(
 
   // Trigger AI auto-reply for inbound customer messages (strictly for real-time text turns within last 15m, never reactions/emojis or historical syncs)
   if (!fromMe && trimmed && !isEmojiOnly && !isIgnoredText && isFreshMessage) {
-    void dispatchInboundToAiReply({
-      accountId: connection.account_id,
-      conversationId,
-      contactId,
-      configOwnerUserId: userId,
-      messageId: externalMessageId,
-      immediate: true,
-    }).catch((err) => {
+    try {
+      await dispatchInboundToAiReply({
+        accountId: connection.account_id,
+        conversationId,
+        contactId,
+        configOwnerUserId: userId,
+        messageId: externalMessageId,
+        immediate: true,
+      });
+    } catch (err) {
       console.error('[UazAPI Event Processor] AI auto-reply dispatch error:', err);
-    });
+    }
   }
 
 

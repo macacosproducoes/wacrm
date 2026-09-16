@@ -70,7 +70,7 @@ export function isKieAi(apiKey: string, model: string): boolean {
  * Automatically retries with backoff if Kie.ai returns temporary network/maintenance errors (500, 524).
  * Strictly preserves the requested model (e.g. gemini-2.5-flash) and does NOT route to Gemini 3.x.
  */
-const DEFAULT_KIE_MODEL = 'gemini-3-8-flash-openai'
+const DEFAULT_KIE_MODEL = 'gemini-2.5-flash'
 
 /**
  * Generate completion via Kie.ai OpenAI-compatible endpoint.
