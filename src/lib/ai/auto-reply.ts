@@ -71,7 +71,10 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
 
     const targetContactId = contactId || (conv as unknown as { contact_id?: string }).contact_id || ''
 
-    const isUncapped = !config.autoReplyMaxPerConversation || config.autoReplyMaxPerConversation >= 20
+    const isUncapped =
+      isExplicitlyEnabledOnThread ||
+      !config.autoReplyMaxPerConversation ||
+      config.autoReplyMaxPerConversation >= 20
 
     if (
       !isUncapped &&

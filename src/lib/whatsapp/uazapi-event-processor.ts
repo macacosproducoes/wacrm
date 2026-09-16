@@ -839,7 +839,7 @@ export async function processUazApiEvent(
     trimmed === '[Mensagem recebida]' ||
     trimmed === '[Reação]' ||
     trimmed.startsWith('[Undecryptable]');
-  const isFreshMessage = messageAgeMs < 5 * 60 * 1000;
+  const isFreshMessage = messageAgeMs < 15 * 60 * 1000;
 
   if (!fromMe && !isIgnoredText && isFreshMessage) {
     try {
@@ -858,7 +858,7 @@ export async function processUazApiEvent(
     }
   }
 
-  // Trigger AI auto-reply for inbound customer messages (strictly for real-time text turns within last 5m, never reactions/emojis or historical syncs)
+  // Trigger AI auto-reply for inbound customer messages (strictly for real-time text turns within last 15m, never reactions/emojis or historical syncs)
   if (!fromMe && trimmed && !isEmojiOnly && !isIgnoredText && isFreshMessage) {
     void dispatchInboundToAiReply({
       accountId: connection.account_id,
@@ -866,6 +866,7 @@ export async function processUazApiEvent(
       contactId,
       configOwnerUserId: userId,
       messageId: externalMessageId,
+      immediate: true,
     }).catch((err) => {
       console.error('[UazAPI Event Processor] AI auto-reply dispatch error:', err);
     });

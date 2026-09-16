@@ -877,6 +877,7 @@ async function processMessage(
       conversationId: conversation.id,
       contactId: contactRecord.id,
       configOwnerUserId,
+      immediate: true,
     })
   }
 
