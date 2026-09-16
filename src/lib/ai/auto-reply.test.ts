@@ -26,13 +26,35 @@ vi.mock('./admin-client', () => ({
   supabaseAdmin: () => ({
     from: (table: string) => {
       if (table === 'automations') {
-        // .select().eq().eq().in().limit() → active auto-responders
         const chain = {
           select: () => chain,
           eq: () => chain,
           in: () => chain,
           limit: () =>
             Promise.resolve({ data: h.state.autoResponders, error: null }),
+        }
+        return chain
+      }
+      if (table === 'quick_replies') {
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          in: () => chain,
+          limit: () => Promise.resolve({ data: [], error: null }),
+          then: (cb: any) => Promise.resolve({ data: [], error: null }).then(cb),
+        }
+        return chain
+      }
+      if (table === 'messages') {
+        const chain = {
+          select: () => chain,
+          insert: () => ({ select: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: null }) }) }),
+          update: () => ({ eq: () => ({ eq: () => ({ is: () => Promise.resolve({ error: null }) }) }) }),
+          eq: () => chain,
+          is: () => chain,
+          order: () => chain,
+          limit: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: null }) }),
+          maybeSingle: () => Promise.resolve({ data: null, error: null }),
         }
         return chain
       }

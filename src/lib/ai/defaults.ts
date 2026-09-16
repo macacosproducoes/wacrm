@@ -59,8 +59,16 @@ export function buildSystemPrompt(args: {
     name?: string | null
     phone?: string | null
   }
+  quickReplies?: Array<{
+    id: string
+    title: string
+    shortcut?: string | null
+    kind: string
+    content_text?: string | null
+    media_url?: string | null
+  }>
 }): string {
-  const { userPrompt, mode, knowledge, contactInfo } = args
+  const { userPrompt, mode, knowledge, contactInfo, quickReplies } = args
   const parts: string[] = [
     'You are a customer-messaging assistant for a business that uses a WhatsApp CRM. ' +
       'You are shown the recent WhatsApp conversation between the business (assistant) and a customer (user). ' +
@@ -87,6 +95,21 @@ export function buildSystemPrompt(args: {
 
   if (userPrompt && userPrompt.trim()) {
     parts.push(`Business context and instructions:\n${userPrompt.trim()}`)
+  }
+
+  if (quickReplies && quickReplies.length > 0) {
+    const qrLines = quickReplies.map((qr) => {
+      const sc = qr.shortcut ? ` (atalho: /${qr.shortcut.replace(/^\//, '')})` : ''
+      const details = qr.content_text ? `: "${qr.content_text}"` : ''
+      return `- [${qr.kind.toUpperCase()}] "${qr.title}"${sc} (ID: ${qr.id})${details}`
+    })
+
+    parts.push(
+      'Saved Quick Replies & Audio Library:\n' +
+        'You have access to the business\'s saved audio recordings, quick text responses, and sequences listed below:\n' +
+        qrLines.join('\n') +
+        '\n\nIf answering the customer is best served by triggering one of these saved items (especially voice notes/audios), include `[quick_reply: ID_OU_ATALHO]` in your output (for example: `[quick_reply: /audio_apresentacao]` or `[quick_reply: ${quickReplies[0]?.id}]`).',
+    )
   }
 
   if (knowledge && knowledge.length > 0) {

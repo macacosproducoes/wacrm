@@ -9,7 +9,7 @@ import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { decrypt } from '@/lib/whatsapp/encryption'
-import { sendUazApiText, normalizeBaseUrl } from '@/lib/whatsapp/uazapi-client'
+import { sendUazApiText, sendUazApiMedia, normalizeBaseUrl } from '@/lib/whatsapp/uazapi-client'
 import { sendBaileysText, isBaileysConnected } from '@/lib/whatsapp/baileys/baileys-manager'
 import { sendWhatsAppPresence } from '@/lib/whatsapp/unified-presence'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
@@ -162,10 +162,45 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
       latestUserMessage(messages),
     )
 
+    // Fetch active Quick Replies & Audio Library for this account
+    let quickReplies: Array<{
+      id: string
+      title: string
+      shortcut?: string | null
+      kind: string
+      content_text?: string | null
+      media_url?: string | null
+    }> = []
+
+    try {
+      const { data: qrData } = await db
+        .from('quick_replies')
+        .select('*')
+        .eq('account_id', accountId)
+        .eq('is_active', true)
+
+      if (Array.isArray(qrData)) {
+        quickReplies = qrData.map((row: Record<string, unknown>) => {
+          const meta = ((row.interactive_payload as Record<string, unknown>) || {}) as Record<string, unknown>
+          return {
+            id: String(row.id),
+            title: String(row.title || ''),
+            shortcut: (row.shortcut as string) || (meta.shortcut as string) || null,
+            kind: String(meta.type || row.kind || 'text'),
+            content_text: (row.content_text as string) || null,
+            media_url: (row.media_url as string) || (meta.media_url as string) || null,
+          }
+        })
+      }
+    } catch {
+      // non-blocking
+    }
+
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
       knowledge,
+      quickReplies,
       contactInfo: {
         name: contact?.name || null,
         phone: contact?.phone || null,

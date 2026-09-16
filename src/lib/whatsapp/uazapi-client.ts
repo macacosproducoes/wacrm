@@ -342,13 +342,25 @@ export async function sendUazApiMedia(
     ptt?: boolean;
   }
 ): Promise<UazApiSendResult> {
+  if (!opts.url || typeof opts.url !== 'string' || !opts.url.trim()) {
+    throw new Error('Mídia sem URL válida para envio.');
+  }
+
   const normalized = normalizeBaseUrl(baseUrl);
   const formattedNumber = formatUazApiNumber(opts.number);
   const endpoint = `${normalized}/send/media`;
 
+  const mediaUrl = opts.url.trim();
+
+  // UazAPI media endpoints accept 'file', 'url', 'media', 'mediaUrl'.
+  // Providing all primary & alias keys ensures 100% compatibility across
+  // UazAPI server builds and prevents any "missing file field" errors.
   const body: Record<string, unknown> = {
     number: formattedNumber,
-    file: opts.url, // REQUIRED by UazAPI!
+    file: mediaUrl,
+    url: mediaUrl,
+    media: mediaUrl,
+    mediaUrl: mediaUrl,
     type: opts.type,
   };
 
