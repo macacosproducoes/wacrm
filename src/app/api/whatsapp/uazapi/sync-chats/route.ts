@@ -384,14 +384,18 @@ export async function POST(request: Request) {
               const isRecent = (now - new Date(lastTs).getTime()) < 5 * 60 * 1000;
 
               if (!last.fromMe && toInsert.some((m) => m.sender_type === 'customer') && !isEmojiOnly && !isIgnored && lastTextMsg && isRecent) {
-                void dispatchInboundToAiReply({
-                  accountId,
-                  conversationId: resolvedConvId,
-                  contactId: resolvedContactId,
-                  configOwnerUserId: ownerUserId,
-                }).catch((err) => {
+                try {
+                  await dispatchInboundToAiReply({
+                    accountId,
+                    conversationId: resolvedConvId,
+                    contactId: resolvedContactId,
+                    configOwnerUserId: ownerUserId,
+                    messageId: toInsert[toInsert.length - 1]?.message_id,
+                    immediate: true,
+                  });
+                } catch (err) {
                   console.error('[sync-chats] AI auto-reply dispatch error:', err);
-                });
+                }
               }
 
             }

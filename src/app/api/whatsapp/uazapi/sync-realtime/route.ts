@@ -5,6 +5,7 @@ import { decrypt } from '@/lib/whatsapp/encryption';
 import { normalizeBaseUrl, formatUazApiNumber } from '@/lib/whatsapp/uazapi-client';
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
 import { startUazApiListener } from '@/lib/whatsapp/uazapi-manager';
+import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
 
 export const dynamic = 'force-dynamic';
 
@@ -354,10 +355,21 @@ async function handleSync(request: Request) {
                 }
               }
 
-              // AI auto-reply trigger removed from sync-realtime: the
-              // webhook SSE listener already dispatches AI for every real
-              // inbound message. Triggering here as well was a source of
-              // duplicate AI replies.
+              // Trigger AI auto-reply for newly synced inbound customer messages
+              if (!last.fromMe && toInsert.some((m) => m.sender_type === 'customer')) {
+                try {
+                  await dispatchInboundToAiReply({
+                    accountId,
+                    conversationId: convId,
+                    contactId,
+                    configOwnerUserId: user.id,
+                    messageId: toInsert[toInsert.length - 1]?.message_id,
+                    immediate: true,
+                  });
+                } catch (err) {
+                  console.error('[sync-realtime] AI auto-reply dispatch error:', err);
+                }
+              }
             }
           }
         }
