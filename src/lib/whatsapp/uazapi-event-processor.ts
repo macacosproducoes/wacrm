@@ -74,23 +74,35 @@ export async function processUazApiEvent(
 
   let connection = connectionHint;
   if (!connection) {
-    const { data: activeConn } = await admin
-      .from('whatsapp_connections')
-      .select('id, account_id, display_name, provider_config')
-      .eq('provider', 'uazapi')
-      .eq('is_active', true)
-      .maybeSingle();
+    // 1. Match the connection by owner/instance phone or identifier in webhook payload
+    const msgData = ((body.data || body.message || body) ?? {}) as Record<string, unknown>;
+    const rawOwner = String(
+      body.owner ||
+      msgData.owner ||
+      body.instance ||
+      msgData.instance ||
+      body.sender ||
+      msgData.sender ||
+      ''
+    ).replace(/\D/g, '');
 
-    if (activeConn) {
-      connection = activeConn;
-    } else {
-      const { data: anyConn } = await admin
-        .from('whatsapp_connections')
-        .select('id, account_id, display_name, provider_config')
-        .eq('provider', 'uazapi')
-        .limit(1)
-        .maybeSingle();
-      if (anyConn) connection = anyConn;
+    const { data: allUazConns } = await admin
+      .from('whatsapp_connections')
+      .select('id, account_id, display_name, provider_config, phone_number, is_active')
+      .eq('provider', 'uazapi');
+
+    if (allUazConns && allUazConns.length > 0) {
+      if (rawOwner) {
+        connection = allUazConns.find((c) => {
+          const p = String(c.phone_number || '').replace(/\D/g, '');
+          return p && (rawOwner.includes(p) || p.includes(rawOwner));
+        }) || null;
+      }
+
+      // 2. Fallback: pick the active connection or the first available
+      if (!connection) {
+        connection = allUazConns.find((c) => c.is_active) || allUazConns[0] || null;
+      }
     }
   }
 
@@ -845,7 +857,7 @@ export async function processUazApiEvent(
     trimmed === '[Mensagem recebida]' ||
     trimmed === '[Reação]' ||
     trimmed.startsWith('[Undecryptable]');
-  const isFreshMessage = messageAgeMs < 15 * 60 * 1000;
+  const isFreshMessage = messageAgeMs < 60 * 60 * 1000;
 
   if (!fromMe && !isIgnoredText && isFreshMessage) {
     try {
@@ -864,9 +876,10 @@ export async function processUazApiEvent(
     }
   }
 
-  // Trigger AI auto-reply for inbound customer messages (strictly for real-time text turns within last 15m, never reactions/emojis or historical syncs)
+  // Trigger AI auto-reply for inbound customer messages (strictly for real-time text turns within last 60m, never reactions/emojis or historical syncs)
   if (!fromMe && trimmed && !isEmojiOnly && !isIgnoredText && isFreshMessage) {
     try {
+      console.log(`[UazAPI Event Processor] Dispatching AI auto-reply for conv ${conversationId}, account ${connection.account_id}, message: ${trimmed}`);
       await dispatchInboundToAiReply({
         accountId: connection.account_id,
         conversationId,
