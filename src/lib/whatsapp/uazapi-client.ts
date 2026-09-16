@@ -365,11 +365,19 @@ export async function sendUazApiMedia(
   };
 
   if (opts.type === 'audio' || opts.ptt) {
+    body.type = 'audio';
     body.ptt = true;
     body.voice = true;
-  }
-
-  if (opts.caption) {
+    body.isAudio = true;
+    body.isVoice = true;
+    body.isPtt = true;
+    body.isForwarded = false;
+    body.forwarded = false;
+    // CRITICAL: Voice notes (PTT) MUST NOT carry a text caption on WhatsApp!
+    // Carrying a caption forces WhatsApp to convert the voice note into a
+    // forwarded audio file attachment instead of a native voice note with avatar & waveform.
+    delete body.caption;
+  } else if (opts.caption) {
     body.caption = opts.caption;
   }
 

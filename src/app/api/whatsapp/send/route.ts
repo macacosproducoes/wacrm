@@ -348,7 +348,7 @@ export async function POST(request: Request) {
                 number: contactPhone,
                 url: media_url,
                 type: mediaType,
-                caption: content_text,
+                caption: mediaType === 'audio' ? undefined : content_text,
                 ptt: mediaType === 'audio',
               })
             } else {
