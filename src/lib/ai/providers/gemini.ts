@@ -70,12 +70,12 @@ export function isKieAi(apiKey: string, model: string): boolean {
  * Automatically retries with backoff if Kie.ai returns temporary network/maintenance errors (500, 524).
  * Strictly preserves the requested model (e.g. gemini-2.5-flash) and does NOT route to Gemini 3.x.
  */
-const DEFAULT_KIE_MODEL = 'gemini-2.5-flash'
+const DEFAULT_KIE_MODEL = 'gemini-3-8-flash-openai'
 
 /**
  * Generate completion via Kie.ai OpenAI-compatible endpoint.
- * Prioritizes active operational Gemini Flash models on Kie.ai with SSE streaming
- * for ultra-fast (2.5s-3.5s) responses and zero dead time.
+ * Prioritizes active operational Gemini Flash models on Kie.ai
+ * for ultra-fast responses and zero dead time.
  */
 async function generateKie(args: ProviderArgs): Promise<ProviderResult> {
   const { apiKey, model, systemPrompt, messages, timeoutMs } = args
@@ -118,10 +118,8 @@ async function generateKie(args: ProviderArgs): Promise<ProviderResult> {
   let lastError: unknown = null
 
   for (const currentModel of modelsToTry) {
-    const isFlash25 = currentModel === 'gemini-2.5-flash'
-    // gemini-2.5-flash on Kie.ai requires non-streaming; 3.x models support fast SSE streaming
-    const shouldStream = !isFlash25
-    const perAttemptTimeout = isFlash25 ? 3000 : Math.min(timeoutMs, 15000)
+    const shouldStream = false
+    const perAttemptTimeout = Math.min(timeoutMs, 15000)
 
     try {
       const res = await fetch('https://api.kie.ai/v1/chat/completions', {

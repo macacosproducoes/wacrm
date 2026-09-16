@@ -515,7 +515,10 @@ export async function dispatchInboundToAiReply(
   args: DispatchArgs,
 ): Promise<void> {
   const isTest = process.env.NODE_ENV === 'test' && !process.env.ENABLE_TEST_DEBOUNCE;
-  if (args.immediate || isTest) {
+  // In serverless deployment (Vercel / API routes), execute pipeline immediately
+  // so background timers aren't frozen after the HTTP webhook response returns.
+  const isServerless = process.env.VERCEL === '1' || process.env.NEXT_RUNTIME === 'nodejs' || process.env.NODE_ENV === 'production';
+  if (args.immediate || isTest || isServerless) {
     return executeAiReplyProcess(args);
   }
 
