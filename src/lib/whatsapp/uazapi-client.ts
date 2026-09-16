@@ -337,7 +337,7 @@ export async function sendUazApiMedia(
   opts: {
     number: string;
     url: string;
-    type: 'image' | 'video' | 'audio' | 'document';
+    type: 'image' | 'video' | 'audio' | 'document' | 'ptt';
     caption?: string;
     ptt?: boolean;
   }
@@ -364,8 +364,8 @@ export async function sendUazApiMedia(
     type: opts.type,
   };
 
-  if (opts.type === 'audio' || opts.ptt) {
-    body.type = 'audio';
+  if (opts.type === 'audio' || opts.type === 'ptt' || opts.ptt) {
+    body.type = 'ptt';
     body.ptt = true;
     body.voice = true;
     body.isAudio = true;

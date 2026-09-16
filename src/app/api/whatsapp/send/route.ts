@@ -347,7 +347,7 @@ export async function POST(request: Request) {
               sendRes = await sendUazApiMedia(baseUrl, token, {
                 number: contactPhone,
                 url: media_url,
-                type: mediaType,
+                type: mediaType === 'audio' ? 'ptt' : mediaType,
                 caption: mediaType === 'audio' ? undefined : content_text,
                 ptt: mediaType === 'audio',
               })
