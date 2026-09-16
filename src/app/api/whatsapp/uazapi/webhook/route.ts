@@ -9,6 +9,8 @@ function supabaseAdmin() {
   );
 }
 
+export const maxDuration = 60;
+
 /**
  * GET /api/whatsapp/uazapi/webhook
  * Healthcheck / verification for UazAPI webhooks.

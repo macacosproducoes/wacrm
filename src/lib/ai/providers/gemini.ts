@@ -71,6 +71,7 @@ export function isKieAi(apiKey: string, model: string): boolean {
  * Strictly preserves the requested model (e.g. gemini-2.5-flash) and does NOT route to Gemini 3.x.
  */
 const DEFAULT_KIE_MODEL = 'gemini-2.5-flash'
+const kieModelFailureCache = new Map<string, number>()
 
 /**
  * Generate completion via Kie.ai OpenAI-compatible endpoint.
@@ -107,19 +108,28 @@ async function generateKie(args: ProviderArgs): Promise<ProviderResult> {
     })
   }
 
-  // Model cascade: requested model first, followed by active operational flash fallbacks on Kie.ai
-  const modelsToTry: string[] = [cleanModel]
-  if (cleanModel === 'gemini-2.5-flash' || cleanModel.startsWith('gemini-2.')) {
-    modelsToTry.push('gemini-3-8-flash-openai', 'gemini-3-7-flash-openai')
-  } else if (!cleanModel.includes('3-8')) {
-    modelsToTry.push('gemini-3-8-flash-openai', 'gemini-3-7-flash-openai')
+  // Check if requested model had a recent temporary failure (within 5 minutes)
+  const lastFailed = kieModelFailureCache.get(cleanModel)
+  const isTemporarilyDegraded = Boolean(lastFailed && Date.now() - lastFailed < 5 * 60 * 1000)
+
+  // Model cascade: prioritize working models to avoid wasting time on known-down models
+  const modelsToTry: string[] = []
+  if (isTemporarilyDegraded) {
+    modelsToTry.push('gemini-3-8-flash-openai', 'gemini-3-7-flash-openai', cleanModel)
+  } else {
+    modelsToTry.push(cleanModel)
+    if (cleanModel === 'gemini-2.5-flash' || cleanModel.startsWith('gemini-2.')) {
+      modelsToTry.push('gemini-3-8-flash-openai', 'gemini-3-7-flash-openai')
+    } else if (!cleanModel.includes('3-8')) {
+      modelsToTry.push('gemini-3-8-flash-openai', 'gemini-3-7-flash-openai')
+    }
   }
 
   let lastError: unknown = null
 
   for (const currentModel of modelsToTry) {
     const shouldStream = false
-    const perAttemptTimeout = Math.min(timeoutMs, 15000)
+    const perAttemptTimeout = Math.min(timeoutMs, 10000)
 
     try {
       const res = await fetch('https://api.kie.ai/v1/chat/completions', {
@@ -204,12 +214,14 @@ async function generateKie(args: ProviderArgs): Promise<ProviderResult> {
           if (data.code === 401) {
             throw new AiError('Chave de API Kie.ai inválida ou não autorizada.', { code: 'invalid_key', status: 401 })
           }
+          kieModelFailureCache.set(currentModel, Date.now())
           lastError = new AiError(data.msg || `Kie.ai error: ${data.code}`, { code: 'provider_error', status: 500 })
           continue
         }
 
         const text = data?.choices?.[0]?.message?.content?.trim()
         if (text) {
+          kieModelFailureCache.delete(currentModel)
           return {
             text,
             usage: normalizeUsage({

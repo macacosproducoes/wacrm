@@ -277,7 +277,7 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
       return
     }
 
-    // 🎙️ Humanization: realistic "digitando..." vs "gravando áudio..."
+    // 🎙️ Humanization: send "gravando áudio..." only if the reply is an audio message
     if (contact?.phone && text) {
       const isAudio =
         /^\[(áudio|audio|gravando|voz)\]/i.test(text.trim()) ||
@@ -285,17 +285,17 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
         text.toLowerCase().includes('[audio]') ||
         text.trim().startsWith('🎙️')
 
-      const presenceType = isAudio ? 'recording' : 'composing'
+      if (isAudio) {
+        void sendWhatsAppPresence({
+          accountId,
+          phoneNumber: contact.phone,
+          presence: 'recording',
+          delayMs: 5000,
+        })
 
-      void sendWhatsAppPresence({
-        accountId,
-        phoneNumber: contact.phone,
-        presence: presenceType,
-        delayMs: 10000,
-      })
-
-      if (isAudio && process.env.NODE_ENV !== 'test') {
-        await new Promise((resolve) => setTimeout(resolve, 1200))
+        if (process.env.NODE_ENV !== 'test') {
+          await new Promise((resolve) => setTimeout(resolve, 1200))
+        }
       }
     }
 
