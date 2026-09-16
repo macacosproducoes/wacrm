@@ -3,10 +3,8 @@ import { createClient } from '@/lib/supabase/server';
 import { createClient as createAdminClient } from '@supabase/supabase-js';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { normalizeBaseUrl, formatUazApiNumber } from '@/lib/whatsapp/uazapi-client';
-import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
 import { startUazApiListener } from '@/lib/whatsapp/uazapi-manager';
-import { sendWhatsAppPresence } from '@/lib/whatsapp/unified-presence';
 
 export const dynamic = 'force-dynamic';
 
@@ -107,7 +105,7 @@ async function handleSync(request: Request) {
         token,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ limit: 50 }),
+      body: JSON.stringify({ limit: 200 }),
     });
 
     if (!chatsRes.ok) {
@@ -188,38 +186,11 @@ async function handleSync(request: Request) {
         const needsSync = !matchedConv || hasUnread || hasNewerMessage || (tsDiff > 1000 && isRecent);
 
         if (!needsSync) {
-          // Recovery check: if latest turn in DB is from customer without reply in last 15 min, trigger AI
-          if (matchedConv && isRecent) {
-            const { data: lastMsg } = await admin
-              .from('messages')
-              .select('sender_type, content_text, created_at')
-              .eq('conversation_id', matchedConv.id)
-              .order('created_at', { ascending: false })
-              .limit(1)
-              .maybeSingle();
-
-            if (lastMsg && lastMsg.sender_type === 'customer' && (now - new Date(lastMsg.created_at).getTime() < 900000)) {
-              const text = (lastMsg.content_text || '').trim();
-              const isEmojiOnly = /^(\p{Extended_Pictographic}|\p{Emoji_Presentation}|\s)+$/u.test(text);
-              const isIgnored = text === '[Mensagem recebida]' || text === '[Reação]' || text.startsWith('[Undecryptable]');
-              if (text && !isEmojiOnly && !isIgnored) {
-                void sendWhatsAppPresence({
-                  accountId,
-                  phoneNumber: formattedPhone,
-                  presence: 'composing',
-                  delayMs: 15000,
-                  baseUrl,
-                  token,
-                });
-                void dispatchInboundToAiReply({
-                  accountId,
-                  conversationId: matchedConv.id,
-                  contactId: matchedConv.contact_id,
-                  configOwnerUserId: user.id,
-                }).catch(() => {});
-              }
-            }
-          }
+          // Recovery check removed: the webhook SSE listener already
+          // dispatches AI for every real inbound message with proper
+          // messageId deduplication. Re-triggering here without a
+          // messageId caused the debouncer to treat each sync tick as
+          // a new inbound turn, producing duplicate AI replies.
           return;
         }
 
@@ -383,31 +354,10 @@ async function handleSync(request: Request) {
                 }
               }
 
-              // Trigger AI auto-reply for newly detected incoming customer messages
-              const isEmojiOnly = /^(\p{Extended_Pictographic}|\p{Emoji_Presentation}|\s)+$/u.test(lastTextMsg);
-              const isIgnored = lastTextMsg === '[Mensagem recebida]' || lastTextMsg === '[Reação]' || lastTextMsg.startsWith('[Undecryptable]');
-
-              const hasCustomerInbound = toInsert.some((m) => m.sender_type === 'customer');
-              if (hasCustomerInbound && contactId && convId && !isEmojiOnly && !isIgnored && lastTextMsg) {
-                if (formattedPhone) {
-                  void sendWhatsAppPresence({
-                    accountId,
-                    phoneNumber: formattedPhone,
-                    presence: 'composing',
-                    delayMs: 15000,
-                    baseUrl,
-                    token,
-                  });
-                }
-                void dispatchInboundToAiReply({
-                  accountId,
-                  conversationId: convId,
-                  contactId,
-                  configOwnerUserId: user.id,
-                }).catch((err) => {
-                  console.error('[sync-realtime] AI auto-reply dispatch error:', err);
-                });
-              }
+              // AI auto-reply trigger removed from sync-realtime: the
+              // webhook SSE listener already dispatches AI for every real
+              // inbound message. Triggering here as well was a source of
+              // duplicate AI replies.
             }
           }
         }

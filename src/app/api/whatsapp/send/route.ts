@@ -26,6 +26,7 @@ import {
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus'
 import { autoReplyDebouncer } from '@/lib/ai/auto-reply-debouncer'
 import { cancelPendingFollowUps } from '@/lib/automations/follow-up-engine'
+import { sendWhatsAppPresence } from '@/lib/whatsapp/unified-presence'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getAdminClient(fallbackClient: any) {
@@ -208,102 +209,164 @@ export async function POST(request: Request) {
 
         // 1. Check if Baileys (direct WhatsApp QR Code) is active
         if (baileysActive || config.driver === 'baileys') {
-        let sendRes: { messageId: string }
-        if (media_url && message_type !== 'text') {
-          const mediaType = (['image', 'video', 'audio', 'document'].includes(message_type)
-            ? message_type
-            : 'image') as 'image' | 'video' | 'audio' | 'document'
+          // Simulate presence before sending so recipient sees "gravando áudio..." or "digitando..."
+          if (media_url && message_type === 'audio') {
+            void sendWhatsAppPresence({
+              accountId,
+              phoneNumber: contactPhone,
+              presence: 'recording',
+              delayMs: 3500,
+            });
+            await new Promise((r) => setTimeout(r, 2600));
+          } else if (message_type === 'text') {
+            const typingDelay = Math.min(3000, Math.max(1800, (content_text || '').length * 25));
+            void sendWhatsAppPresence({
+              accountId,
+              phoneNumber: contactPhone,
+              presence: 'composing',
+              delayMs: typingDelay,
+            });
+            await new Promise((r) => setTimeout(r, Math.min(2200, typingDelay)));
+          }
 
-          sendRes = await sendBaileysMedia(accountId, contactPhone, media_url, mediaType, content_text)
-        } else {
-          sendRes = await sendBaileysText(accountId, contactPhone, content_text || '', reply_to_message_id)
-        }
-
-        // Persist message in database
-        const { data: newMsg } = await admin
-          .from('messages')
-          .insert({
-            conversation_id: conversationId,
-            sender_type: 'agent',
-            sender_id: userId,
-            content_type: message_type === 'template' ? 'text' : message_type,
-            content_text: content_text || '[Mensagem]',
-            media_url: media_url || null,
-            message_id: sendRes.messageId,
-            status: 'sent',
-            created_at: new Date().toISOString(),
-          })
-          .select('id')
-          .single()
-
-        // Update conversation summary
-        await admin.rpc('update_conversation_with_message', {
-          p_conversation_id: conversationId,
-          p_message_text: content_text || '[Mensagem]',
-          p_message_timestamp: new Date().toISOString(),
-          p_is_inbound: false,
-        })
-
-        whatsappBus.emitInboxEvent({
-          accountId,
-          conversationId,
-          eventType: 'INSERT',
-          message: {
-            id: newMsg?.id || sendRes.messageId,
-            conversation_id: conversationId,
-            sender_type: 'agent',
-            sender_id: userId,
-            content_type: message_type === 'template' ? 'text' : message_type,
-            content_text: content_text || '[Mensagem]',
-            media_url: media_url || null,
-            message_id: sendRes.messageId,
-            status: 'sent',
-            created_at: new Date().toISOString(),
-          },
-          conversation: {
-            id: conversationId,
-            last_message_text: content_text || '[Mensagem]',
-            last_message_at: new Date().toISOString(),
-          },
-        })
-
-        return NextResponse.json({
-          success: true,
-          message_id: newMsg?.id || sendRes.messageId,
-          whatsapp_message_id: sendRes.messageId,
-        })
-      }
-
-      let token = ''
-      try {
-        token = decrypt(config.token as string)
-      } catch {
-        token = (config.token as string) || ''
-      }
-
-      if (token) {
-        const baseUrl = normalizeBaseUrl(config.base_url as string)
-        let sendRes: { messageId: string; status: string }
-
-        try {
+          let sendRes: { messageId: string }
           if (media_url && message_type !== 'text') {
             const mediaType = (['image', 'video', 'audio', 'document'].includes(message_type)
               ? message_type
               : 'image') as 'image' | 'video' | 'audio' | 'document'
 
-            sendRes = await sendUazApiMedia(baseUrl, token, {
-              number: contactPhone,
-              url: media_url,
-              type: mediaType,
-              caption: content_text,
-            })
+            sendRes = await sendBaileysMedia(accountId, contactPhone, media_url, mediaType, content_text)
           } else {
-            sendRes = await sendUazApiText(baseUrl, token, {
-              number: contactPhone,
-              text: content_text || '',
-              replyId: reply_to_message_id,
-            })
+            sendRes = await sendBaileysText(accountId, contactPhone, content_text || '', reply_to_message_id)
           }
+
+          // Clear presence after sending
+          void sendWhatsAppPresence({
+            accountId,
+            phoneNumber: contactPhone,
+            presence: 'paused',
+          }).catch(() => {});
+
+          // Persist message in database
+          const { data: newMsg } = await admin
+            .from('messages')
+            .insert({
+              conversation_id: conversationId,
+              sender_type: 'agent',
+              sender_id: userId,
+              content_type: message_type === 'template' ? 'text' : message_type,
+              content_text: content_text || '[Mensagem]',
+              media_url: media_url || null,
+              message_id: sendRes.messageId,
+              status: 'sent',
+              created_at: new Date().toISOString(),
+            })
+            .select('id')
+            .single()
+
+          // Update conversation summary
+          await admin.rpc('update_conversation_with_message', {
+            p_conversation_id: conversationId,
+            p_message_text: content_text || '[Mensagem]',
+            p_message_timestamp: new Date().toISOString(),
+            p_is_inbound: false,
+          })
+
+          whatsappBus.emitInboxEvent({
+            accountId,
+            conversationId,
+            eventType: 'INSERT',
+            message: {
+              id: newMsg?.id || sendRes.messageId,
+              conversation_id: conversationId,
+              sender_type: 'agent',
+              sender_id: userId,
+              content_type: message_type === 'template' ? 'text' : message_type,
+              content_text: content_text || '[Mensagem]',
+              media_url: media_url || null,
+              message_id: sendRes.messageId,
+              status: 'sent',
+              created_at: new Date().toISOString(),
+            },
+            conversation: {
+              id: conversationId,
+              last_message_text: content_text || '[Mensagem]',
+              last_message_at: new Date().toISOString(),
+            },
+          })
+
+          return NextResponse.json({
+            success: true,
+            message_id: newMsg?.id || sendRes.messageId,
+            whatsapp_message_id: sendRes.messageId,
+          })
+        }
+
+        let token = ''
+        try {
+          token = decrypt(config.token as string)
+        } catch {
+          token = (config.token as string) || ''
+        }
+
+        if (token) {
+          const baseUrl = normalizeBaseUrl(config.base_url as string)
+          let sendRes: { messageId: string; status: string }
+
+          try {
+            // Live WhatsApp Presence simulation before sending:
+            // Shows "Gravando áudio..." for audio and "Digitando..." for text
+            if (media_url && message_type === 'audio') {
+              void sendWhatsAppPresence({
+                accountId,
+                phoneNumber: contactPhone,
+                presence: 'recording',
+                delayMs: 3800,
+                baseUrl,
+                token,
+              });
+              await new Promise((r) => setTimeout(r, 2800));
+            } else if (message_type === 'text') {
+              const typingDelay = Math.min(3000, Math.max(1800, (content_text || '').length * 25));
+              void sendWhatsAppPresence({
+                accountId,
+                phoneNumber: contactPhone,
+                presence: 'composing',
+                delayMs: typingDelay,
+                baseUrl,
+                token,
+              });
+              await new Promise((r) => setTimeout(r, Math.min(2200, typingDelay)));
+            }
+
+            if (media_url && message_type !== 'text') {
+              const mediaType = (['image', 'video', 'audio', 'document'].includes(message_type)
+                ? message_type
+                : 'image') as 'image' | 'video' | 'audio' | 'document'
+
+              sendRes = await sendUazApiMedia(baseUrl, token, {
+                number: contactPhone,
+                url: media_url,
+                type: mediaType,
+                caption: content_text,
+                ptt: mediaType === 'audio',
+              })
+            } else {
+              sendRes = await sendUazApiText(baseUrl, token, {
+                number: contactPhone,
+                text: content_text || '',
+                replyId: reply_to_message_id,
+              })
+            }
+
+            // Clear presence after sending
+            void sendWhatsAppPresence({
+              accountId,
+              phoneNumber: contactPhone,
+              presence: 'paused',
+              baseUrl,
+              token,
+            }).catch(() => {});
 
           // Persist message in database
           const { data: newMsg } = await admin

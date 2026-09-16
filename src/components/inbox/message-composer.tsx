@@ -200,6 +200,7 @@ export function MessageComposer({
   const videoInputRef = useRef<HTMLInputElement>(null);
   const documentInputRef = useRef<HTMLInputElement>(null);
   const draftRef = useRef<MediaDraft | null>(null);
+  const lastTypingPingRef = useRef<number>(0);
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
@@ -313,6 +314,22 @@ export function MessageComposer({
       setText(val);
       adjustHeight();
 
+      if (val.trim().length > 0 && conversationId) {
+        const now = Date.now();
+        if (now - lastTypingPingRef.current > 4000) {
+          lastTypingPingRef.current = now;
+          void fetch("/api/whatsapp/presence", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              conversationId,
+              presence: "composing",
+              delayMs: 5000,
+            }),
+          }).catch(() => {});
+        }
+      }
+
       if (val.startsWith("/")) {
         setShowSlashMenu(true);
         setSlashFilter(val);
@@ -320,7 +337,7 @@ export function MessageComposer({
         setShowSlashMenu(false);
       }
     },
-    [adjustHeight]
+    [adjustHeight, conversationId]
   );
 
   // ---- ZapPlus Simulated Audio with "Gravando áudio..." Presence ---
@@ -692,25 +709,56 @@ export function MessageComposer({
       setRecording(true);
       setRecordSeconds(0);
       timerRef.current = setInterval(() => setRecordSeconds((s) => s + 1), 1000);
+
+      // Signal WhatsApp that user is actively recording audio live
+      void fetch("/api/whatsapp/presence", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversationId,
+          presence: "recording",
+          delayMs: 30000,
+        }),
+      }).catch(() => {});
     } catch {
       void recorderRef.current?.stop().catch(() => {});
       recorderRef.current = null;
       toast.error("Microphone access denied or unavailable.");
     }
-  }, [inputsDisabled, busy, recording, finalizeRecording]);
+  }, [inputsDisabled, busy, recording, finalizeRecording, conversationId]);
 
   const stopRecording = useCallback(() => {
     clearTimer();
     setRecording(false);
     void recorderRef.current?.stop().catch(() => {});
-  }, [clearTimer]);
+
+    // Clear live presence
+    void fetch("/api/whatsapp/presence", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        conversationId,
+        presence: "paused",
+      }),
+    }).catch(() => {});
+  }, [clearTimer, conversationId]);
 
   const cancelRecording = useCallback(() => {
     cancelledRef.current = true;
     clearTimer();
     setRecording(false);
     void recorderRef.current?.stop().catch(() => {});
-  }, [clearTimer]);
+
+    // Clear live presence
+    void fetch("/api/whatsapp/presence", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        conversationId,
+        presence: "paused",
+      }),
+    }).catch(() => {});
+  }, [clearTimer, conversationId]);
 
   useEffect(() => {
     if (recording && recordSeconds >= MAX_RECORDING_SECONDS) {

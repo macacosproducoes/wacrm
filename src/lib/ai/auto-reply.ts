@@ -94,6 +94,22 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
     // from an agent or bot, stand down to prevent replying to ourselves.
     if (messages[messages.length - 1].role === 'assistant') return
 
+    // DUPLICATE GUARD: Check if the latest customer message was already
+    // processed by a previous AI run. This prevents duplicate replies when
+    // multiple sources (webhook, poller, sync) dispatch for the same turn.
+    const { data: latestCustomerMsg } = await db
+      .from('messages')
+      .select('ai_processed_at')
+      .eq('conversation_id', conversationId)
+      .eq('sender_type', 'customer')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (latestCustomerMsg?.ai_processed_at) {
+      console.log(`[ai auto-reply] SKIP: latest customer message already processed at ${latestCustomerMsg.ai_processed_at} for conv ${conversationId}`)
+      return
+    }
+
     // 2. STRICT REACTION & EMOJI VETO: Never reply to emoji reactions or system placeholders
     const lastUserTurn = (messages[messages.length - 1].content || '').trim()
     const isEmojiOnly = /^(\p{Extended_Pictographic}|\p{Emoji_Presentation}|\s)+$/u.test(lastUserTurn)

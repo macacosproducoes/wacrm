@@ -171,38 +171,10 @@ export async function startUazApiListener(accountId: string): Promise<boolean> {
           const needsSync = !matchedConv || hasUnread || (tsDiff > 1000 && isRecent);
 
           if (!needsSync) {
-            // Recovery check: if latest turn in DB is from customer without reply in last 15 min, trigger AI
-            if (matchedConv) {
-              const { data: lastMsg } = await admin
-                .from('messages')
-                .select('sender_type, content_text, created_at')
-                .eq('conversation_id', matchedConv.id)
-                .order('created_at', { ascending: false })
-                .limit(1)
-                .maybeSingle();
-
-              if (lastMsg && lastMsg.sender_type === 'customer' && (now - new Date(lastMsg.created_at).getTime() < 900000)) {
-                const text = (lastMsg.content_text || '').trim();
-                const isEmojiOnly = /^(\p{Extended_Pictographic}|\p{Emoji_Presentation}|\s)+$/u.test(text);
-                const isIgnored = text === '[Mensagem recebida]' || text === '[Reação]' || text.startsWith('[Undecryptable]');
-                if (text && !isEmojiOnly && !isIgnored) {
-                  void sendWhatsAppPresence({
-                    accountId,
-                    phoneNumber: formattedPhone,
-                    presence: 'composing',
-                    delayMs: 15000,
-                    baseUrl,
-                    token,
-                  });
-                  void dispatchInboundToAiReply({
-                    accountId,
-                    conversationId: matchedConv.id,
-                    contactId: matchedConv.contact_id,
-                    configOwnerUserId: ownerUserId,
-                  }).catch(() => {});
-                }
-              }
-            }
+            // Recovery check removed: the webhook and SSE already guarantee
+            // AI dispatch. Re-triggering here without a messageId caused
+            // the debouncer to treat each poll tick as a new inbound turn,
+            // producing duplicate AI replies.
             return;
           }
 
@@ -355,22 +327,12 @@ export async function startUazApiListener(accountId: string): Promise<boolean> {
               }
             }
 
-            // Immediately trigger AI auto-reply for newly detected incoming customer messages
-            const isEmojiOnly = /^(\p{Extended_Pictographic}|\p{Emoji_Presentation}|\s)+$/u.test(lastText);
-            const isIgnored = lastText === '[Mensagem recebida]' || lastText === '[Reação]' || lastText.startsWith('[Undecryptable]');
-            const hasCustomerInbound = toInsert.some((m) => m.sender_type === 'customer');
-
-            if (hasCustomerInbound && contactId && convId && !isEmojiOnly && !isIgnored && lastText) {
-              void dispatchInboundToAiReply({
-                accountId,
-                conversationId: convId,
-                contactId,
-                configOwnerUserId: ownerUserId,
-                messageId: toInsert[toInsert.length - 1]?.message_id,
-              }).catch((err) => {
-                console.error('[uazapi-manager poller] AI auto-reply error:', err);
-              });
-            }
+            // AI auto-reply trigger removed from poller: the webhook SSE
+            // listener already dispatches AI for every real inbound message
+            // with proper messageId deduplication. Triggering here as well
+            // was the primary source of duplicate AI replies because the
+            // poller runs every few seconds and would re-detect the same
+            // messages that the webhook already processed.
           }
         };
 
@@ -382,9 +344,11 @@ export async function startUazApiListener(accountId: string): Promise<boolean> {
       }
     }
 
-    // Run first batch immediately, then every 1000ms
+    // Run first batch immediately, then every 5000ms.
+    // Previous 1000ms interval caused excessive DB queries and duplicate
+    // AI triggers when the same messages were re-detected across ticks.
     void pollBatch();
-    listener.pollInterval = setInterval(pollBatch, 1000);
+    listener.pollInterval = setInterval(pollBatch, 5000);
   }
 
   // 2. Start Persistent Upstream SSE Connection

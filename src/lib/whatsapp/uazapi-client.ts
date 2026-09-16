@@ -326,6 +326,10 @@ export async function sendUazApiText(
 
 /**
  * Send media message via UazAPI.
+ *
+ * UazAPI uses the `/send/media` endpoint and requires the `file` field
+ * containing the media URL. For voice notes/audios, passing `type: 'audio'`,
+ * `ptt: true`, `voice: true` delivers the audio as a native WhatsApp PTT voice message.
  */
 export async function sendUazApiMedia(
   baseUrl: string,
@@ -338,13 +342,13 @@ export async function sendUazApiMedia(
     ptt?: boolean;
   }
 ): Promise<UazApiSendResult> {
-  const endpoint = `${normalizeBaseUrl(baseUrl)}/send/media`;
-
+  const normalized = normalizeBaseUrl(baseUrl);
   const formattedNumber = formatUazApiNumber(opts.number);
+  const endpoint = `${normalized}/send/media`;
 
   const body: Record<string, unknown> = {
     number: formattedNumber,
-    url: opts.url,
+    file: opts.url, // REQUIRED by UazAPI!
     type: opts.type,
   };
 
@@ -357,6 +361,8 @@ export async function sendUazApiMedia(
     body.caption = opts.caption;
   }
 
+  console.log(`[sendUazApiMedia] Sending ${opts.type} to ${formattedNumber} via ${endpoint}`);
+
   const res = await fetch(endpoint, {
     method: 'POST',
     headers: {
@@ -364,23 +370,28 @@ export async function sendUazApiMedia(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(10000),
+    signal: AbortSignal.timeout(35000), // 35s for transcoding/large files
   });
 
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
+    console.error(`[sendUazApiMedia] Failed (HTTP ${res.status}):`, JSON.stringify(data));
     throw new Error(
       data.message || data.error || `Failed to send media (HTTP ${res.status})`
     );
   }
 
   const messageId =
+    data.messageid ||
     data.id ||
     data.messageId ||
+    data.content?.id ||
     data.key?.id ||
     data.data?.key?.id ||
     `uazapi_media_${Date.now()}`;
+
+  console.log(`[sendUazApiMedia] Success! messageId: ${messageId}`);
 
   return {
     messageId,

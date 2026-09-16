@@ -23,40 +23,70 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json().catch(() => ({}))
-    const { conversationId, presence = 'composing', delayMs = 5000 } = body
+    const {
+      conversationId,
+      phone,
+      contactPhone,
+      presence = 'composing',
+      delayMs = 5000,
+    } = body
 
-    if (!conversationId) {
-      return NextResponse.json({ error: 'conversationId is required' }, { status: 400 })
+    const targetPhone = phone || contactPhone
+
+    if (!conversationId && !targetPhone) {
+      return NextResponse.json(
+        { error: 'conversationId or phone is required' },
+        { status: 400 }
+      )
     }
 
     if (!['composing', 'recording', 'paused'].includes(presence)) {
       return NextResponse.json({ error: 'invalid presence value' }, { status: 400 })
     }
 
-    // Lookup conversation and contact
-    const { data: conv } = await admin
-      .from('conversations')
-      .select('account_id, contact_id')
-      .eq('id', conversationId)
-      .maybeSingle()
+    let resolvedAccountId = ''
+    let resolvedPhone = targetPhone || ''
 
-    if (!conv) {
-      return NextResponse.json({ error: 'conversation not found' }, { status: 404 })
+    if (conversationId) {
+      // Lookup conversation and contact
+      const { data: conv } = await admin
+        .from('conversations')
+        .select('account_id, contact_id')
+        .eq('id', conversationId)
+        .maybeSingle()
+
+      if (conv) {
+        resolvedAccountId = conv.account_id
+        if (!resolvedPhone) {
+          const { data: contact } = await admin
+            .from('contacts')
+            .select('phone')
+            .eq('id', conv.contact_id)
+            .maybeSingle()
+          resolvedPhone = contact?.phone || ''
+        }
+      }
     }
 
-    const { data: contact } = await admin
-      .from('contacts')
-      .select('phone')
-      .eq('id', conv.contact_id)
-      .maybeSingle()
+    if (!resolvedAccountId) {
+      const { data: profile } = await admin
+        .from('profiles')
+        .select('account_id')
+        .eq('user_id', authData.user.id)
+        .maybeSingle()
+      resolvedAccountId = profile?.account_id || ''
+    }
 
-    if (!contact?.phone) {
-      return NextResponse.json({ error: 'contact phone not found' }, { status: 404 })
+    if (!resolvedAccountId || !resolvedPhone) {
+      return NextResponse.json(
+        { error: 'could not resolve account or phone number' },
+        { status: 404 }
+      )
     }
 
     const ok = await sendWhatsAppPresence({
-      accountId: conv.account_id,
-      phoneNumber: contact.phone,
+      accountId: resolvedAccountId,
+      phoneNumber: resolvedPhone,
       presence,
       delayMs,
     })

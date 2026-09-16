@@ -148,11 +148,12 @@ export function useSequenceRunner(params: {
     toast.info("Execução da sequência cancelada.");
 
     // Clear presence
-    if (conversationId && contactPhone) {
+    if (conversationId || contactPhone) {
       void fetch("/api/whatsapp/presence", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          conversationId,
           phone: contactPhone,
           presence: "paused",
         }),
@@ -181,14 +182,26 @@ export function useSequenceRunner(params: {
         let count = delay;
         setExecution((prev) => (prev ? { ...prev, remainingDelaySeconds: count } : null));
 
-        // If audio step with delay, trigger recording presence during wait!
-        if (step.type === "audio" && contactPhone) {
+        // Trigger live presence during delay: recording for audio, composing for text!
+        if (step.type === "audio" && (conversationId || contactPhone)) {
           void fetch("/api/whatsapp/presence", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
+              conversationId,
               phone: contactPhone,
               presence: "recording",
+              delayMs: delay * 1000,
+            }),
+          }).catch(() => {});
+        } else if (step.type === "text" && (conversationId || contactPhone)) {
+          void fetch("/api/whatsapp/presence", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              conversationId,
+              phone: contactPhone,
+              presence: "composing",
               delayMs: delay * 1000,
             }),
           }).catch(() => {});
