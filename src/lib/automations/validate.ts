@@ -146,6 +146,14 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
     case 'close_conversation':
       // No config required.
       break
+    case 'generate_creative':
+      if (!nonEmpty(c.template_id)) {
+        issues.push({ path: `${path}.template_id`, message: 'template is required' })
+      }
+      break
+    case 'send_creative':
+      // channel/recipient can be populated at runtime from conversation context
+      break
     default:
       issues.push({ path, message: `unknown step type: ${step.step_type}` })
   }

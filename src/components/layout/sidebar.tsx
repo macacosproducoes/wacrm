@@ -25,6 +25,7 @@ import {
   Workflow,
   X,
   Zap,
+  Palette,
 } from "lucide-react";
 import type { AccountRole } from "@/lib/auth/roles";
 
@@ -98,6 +99,7 @@ const navItems: NavItem[] = [
   { href: "/broadcasts", labelKey: "broadcasts", icon: Radio },
   { href: "/automations", labelKey: "automations", icon: Zap },
   { href: "/flows", labelKey: "flows", icon: Workflow, beta: true },
+  { href: "/creatives", labelKey: "creatives", icon: Palette },
   { href: "/agents", labelKey: "aiAgents", icon: Bot },
 ];
 

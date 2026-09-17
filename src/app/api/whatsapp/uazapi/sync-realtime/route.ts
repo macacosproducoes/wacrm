@@ -11,6 +11,7 @@ import {
   findOrCreateConversation,
   updateConversationWithMessage,
 } from '@/lib/whatsapp/conversation-helpers';
+import { handleInboundMessageInstagram } from '@/lib/instagram-resolver';
 
 export const dynamic = 'force-dynamic';
 
@@ -400,6 +401,15 @@ async function handleSync(request: Request) {
                   });
                 } catch (err) {
                   console.error('[sync-realtime] AI auto-reply dispatch error:', err);
+                }
+
+                // Auto-detect and resolve Instagram handle in background (non-blocking)
+                if (lastTextMsg && contactId) {
+                  void handleInboundMessageInstagram({
+                    accountId,
+                    contactId,
+                    messageText: lastTextMsg,
+                  }).catch((err) => console.warn('[sync-realtime-instagram] Background resolve error:', err));
                 }
               }
             } else if (matchedConv?.last_message_at !== lastTs) {

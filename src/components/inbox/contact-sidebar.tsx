@@ -27,6 +27,7 @@ import { formatContactDisplayName } from "@/lib/contacts/format-contact";
 import { format } from "date-fns";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
+import { InstagramProfileCard } from "@/components/contacts/instagram-profile-card";
 
 interface ContactSidebarProps {
   contact: Contact | null;
@@ -333,6 +334,14 @@ export function ContactSidebar({ contact, onContactUpdated }: ContactSidebarProp
                 <span className="truncate">{contact.email}</span>
               </div>
             )}
+          </div>
+
+          {/* Instagram Profile */}
+          <div className="mt-4">
+            <InstagramProfileCard
+              contact={contact}
+              onContactUpdated={onContactUpdated}
+            />
           </div>
 
           {/* Divider */}

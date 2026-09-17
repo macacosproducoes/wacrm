@@ -26,6 +26,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { ContactAvatar } from '@/components/ui/contact-avatar';
 import { formatContactDisplayName } from '@/lib/contacts/format-contact';
+import { InstagramProfileCard } from './instagram-profile-card';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
@@ -537,6 +538,16 @@ export function ContactDetailView({
                     )}
                     {t('saveChangesBtn')}
                   </Button>
+
+                  <div className="pt-2">
+                    <InstagramProfileCard
+                      contact={contact}
+                      onContactUpdated={(updated) => {
+                        setContact(updated);
+                        onUpdated();
+                      }}
+                    />
+                  </div>
                 </div>
               </TabsContent>
 

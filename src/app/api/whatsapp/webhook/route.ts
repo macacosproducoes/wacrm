@@ -15,6 +15,7 @@ import {
   handleTemplateWebhookChange,
   isTemplateWebhookField,
 } from '@/lib/whatsapp/template-webhook'
+import { handleInboundMessageInstagram } from '@/lib/instagram-resolver'
 
 // The `after()` callback in POST runs within this route's max duration.
 // Inbound processing can fan out to per-media Meta verification calls, so
@@ -768,6 +769,16 @@ async function processMessage(
   // so the broadcast's `replied_count` advances (via the aggregate
   // trigger installed in migration 003).
   await flagBroadcastReplyIfAny(accountId, contactRecord.id)
+
+  // Auto-detect and resolve Instagram handle in background (non-blocking)
+  const inboundMessageText = contentText ?? message.text?.body ?? ''
+  if (inboundMessageText) {
+    void handleInboundMessageInstagram({
+      accountId,
+      contactId: contactRecord.id,
+      messageText: inboundMessageText,
+    }).catch((err) => console.warn('[webhook-instagram] Background resolve error:', err))
+  }
 
   // ============================================================
   // Flow runner dispatch.

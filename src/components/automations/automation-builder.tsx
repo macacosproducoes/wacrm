@@ -33,6 +33,8 @@ import {
   ArrowUp,
   MousePointerClick,
   List,
+  Palette,
+  Send,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -120,6 +122,8 @@ const STEP_META: Record<AutomationStepType, StepMeta> = {
   condition: { label: "condition", icon: GitBranch, border: "border-l-amber-500" },
   send_webhook: { label: "send_webhook", icon: Webhook, border: "border-l-primary" },
   close_conversation: { label: "close_conversation", icon: CircleSlash, border: "border-l-primary" },
+  generate_creative: { label: "generate_creative", icon: Palette, border: "border-l-primary" },
+  send_creative: { label: "send_creative", icon: Send, border: "border-l-primary" },
 }
 
 const ADDABLE_STEPS: AutomationStepType[] = [
@@ -136,6 +140,8 @@ const ADDABLE_STEPS: AutomationStepType[] = [
   "condition",
   "send_webhook",
   "close_conversation",
+  "generate_creative",
+  "send_creative",
 ]
 
 const TRIGGER_OPTIONS: { value: AutomationTriggerType }[] = [

@@ -17,6 +17,8 @@ import type {
   WaitStepConfig,
   CreateDealStepConfig,
   AssignConversationStepConfig,
+  GenerateCreativeStepConfig,
+  SendCreativeStepConfig,
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
 import { addContactTagIfAbsent } from '@/lib/contacts/tag-write'
@@ -24,6 +26,8 @@ import { MAX_TAG_CHAIN_DEPTH, getTagChainDepth } from '@/lib/contacts/tag-chain'
 import { engineSendText, engineSendTemplate, engineSendInteractive } from './meta-send'
 import { validateInteractivePayload } from '@/lib/whatsapp/interactive'
 import { isDeliverableUrl } from '@/lib/webhooks/ssrf'
+import { CreativeJobManager } from '@/lib/creative-engine/jobs'
+import { WhatsAppDeliveryProvider } from '@/lib/creative-engine/delivery/whatsapp-provider'
 
 // ------------------------------------------------------------
 // Public API
@@ -617,6 +621,102 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         .eq('account_id', args.automation.account_id)
         .eq('contact_id', args.contactId)
       return 'conversation closed'
+    }
+
+    case 'generate_creative': {
+      const cfg = step.step_config as GenerateCreativeStepConfig
+      if (!cfg.template_id) throw new Error('generate_creative needs template_id')
+
+      // Resolve contact data if available
+      let contactData: Record<string, unknown> = {}
+      if (args.contactId) {
+        const { data: contact } = await db
+          .from('contacts')
+          .select('id, name, phone, email, company, avatar_url, profile_image_url, instagram_username, instagram_url')
+          .eq('id', args.contactId)
+          .eq('account_id', args.automation.account_id)
+          .maybeSingle()
+        if (contact) {
+          const profileImg = contact.profile_image_url || contact.avatar_url || null
+          contactData = {
+            contact: {
+              ...contact,
+              profile_image: profileImg,
+            },
+            profile_image: profileImg,
+            instagram_username: contact.instagram_username,
+            instagram_url: contact.instagram_url,
+          }
+        }
+      }
+
+      const inputData = {
+        ...contactData,
+        message: { text: args.context.message_text },
+        vars: args.context.vars || {},
+        ...(cfg.input_data || {}),
+      }
+
+      const job = await CreativeJobManager.processJob({
+        accountId: args.automation.account_id,
+        templateId: cfg.template_id,
+        templateVersion: cfg.template_version,
+        sourceType: (cfg.source_type || 'AUTOMATION') as 'AUTOMATION',
+        sourceId: args.automation.id,
+        creativeType: cfg.creative_type || 'default',
+        inputData,
+      })
+
+      if (!args.context.vars) args.context.vars = {}
+      args.context.vars.creative_job_id = job.id
+      args.context.vars.creative_output_url = job.output_url || ''
+
+      return `creative generated (${job.id})`
+    }
+
+    case 'send_creative': {
+      const cfg = step.step_config as SendCreativeStepConfig
+      const jobId = (args.context.vars?.creative_job_id as string) || ''
+      if (!jobId) {
+        throw new Error('send_creative needs a creative_job_id from a previous generate_creative step')
+      }
+
+      const { data: job } = await db
+        .from('creative_jobs')
+        .select('*')
+        .eq('id', jobId)
+        .eq('account_id', args.automation.account_id)
+        .single()
+
+      if (!job) throw new Error(`creative job not found: ${jobId}`)
+
+      let recipientPhone = cfg.recipient ? interpolate(cfg.recipient, args) : ''
+      if (!recipientPhone && args.contactId) {
+        const { data: contact } = await db
+          .from('contacts')
+          .select('phone')
+          .eq('id', args.contactId)
+          .eq('account_id', args.automation.account_id)
+          .maybeSingle()
+        recipientPhone = contact?.phone || ''
+      }
+
+      if (!recipientPhone) {
+        throw new Error('send_creative could not resolve recipient phone number')
+      }
+
+      const provider = new WhatsAppDeliveryProvider()
+      const result = await provider.deliver(job, {
+        channel: cfg.channel || 'whatsapp',
+        recipient: recipientPhone,
+        caption: cfg.caption ? interpolate(cfg.caption, args) : undefined,
+      })
+
+      if (!result.success) {
+        throw new Error(`send_creative delivery failed: ${result.error}`)
+      }
+
+      return `creative delivered via WhatsApp (${result.providerMessageId || 'ok'})`
     }
 
     default:

@@ -537,7 +537,9 @@ export type AutomationStepType =
   | 'wait'
   | 'condition'
   | 'send_webhook'
-  | 'close_conversation';
+  | 'close_conversation'
+  | 'generate_creative'
+  | 'send_creative';
 
 export type AutomationLogStatus = 'success' | 'partial' | 'failed';
 
@@ -650,6 +652,20 @@ export interface SendWebhookStepConfig {
   body_template?: string;
 }
 
+export interface GenerateCreativeStepConfig {
+  template_id: string;
+  template_version?: number;
+  source_type?: string;
+  creative_type?: string;
+  input_data?: Record<string, unknown>;
+}
+
+export interface SendCreativeStepConfig {
+  channel?: string;
+  recipient?: string;
+  caption?: string;
+}
+
 export type AutomationStepConfig =
   | SendMessageStepConfig
   | SendButtonsStepConfig
@@ -662,6 +678,8 @@ export type AutomationStepConfig =
   | WaitStepConfig
   | ConditionStepConfig
   | SendWebhookStepConfig
+  | GenerateCreativeStepConfig
+  | SendCreativeStepConfig
   | Record<string, never>
   | Record<string, unknown>;
 

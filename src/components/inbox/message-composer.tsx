@@ -107,6 +107,9 @@ interface MediaDraft {
   path: string;
   filename: string;
   caption: string;
+  isUploading?: boolean;
+  uploadError?: string | null;
+  file?: File;
 }
 
 export interface InsertedTextPayload {
@@ -626,9 +629,106 @@ export function MessageComposer({
     [openInteractiveBuilder, adjustHeight, handleSendAudioWithPresence, variableContext]
   );
 
-  // File attachments
+  // Helper to detect media kind and sanitize filename
+  const detectMediaKindAndName = useCallback(
+    (file: File): { kind: ComposerMediaKind; name: string } => {
+      const type = (file.type || "").toLowerCase();
+      const name = file.name || "";
+      const ext = name.includes(".") ? name.split(".").pop()?.toLowerCase() || "" : "";
+
+      if (
+        type.startsWith("image/") ||
+        ["png", "jpg", "jpeg", "webp", "gif", "bmp"].includes(ext)
+      ) {
+        const finalExt =
+          ext || type.split("/")[1]?.replace("jpeg", "jpg") || "png";
+        const finalName =
+          name && name.includes(".") && name !== "image.png"
+            ? name
+            : `print-${Date.now()}.${finalExt}`;
+        return { kind: "image", name: finalName };
+      }
+      if (
+        type.startsWith("video/") ||
+        ["mp4", "webm", "mov", "3gp", "mkv"].includes(ext)
+      ) {
+        return {
+          kind: "video",
+          name: name || `video-${Date.now()}.${ext || "mp4"}`,
+        };
+      }
+      if (
+        type.startsWith("audio/") ||
+        ["mp3", "ogg", "wav", "m4a", "opus", "aac"].includes(ext)
+      ) {
+        return {
+          kind: "audio",
+          name: name || `audio-${Date.now()}.${ext || "ogg"}`,
+        };
+      }
+      return {
+        kind: "document",
+        name: name || `arquivo-${Date.now()}.${ext || "bin"}`,
+      };
+    },
+    []
+  );
+
+  // Background media uploader with client-side direct upload + server-side fallback
+  const uploadMediaFile = useCallback(
+    async (file: File, kind: ComposerMediaKind) => {
+      try {
+        let result: { publicUrl: string; path: string };
+        try {
+          result = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
+        } catch (clientErr) {
+          console.warn(
+            "[MediaUpload] Client upload failed, using server fallback:",
+            clientErr
+          );
+          const formData = new FormData();
+          formData.append("file", file);
+          const res = await fetch("/api/whatsapp/media/upload", {
+            method: "POST",
+            body: formData,
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.publicUrl) {
+            throw new Error(data.error || "Falha ao enviar arquivo.");
+          }
+          result = { publicUrl: data.publicUrl, path: data.path };
+        }
+
+        setDraft((prev) => {
+          if (!prev || prev.file !== file) return prev;
+          return {
+            ...prev,
+            mediaUrl: result.publicUrl,
+            path: result.path,
+            isUploading: false,
+            uploadError: null,
+          };
+        });
+      } catch (err) {
+        const msg =
+          err instanceof Error ? err.message : "Falha ao carregar mídia.";
+        setDraft((prev) => {
+          if (!prev || prev.file !== file) return prev;
+          return {
+            ...prev,
+            isUploading: false,
+            uploadError: msg,
+          };
+        });
+        toast.error(msg);
+      }
+    },
+    []
+  );
+
+  // File attachments — provides 0ms local preview then triggers background upload
   const stageUpload = useCallback(
-    async (kind: ComposerMediaKind, file: File) => {
+    (kind: ComposerMediaKind, file: File) => {
       const max = MEDIA_MAX_BYTES_BY_KIND[kind];
       if (file.size > max) {
         toast.error(
@@ -638,45 +738,36 @@ export function MessageComposer({
         );
         return;
       }
-      setBusy(true);
-      const toastId = toast.loading(
-        kind === "image"
-          ? "Carregando print/imagem..."
-          : kind === "video"
-            ? "Carregando vídeo..."
-            : "Carregando arquivo..."
-      );
-      try {
-        const { publicUrl, path } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
-        removeStaged(draftRef.current?.path);
-        const existingText = text.trim();
-        if (existingText) {
-          setText("");
-        }
-        setDraft({
-          kind,
-          mediaUrl: publicUrl,
-          path,
-          filename: file.name,
-          caption: existingText || "",
-        });
-        toast.success(kind === "image" ? "Print anexado com sucesso!" : "Mídia anexada!", {
-          id: toastId,
-        });
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Falha ao anexar mídia.", {
-          id: toastId,
-        });
-      } finally {
-        setBusy(false);
+
+      // 1. Instant local preview object URL (shows preview immediately!)
+      const localUrl = URL.createObjectURL(file);
+      removeStaged(draftRef.current?.path);
+
+      const existingText = text.trim();
+      if (existingText) {
+        setText("");
       }
+
+      setDraft({
+        kind,
+        mediaUrl: localUrl,
+        path: "",
+        filename: file.name,
+        caption: existingText || "",
+        isUploading: true,
+        uploadError: null,
+        file,
+      });
+
+      // 2. Perform upload in background
+      void uploadMediaFile(file, kind);
     },
-    [removeStaged, text]
+    [removeStaged, text, uploadMediaFile]
   );
 
   const handlePicked = useCallback(
     (kind: "image" | "video" | "document", file: File | undefined) => {
-      if (file) void stageUpload(kind, file);
+      if (file) stageUpload(kind, file);
     },
     [stageUpload]
   );
@@ -684,36 +775,9 @@ export function MessageComposer({
   // Clipboard & Paste Handling (Ctrl+V prints, screenshots, files)
   const processClipboardData = useCallback(
     (data: DataTransfer | null): boolean => {
-      if (!data || inputsDisabled || busy) return false;
+      if (!data || inputsDisabled) return false;
 
-      // 1. Check data.files (direct pasted files or dragged files)
-      const files = data.files;
-      if (files && files.length > 0) {
-        for (let i = 0; i < files.length; i++) {
-          const file = files[i];
-          if (file.type.startsWith("image/")) {
-            const ext = file.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
-            const fileName =
-              file.name && file.name.includes(".") && file.name !== "image.png"
-                ? file.name
-                : `print-${Date.now()}.${ext}`;
-            const namedFile = new File([file], fileName, { type: file.type || "image/png" });
-            void stageUpload("image", namedFile);
-            return true;
-          } else if (file.type.startsWith("video/")) {
-            void stageUpload("video", file);
-            return true;
-          } else if (file.type.startsWith("audio/")) {
-            void stageUpload("audio", file);
-            return true;
-          } else if (file.size > 0 && file.type) {
-            void stageUpload("document", file);
-            return true;
-          }
-        }
-      }
-
-      // 2. Check data.items (handles OS screenshots, Windows Snipping Tool, Print Screen)
+      // 1. Check data.items first (handles OS screenshots, Windows Snipping Tool, Print Screen)
       const items = data.items;
       if (items && items.length > 0) {
         for (let i = 0; i < items.length; i++) {
@@ -721,33 +785,40 @@ export function MessageComposer({
           if (item.kind === "file") {
             const file = item.getAsFile();
             if (file) {
-              if (file.type.startsWith("image/")) {
-                const ext = file.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
-                const fileName =
-                  file.name && file.name.includes(".") && file.name !== "image.png"
-                    ? file.name
-                    : `print-${Date.now()}.${ext}`;
-                const namedFile = new File([file], fileName, { type: file.type || "image/png" });
-                void stageUpload("image", namedFile);
-                return true;
-              } else if (file.type.startsWith("video/")) {
-                void stageUpload("video", file);
-                return true;
-              } else if (file.type.startsWith("audio/")) {
-                void stageUpload("audio", file);
-                return true;
-              } else {
-                void stageUpload("document", file);
-                return true;
-              }
+              const { kind, name } = detectMediaKindAndName(file);
+              const namedFile = new File([file], name, {
+                type:
+                  file.type ||
+                  (kind === "image"
+                    ? "image/png"
+                    : "application/octet-stream"),
+              });
+              stageUpload(kind, namedFile);
+              return true;
             }
           }
         }
       }
 
+      // 2. Check data.files (direct pasted files or dragged files)
+      const files = data.files;
+      if (files && files.length > 0) {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const { kind, name } = detectMediaKindAndName(file);
+          const namedFile = new File([file], name, {
+            type:
+              file.type ||
+              (kind === "image" ? "image/png" : "application/octet-stream"),
+          });
+          stageUpload(kind, namedFile);
+          return true;
+        }
+      }
+
       return false;
     },
-    [inputsDisabled, busy, stageUpload]
+    [inputsDisabled, detectMediaKindAndName, stageUpload]
   );
 
   const handlePaste = useCallback(
@@ -937,6 +1008,18 @@ export function MessageComposer({
 
   const sendDraft = useCallback(() => {
     if (!draft || busy) return;
+    if (draft.isUploading) {
+      toast.info("Aguarde o carregamento da mídia terminar...");
+      return;
+    }
+    if (draft.uploadError) {
+      toast.error(draft.uploadError);
+      return;
+    }
+    if (!draft.mediaUrl || draft.mediaUrl.startsWith("blob:")) {
+      toast.error("Mídia ainda está sendo enviada ao servidor.");
+      return;
+    }
     onSendMedia({
       kind: draft.kind,
       mediaUrl: draft.mediaUrl,
@@ -950,9 +1033,14 @@ export function MessageComposer({
   }, [draft, busy, onSendMedia, replyTo?.id, onClearReply]);
 
   const discardDraft = useCallback(() => {
+    if (draft?.mediaUrl?.startsWith("blob:")) {
+      try {
+        URL.revokeObjectURL(draft.mediaUrl);
+      } catch {}
+    }
     removeStaged(draft?.path);
     setDraft(null);
-  }, [draft?.path, removeStaged]);
+  }, [draft, removeStaged]);
 
   const setCaption = useCallback((caption: string) => {
     setDraft((d) => (d ? { ...d, caption } : d));
@@ -1122,6 +1210,14 @@ export function MessageComposer({
           onCaptionChange={setCaption}
           onDiscard={discardDraft}
           onSend={sendDraft}
+          onRetry={() => {
+            if (draft.file) {
+              setDraft((d) =>
+                d ? { ...d, isUploading: true, uploadError: null } : null
+              );
+              void uploadMediaFile(draft.file, draft.kind);
+            }
+          }}
           t={t}
         />
       ) : recording ? (
@@ -1347,6 +1443,7 @@ function MediaDraftPreview({
   onCaptionChange,
   onDiscard,
   onSend,
+  onRetry,
   t,
 }: {
   draft: MediaDraft;
@@ -1355,22 +1452,25 @@ function MediaDraftPreview({
   onCaptionChange: (caption: string) => void;
   onDiscard: () => void;
   onSend: () => void;
+  onRetry?: () => void;
   t: ReturnType<typeof useTranslations>;
 }) {
+  const isPendingUpload = Boolean(draft.isUploading || busy);
+
   return (
-    <div className="rounded-xl border border-border bg-muted/40 p-3">
+    <div className="rounded-xl border border-border bg-muted/40 p-3 shadow-xs">
       <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
+        <div className="relative min-w-0 flex-1">
           {draft.kind === "image" && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={draft.mediaUrl}
               alt={draft.filename}
-              className="max-h-40 rounded-lg object-cover"
+              className="max-h-48 rounded-lg object-contain bg-background/50 border border-border/50"
             />
           )}
           {draft.kind === "video" && (
-            <video src={draft.mediaUrl} controls className="max-h-40 rounded-lg" />
+            <video src={draft.mediaUrl} controls className="max-h-48 rounded-lg" />
           )}
           {draft.kind === "audio" && (
             <audio src={draft.mediaUrl} controls className="w-full" />
@@ -1381,16 +1481,38 @@ function MediaDraftPreview({
               <span className="truncate">{draft.filename}</span>
             </div>
           )}
+
+          {draft.isUploading && (
+            <div className="absolute top-2 left-2 flex items-center gap-1.5 rounded-full bg-black/80 px-2.5 py-1 text-xs text-white backdrop-blur-xs shadow-md">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+              <span>Processando mídia...</span>
+            </div>
+          )}
         </div>
         <button
           type="button"
           onClick={onDiscard}
           aria-label={t("removeAttachment")}
-          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer"
         >
           <X className="h-4 w-4" />
         </button>
       </div>
+
+      {draft.uploadError && (
+        <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+          <span className="truncate">{draft.uploadError}</span>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="shrink-0 font-medium underline hover:opacity-80 cursor-pointer"
+            >
+              Tentar novamente
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="mt-2 flex items-end gap-2">
         {draft.kind !== "audio" && (
@@ -1405,6 +1527,7 @@ function MediaDraftPreview({
               }
             }}
             placeholder={t("addCaption")}
+            disabled={readOnly}
             className="flex-1 rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50"
           />
         )}
@@ -1412,14 +1535,19 @@ function MediaDraftPreview({
           size="sm"
           canAct={!readOnly}
           gateReason="send messages"
-          disabled={busy}
+          disabled={isPendingUpload || Boolean(draft.uploadError)}
           onClick={onSend}
           className={cn(
             "h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90 disabled:opacity-40",
             draft.kind === "audio" && "ml-auto"
           )}
+          title={isPendingUpload ? "Carregando mídia..." : "Enviar mídia"}
         >
-          <Send className="h-4 w-4" />
+          {isPendingUpload ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Send className="h-4 w-4" />
+          )}
         </GatedButton>
       </div>
     </div>

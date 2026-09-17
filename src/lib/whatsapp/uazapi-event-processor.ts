@@ -14,6 +14,7 @@ import {
   updateConversationWithMessage,
   isGenericContactName,
 } from '@/lib/whatsapp/conversation-helpers';
+import { handleInboundMessageInstagram } from '@/lib/instagram-resolver';
 
 async function downloadUazApiMediaDirect(
   baseUrl: string,
@@ -638,6 +639,15 @@ export async function processUazApiEvent(
   if (!contactId) {
     console.error('[UazAPI Webhook] findOrCreateContact error for phone:', formattedPhone);
     return { success: false, reason: 'failed_to_resolve_contact' };
+  }
+
+  // Auto-detect and resolve Instagram handle in background (non-blocking)
+  if (messageText && !fromMe) {
+    void handleInboundMessageInstagram({
+      accountId: connection.account_id,
+      contactId,
+      messageText,
+    }).catch((err) => console.warn('[uazapi-instagram] Background resolve error:', err));
   }
 
   const rawPic = (msgData.profilePicUrl ||
