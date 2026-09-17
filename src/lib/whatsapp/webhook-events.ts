@@ -88,9 +88,9 @@ export class WebhookEventManager {
   }
 
   /**
-   * Updates status to PROCESSING, COMPLETED, or FAILED
+   * Updates status to QUEUED, PROCESSING, COMPLETED, or FAILED
    */
-  static async updateStatus(traceId: string, status: 'PROCESSING' | 'COMPLETED' | 'FAILED', error?: string): Promise<void> {
+  static async updateStatus(traceId: string, status: 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED', error?: string): Promise<void> {
     try {
       const admin = supabaseAdmin();
       const updates: Record<string, unknown> = {

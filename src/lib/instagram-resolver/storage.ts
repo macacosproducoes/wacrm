@@ -6,7 +6,6 @@
  */
 
 import crypto from 'crypto';
-import sharp from 'sharp';
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { isDeliverableUrl } from '@/lib/webhooks/ssrf';
 
@@ -84,7 +83,8 @@ export class InstagramImageStorage {
     }
 
     // 3. Inspect real image bytes using Sharp (ensures valid JPEG/PNG/WebP, not disguised executable)
-    const imageInstance = sharp(rawBuffer);
+    const sharpModule = (await import('sharp')).default;
+    const imageInstance = sharpModule(rawBuffer);
     const metadata = await imageInstance.metadata();
 
     if (!metadata.format || !['jpeg', 'png', 'webp', 'svg', 'gif'].includes(metadata.format)) {
@@ -138,7 +138,8 @@ export class InstagramImageStorage {
       .from(STORAGE_BUCKET)
       .getPublicUrl(path);
 
-    const meta = await sharp(buffer).metadata();
+    const sharpModule = (await import('sharp')).default;
+    const meta = await sharpModule(buffer).metadata();
 
     return {
       publicUrl: urlData.publicUrl,

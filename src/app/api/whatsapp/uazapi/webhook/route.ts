@@ -1,8 +1,7 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { createClient as createAdminClient } from '@supabase/supabase-js';
 import { TraceLogger } from '@/lib/whatsapp/trace';
 import { WebhookEventManager } from '@/lib/whatsapp/webhook-events';
-import { processUazApiEvent } from '@/lib/whatsapp/uazapi-event-processor';
 
 function supabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -33,12 +32,15 @@ export async function GET() {
 /**
  * POST /api/whatsapp/uazapi/webhook
  *
- * Ultra-low latency webhook handler:
+ * Ultra-low latency webhook pipeline:
  * 1. RECEIVE & VALIDATE (< 10ms)
  * 2. IDEMPOTENCY CHECK (< 20ms)
- * 3. PERSIST MESSAGE SYNCHRONOUSLY TO POSTGRES (< 200ms)
- *    -> Instantly triggers Supabase Realtime WebSocket broadcast to all open frontends (< 700ms)
- * 4. DISPATCH AGENT & RETURN 200 OK ACK TO UAZAPI (< 300ms total)
+ * 3. PERSIST MESSAGE SYNCHRONOUSLY TO SUPABASE POSTGRES (< 150ms)
+ *    -> Instantly triggers Postgres WAL -> Supabase Realtime WebSocket broadcast (< 700ms)
+ * 4. QUEUED STATUS RECORDED
+ * 5. RETURN 200 OK ACK TO UAZAPI (< 200ms total HTTP turnaround)
+ * 6. AFTER() BACKGROUND TASK: QUEUED -> PROCESSING -> AGENT -> COMPLETED
+ *    (Serverless-safe background execution, works even if browser/CRM is completely closed!)
  */
 export async function POST(request: Request) {
   const t0 = performance.now();
@@ -102,22 +104,62 @@ export async function POST(request: Request) {
       if (data) connectionHint = data;
     }
 
-    // 2. Synchronously persist to database and trigger agent (< 250ms)
+    // 2. Synchronously persist to database (< 150ms)
     // Guarantees the message row is in Supabase Postgres BEFORE returning 200 OK to UAZAPI.
-    // This fires Postgres WAL -> Supabase Realtime WebSocket broadcast directly to all open CRMs!
-    await WebhookEventManager.updateStatus(traceId, 'PROCESSING');
-    const processResult = await processUazApiEvent(body, connectionHint, { traceId });
-    await WebhookEventManager.updateStatus(traceId, 'COMPLETED');
+    // This immediately fires Postgres WAL -> Supabase Realtime WebSocket broadcast directly to all open CRMs!
+    const { processUazApiEvent } = await import('@/lib/whatsapp/uazapi-event-processor');
+    const processResult = await processUazApiEvent(body, connectionHint, {
+      traceId,
+      skipAiDispatch: true, // We delegate AI execution to after() so HTTP response returns instantly
+    });
+
+    // 3. Mark event state QUEUED
+    await WebhookEventManager.updateStatus(traceId, 'QUEUED');
+
+    // 4. Delegate AI Agent execution to Next.js serverless-safe after()
+    // This keeps the Vercel Lambda alive until the AI response is delivered,
+    // independent of whether the CRM frontend is open or closed!
+    if (processResult.shouldTriggerAi && processResult.conversationId && processResult.accountId && processResult.userId) {
+      after(async () => {
+        try {
+          await WebhookEventManager.updateStatus(traceId, 'PROCESSING');
+          TraceLogger.log(traceId, '04', 'AGENT TRIGGERED', {
+            conversationId: processResult.conversationId,
+            text: processResult.messageText,
+          });
+
+          const { dispatchInboundToAiReply } = await import('@/lib/ai/auto-reply');
+          await dispatchInboundToAiReply({
+            accountId: processResult.accountId!,
+            conversationId: processResult.conversationId!,
+            contactId: processResult.contactId!,
+            configOwnerUserId: processResult.userId!,
+            messageId: processResult.messageId,
+            immediate: true,
+          });
+
+          await WebhookEventManager.updateStatus(traceId, 'COMPLETED');
+          console.log(`[TRACE ${traceId}] AI auto-reply completed in after() execution context.`);
+        } catch (agentErr: any) {
+          console.error(`[TRACE ${traceId}] Error in after() AI execution:`, agentErr);
+          await WebhookEventManager.updateStatus(traceId, 'FAILED', agentErr?.message || String(agentErr));
+        }
+      });
+    } else {
+      // Non-AI event (e.g. status ack or outgoing message)
+      await WebhookEventManager.updateStatus(traceId, 'COMPLETED');
+    }
 
     const tTotal = performance.now() - t0;
-    console.log(`[TRACE ${traceId}] Inbound message pipeline completed synchronously in ${tTotal.toFixed(2)}ms`);
+    console.log(`[TRACE ${traceId}] Inbound message persisted to DB & ACKed to UAZAPI in ${tTotal.toFixed(2)}ms`);
 
-    // 3. Instant 200 OK ACK to UAZAPI
+    // 5. Instant 200 OK ACK to UAZAPI
     return NextResponse.json({
       status: 'ok',
       trace_id: traceId,
       received: true,
-      processed: processResult.success,
+      persisted: processResult.success,
+      queued: processResult.shouldTriggerAi,
       conversation_id: processResult.conversationId,
       latency_ms: Math.round(tTotal),
     }, { status: 200 });

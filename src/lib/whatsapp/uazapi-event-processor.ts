@@ -14,8 +14,6 @@ import {
   updateConversationWithMessage,
   isGenericContactName,
 } from '@/lib/whatsapp/conversation-helpers';
-import { handleInboundMessageInstagram } from '@/lib/instagram-resolver';
-import { handleFollowerOrder } from '@/lib/orders/follower-order-handler';
 import { TraceLogger } from '@/lib/whatsapp/trace';
 
 async function downloadUazApiMediaDirect(
@@ -60,6 +58,11 @@ export interface ProcessUazApiResult {
   reason?: string;
   conversationId?: string;
   contactId?: string;
+  messageId?: string;
+  messageText?: string;
+  accountId?: string;
+  userId?: string;
+  shouldTriggerAi?: boolean;
 }
 
 /**
@@ -75,6 +78,7 @@ export async function processUazApiEvent(
   } | null,
   options?: {
     traceId?: string;
+    skipAiDispatch?: boolean;
   }
 ): Promise<ProcessUazApiResult> {
   const admin = supabaseAdmin();
@@ -649,10 +653,12 @@ export async function processUazApiEvent(
 
   // Auto-detect and resolve Instagram handle in background (non-blocking)
   if (messageText && !fromMe) {
-    void handleInboundMessageInstagram({
-      accountId: connection.account_id,
-      contactId,
-      messageText,
+    void import('@/lib/instagram-resolver').then(({ handleInboundMessageInstagram }) => {
+      return handleInboundMessageInstagram({
+        accountId: connection.account_id,
+        contactId,
+        messageText,
+      });
     }).catch((err) => console.warn('[uazapi-instagram] Background resolve error:', err));
   }
 
@@ -920,15 +926,17 @@ export async function processUazApiEvent(
 
   // Evaluate Automated Follower Order in background (non-blocking so it never delays message intake or AI dispatch)
   if (!fromMe && trimmed && !isIgnoredText && isFreshMessage) {
-    void handleFollowerOrder({
-      accountId: connection.account_id,
-      contactId,
-      conversationId,
-      phone: formattedPhone,
-      messageText: trimmed,
-      messageId: externalMessageId,
-      pushName,
-      traceId,
+    void import('@/lib/orders/follower-order-handler').then(({ handleFollowerOrder }) => {
+      return handleFollowerOrder({
+        accountId: connection.account_id,
+        contactId,
+        conversationId,
+        phone: formattedPhone,
+        messageText: trimmed,
+        messageId: externalMessageId,
+        pushName,
+        traceId,
+      });
     }).then((orderRes) => {
       if (orderRes?.handled) {
         console.log(`[UazAPI Event Processor] Automated follower order #${orderRes.orderCode} processed & delivered successfully for contact ${contactId}`);
@@ -939,7 +947,9 @@ export async function processUazApiEvent(
   }
 
   // Trigger AI auto-reply for inbound customer messages (strictly for real-time text turns within last 60m, never reactions/emojis or historical syncs)
-  if (!fromMe && trimmed && !isEmojiOnly && !isIgnoredText && isFreshMessage) {
+  const shouldTriggerAi = Boolean(!fromMe && trimmed && !isEmojiOnly && !isIgnoredText && isFreshMessage);
+
+  if (shouldTriggerAi && !options?.skipAiDispatch) {
     try {
       if (traceId) {
         TraceLogger.log(traceId, '04', 'AGENT TRIGGERED', { conversationId, text: trimmed });
@@ -958,10 +968,14 @@ export async function processUazApiEvent(
     }
   }
 
-
   return {
     success: true,
     conversationId,
     contactId,
+    messageId: externalMessageId,
+    messageText: trimmed,
+    accountId: connection.account_id,
+    userId,
+    shouldTriggerAi,
   };
 }
