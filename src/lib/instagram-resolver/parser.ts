@@ -7,7 +7,7 @@
 
 import type { InstagramIdentifierResult } from './types';
 
-// Reserved Instagram path names that are not usernames
+// Reserved Instagram path names and common conversation/payment stop-words that are never usernames
 const RESERVED_PATHS = new Set([
   'p',
   'reel',
@@ -27,6 +27,42 @@ const RESERVED_PATHS = new Set([
   'graphql',
   'directory',
   'download',
+  // Common Brazilian conversation / payment keywords that must never be mistaken for handles
+  'pix',
+  'cartao',
+  'cartão',
+  'boleto',
+  'pagamento',
+  'pago',
+  'paguei',
+  'contato',
+  'whatsapp',
+  'dinheiro',
+  'ted',
+  'doc',
+  'ola',
+  'olá',
+  'obrigado',
+  'quero',
+  'seguidores',
+  'preco',
+  'preço',
+  'valor',
+  'comprei',
+  'tabela',
+  'catalogo',
+  'catálogo',
+  'teste',
+  'sim',
+  'nao',
+  'não',
+  'eu',
+  'ele',
+  'ela',
+  'nos',
+  'nós',
+  'voce',
+  'você',
 ]);
 
 /**
@@ -164,16 +200,19 @@ export function extractInstagramIdentifier(text: string | null | undefined): Ins
   }
 
   // 3. Match contextual phrases like "insta: joaosilva" or "instagram é joaosilva"
-  const contextRegex = /(?:insta(?:gram)?|perfil)\s*(?:é|e|:|-|=|\s)\s*([a-zA-Z0-9._]{2,30})\b/gi;
-  while ((match = contextRegex.exec(rawText)) !== null) {
-    const candidate = match[1];
-    const parsed = parseInstagramUsername(candidate);
-    if (parsed) {
-      detectedUsernames.add(parsed);
+  // ONLY if no explicit URL or @mention was found (prevents false matches on message body words like "pix")
+  if (detectedUsernames.size === 0) {
+    const contextRegex = /(?:insta(?:gram)?|perfil)\s*(?:é|e|:|-|=|\s)\s*([a-zA-Z0-9._]{2,30})\b/gi;
+    while ((match = contextRegex.exec(rawText)) !== null) {
+      const candidate = match[1];
+      const parsed = parseInstagramUsername(candidate);
+      if (parsed) {
+        detectedUsernames.add(parsed);
+      }
     }
   }
 
-  // If text is purely a naked username (single word without spaces, e.g. "joaosilva")
+  // 4. If text is purely a naked username (single word without spaces, e.g. "joaosilva")
   if (detectedUsernames.size === 0 && /^[a-zA-Z0-9._]{3,30}$/.test(rawText)) {
     const parsed = parseInstagramUsername(rawText);
     if (parsed) {

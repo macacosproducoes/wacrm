@@ -15,11 +15,13 @@ import { parseInstagramUsername, buildInstagramProfileUrl } from '../parser';
 
 const REQUEST_TIMEOUT_MS = 8000;
 
-// High-fidelity User-Agent (simulates social preview fetcher / modern desktop browser)
+// Whitelisted social preview crawlers (Instagram guarantees public Open Graph metadata without 429 or login walls)
 const USER_AGENTS = [
-  'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'WhatsApp/2.21.12.21 A',
+  'Twitterbot/1.0',
+  'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+  'TelegramBot (like TwitterBot)',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15 (Applebot/0.1; +http://www.apple.com/bot.html)',
 ];
 
 function decodeHtmlEntities(str: string): string {

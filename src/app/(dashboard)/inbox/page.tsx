@@ -93,11 +93,10 @@ function InboxPageInner() {
     });
   }, []);
 
-  // Fire the deep-link auto-select exactly once per URL — subsequent
-  // list refreshes (realtime, manual refetch) must not snap the user
-  // back to the deep-linked conversation if they've already clicked
-  // elsewhere.
-  const autoSelectedForDeepLinkRef = useRef<string | null>(null);
+  // Fire the deep-link auto-select strictly ONCE on initial mount —
+  // subsequent list updates, realtime events, or manual selections must never
+  // snap the user back to the deep-linked conversation.
+  const initialDeepLinkConsumedRef = useRef(false);
 
   // In-memory cache of messages by conversation ID to eliminate delay and flickering when switching chats
   const messagesCacheRef = useRef<Map<string, Message[]>>(new Map());
@@ -278,16 +277,6 @@ function InboxPageInner() {
   useEffect(() => {
     void checkConnection();
   }, [checkConnection, resyncToken]);
-
-  // Periodic background resync (every 10s when tab is visible) as a safety net
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (typeof document !== "undefined" && document.visibilityState === "visible") {
-        setResyncToken((n) => n + 1);
-      }
-    }, 10000);
-    return () => clearInterval(timer);
-  }, []);
 
   // Handle realtime message events
   const handleMessageEvent = useCallback(
@@ -489,7 +478,6 @@ function InboxPageInner() {
           old: {},
         });
       }
-      setResyncToken((n) => n + 1);
     }, [handleMessageEvent]),
   });
 
@@ -509,24 +497,15 @@ function InboxPageInner() {
       // Resolve a pending deep-link here rather than in an effect — this
       // is an event handler, so the setState calls below are allowed by
       // react-hooks/set-state-in-effect. Runs once per ?c=<id> URL value
-      // via the ref, so realtime refreshes of the list can't snap the
-      // user back to the deep-linked thread after they've navigated.
+      // Resolve a pending deep-link strictly ONCE on initial mount.
+      // Subsequent realtime list refreshes or manual selections must never
+      // snap the user back to the initial deep-link.
       if (
         deepLinkConvId &&
-        autoSelectedForDeepLinkRef.current !== deepLinkConvId &&
+        !initialDeepLinkConsumedRef.current &&
         loaded.length > 0
       ) {
-        autoSelectedForDeepLinkRef.current = deepLinkConvId;
-        // If the deep-linked conversation is already the active one
-        // (e.g. because the user clicked it in the list and we
-        // router.replace()'d the URL, which made the ConversationList
-        // refetch and land us back here), do NOT re-apply it. Doing so
-        // would setMessages([]) on a thread whose messages have
-        // already been loaded by MessageThread — and because
-        // conversationId didn't change, MessageThread wouldn't
-        // refetch. The thread would read "No messages yet" until a
-        // full page reload rehydrated state from scratch.
-        if (activeConversation?.id === deepLinkConvId) return;
+        initialDeepLinkConsumedRef.current = true;
         const match = loaded.find((c) => c.id === deepLinkConvId);
         if (match) {
           setActiveConversation(match);
@@ -537,10 +516,6 @@ function InboxPageInner() {
           } else {
             setMessages([]);
           }
-          // Mirror the optimistic unread reset that handleSelectConversation
-          // does — the user just deep-linked into this conv, treat that the
-          // same as a click. Leaves activeConversation.unread_count alone so
-          // the MessageThread reset effect still fires the server UPDATE.
           if (match.unread_count > 0) {
             setConversations((prev) =>
               prev.map((c) =>
@@ -551,15 +526,12 @@ function InboxPageInner() {
         }
       }
     },
-    [deepLinkConvId, activeConversation?.id]
+    [deepLinkConvId]
   );
 
   const handleSelectConversation = useCallback(
     (conv: Conversation) => {
-      // Re-clicking the already-active conversation would clear the
-      // messages array, but the fetch effect in MessageThread only re-runs
-      // when conversationId changes — so messages would stay empty until
-      // the user navigated away and back. Bail out early instead.
+      // Re-clicking the already-active conversation is a no-op
       if (activeConversation?.id === conv.id) return;
       setActiveConversation(conv);
       setActiveContact(conv.contact ?? null);
@@ -580,29 +552,31 @@ function InboxPageInner() {
             : c,
         ),
       );
-      // Record the selection on the deep-link ref BEFORE we change the
-      // URL.
-      autoSelectedForDeepLinkRef.current = conv.id;
-      // Reflect the selection in the URL so a refresh lands the user
-      // back in the same thread, and so copy-paste links work. Use
-      // replace() to avoid polluting browser history with every click.
-      router.replace(`/inbox?c=${conv.id}`, { scroll: false });
+
+      // Deep link is consumed — user is actively navigating
+      initialDeepLinkConsumedRef.current = true;
+
+      // Update URL silently in browser history so refresh preserves conversation
+      // without triggering Next.js route re-renders or navigation race conditions
+      if (typeof window !== "undefined") {
+        window.history.replaceState(null, "", `/inbox?c=${conv.id}`);
+      }
     },
-    [activeConversation?.id, router]
+    [activeConversation?.id]
   );
 
   // Mobile "back" — deselect the conversation so the list pane comes
-  // back. Also clears the ?c= param so a refresh lands on the list
+  // back. Also clears the ?c= param silently so a refresh lands on the list
   // instead of re-opening the thread the user just backed out of.
   const handleCloseConversation = useCallback(() => {
     setActiveConversation(null);
     setActiveContact(null);
     setMessages([]);
-    // Clearing the ref lets the deep-link auto-selector fire again if
-    // the user later visits /inbox?c=<same-id> — desirable UX.
-    autoSelectedForDeepLinkRef.current = null;
-    router.replace("/inbox", { scroll: false });
-  }, [router]);
+    initialDeepLinkConsumedRef.current = true;
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", "/inbox");
+    }
+  }, []);
 
 
   const handleMessagesLoaded = useCallback((loaded: Message[]) => {
