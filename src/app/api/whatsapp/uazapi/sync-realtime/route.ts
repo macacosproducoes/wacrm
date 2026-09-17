@@ -205,12 +205,13 @@ async function handleSync(request: Request) {
         let contactId = matchedConv?.contact_id;
 
         if (!convId || !contactId) {
-          const contactName = String(chat.wa_name || chat.name || `+${formattedPhone}`);
+          const candidateName = String(chat.wa_name || chat.name || chat.wa_contactName || '').trim();
           const resolvedContactId = await findOrCreateContact(admin, {
             accountId,
             userId: user.id,
             phone: formattedPhone,
-            name: contactName,
+            name: candidateName || undefined,
+            instanceName: conn.display_name,
           });
           if (!resolvedContactId) return;
           contactId = resolvedContactId;

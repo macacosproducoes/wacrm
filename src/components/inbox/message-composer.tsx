@@ -632,24 +632,46 @@ export function MessageComposer({
       const max = MEDIA_MAX_BYTES_BY_KIND[kind];
       if (file.size > max) {
         toast.error(
-          `File is ${(file.size / 1024 / 1024).toFixed(1)} MB — ${kind} limit is ${Math.round(
+          `Arquivo tem ${(file.size / 1024 / 1024).toFixed(1)} MB — limite para ${kind} é ${Math.round(
             max / 1024 / 1024
           )} MB.`
         );
         return;
       }
       setBusy(true);
+      const toastId = toast.loading(
+        kind === "image"
+          ? "Carregando print/imagem..."
+          : kind === "video"
+            ? "Carregando vídeo..."
+            : "Carregando arquivo..."
+      );
       try {
         const { publicUrl, path } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
         removeStaged(draftRef.current?.path);
-        setDraft({ kind, mediaUrl: publicUrl, path, filename: file.name, caption: "" });
+        const existingText = text.trim();
+        if (existingText) {
+          setText("");
+        }
+        setDraft({
+          kind,
+          mediaUrl: publicUrl,
+          path,
+          filename: file.name,
+          caption: existingText || "",
+        });
+        toast.success(kind === "image" ? "Print anexado com sucesso!" : "Mídia anexada!", {
+          id: toastId,
+        });
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Upload failed.");
+        toast.error(err instanceof Error ? err.message : "Falha ao anexar mídia.", {
+          id: toastId,
+        });
       } finally {
         setBusy(false);
       }
     },
-    [removeStaged]
+    [removeStaged, text]
   );
 
   const handlePicked = useCallback(
@@ -657,6 +679,153 @@ export function MessageComposer({
       if (file) void stageUpload(kind, file);
     },
     [stageUpload]
+  );
+
+  // Clipboard & Paste Handling (Ctrl+V prints, screenshots, files)
+  const processClipboardData = useCallback(
+    (data: DataTransfer | null): boolean => {
+      if (!data || inputsDisabled || busy) return false;
+
+      // 1. Check data.files (direct pasted files or dragged files)
+      const files = data.files;
+      if (files && files.length > 0) {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          if (file.type.startsWith("image/")) {
+            const ext = file.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
+            const fileName =
+              file.name && file.name.includes(".") && file.name !== "image.png"
+                ? file.name
+                : `print-${Date.now()}.${ext}`;
+            const namedFile = new File([file], fileName, { type: file.type || "image/png" });
+            void stageUpload("image", namedFile);
+            return true;
+          } else if (file.type.startsWith("video/")) {
+            void stageUpload("video", file);
+            return true;
+          } else if (file.type.startsWith("audio/")) {
+            void stageUpload("audio", file);
+            return true;
+          } else if (file.size > 0 && file.type) {
+            void stageUpload("document", file);
+            return true;
+          }
+        }
+      }
+
+      // 2. Check data.items (handles OS screenshots, Windows Snipping Tool, Print Screen)
+      const items = data.items;
+      if (items && items.length > 0) {
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (item.kind === "file") {
+            const file = item.getAsFile();
+            if (file) {
+              if (file.type.startsWith("image/")) {
+                const ext = file.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
+                const fileName =
+                  file.name && file.name.includes(".") && file.name !== "image.png"
+                    ? file.name
+                    : `print-${Date.now()}.${ext}`;
+                const namedFile = new File([file], fileName, { type: file.type || "image/png" });
+                void stageUpload("image", namedFile);
+                return true;
+              } else if (file.type.startsWith("video/")) {
+                void stageUpload("video", file);
+                return true;
+              } else if (file.type.startsWith("audio/")) {
+                void stageUpload("audio", file);
+                return true;
+              } else {
+                void stageUpload("document", file);
+                return true;
+              }
+            }
+          }
+        }
+      }
+
+      return false;
+    },
+    [inputsDisabled, busy, stageUpload]
+  );
+
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const handled = processClipboardData(e.clipboardData);
+      if (handled) {
+        e.preventDefault();
+      }
+    },
+    [processClipboardData]
+  );
+
+  // Global window paste listener when composer is active
+  useEffect(() => {
+    const handleGlobalPaste = (e: ClipboardEvent) => {
+      // Don't steal paste if user is typing in another input or modal
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        target !== textareaRef.current &&
+        (target.tagName === "INPUT" || target.tagName === "SELECT" || target.isContentEditable)
+      ) {
+        return;
+      }
+      const handled = processClipboardData(e.clipboardData);
+      if (handled) {
+        e.preventDefault();
+      }
+    };
+
+    window.addEventListener("paste", handleGlobalPaste);
+    return () => {
+      window.removeEventListener("paste", handleGlobalPaste);
+    };
+  }, [processClipboardData]);
+
+  // Drag and Drop media onto composer
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+
+  const handleDragOver = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!inputsDisabled && !busy) {
+        setIsDraggingOver(true);
+      }
+    },
+    [inputsDisabled, busy]
+  );
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(false);
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDraggingOver(false);
+      if (inputsDisabled || busy) return;
+
+      const files = e.dataTransfer?.files;
+      if (files && files.length > 0) {
+        const file = files[0];
+        if (file.type.startsWith("image/")) {
+          void stageUpload("image", file);
+        } else if (file.type.startsWith("video/")) {
+          void stageUpload("video", file);
+        } else if (file.type.startsWith("audio/")) {
+          void stageUpload("audio", file);
+        } else {
+          void stageUpload("document", file);
+        }
+      }
+    },
+    [inputsDisabled, busy, stageUpload]
   );
 
   // In-composer live mic recording
@@ -790,7 +959,24 @@ export function MessageComposer({
   }, []);
 
   return (
-    <div className="relative border-t border-border bg-card p-3">
+    <div
+      className={cn(
+        "relative border-t border-border bg-card p-3 transition-colors",
+        isDraggingOver && "border-dashed border-primary bg-primary/5"
+      )}
+      onPaste={handlePaste}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDraggingOver && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-card/95 backdrop-blur-xs">
+          <p className="flex items-center gap-2 text-sm font-medium text-primary">
+            <ImageIcon className="h-5 w-5" />
+            Solte a imagem ou arquivo aqui para anexar
+          </p>
+        </div>
+      )}
       {/* Floating Slash Command Autocomplete Popover */}
       <SlashCommandMenu
         open={showSlashMenu}
@@ -1067,12 +1253,13 @@ export function MessageComposer({
             value={text}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder={
               readOnly
                 ? t("readOnlyPlaceholder")
                 : effectivelyExpired
                   ? t("sessionExpiredPlaceholder")
-                  : "Digite uma mensagem ou digite / para respostas rápidas..."
+                  : "Digite uma mensagem ou cole um print (Ctrl+V)..."
             }
             disabled={effectivelyExpired || readOnly}
             rows={1}
@@ -1097,9 +1284,14 @@ export function MessageComposer({
       )}
 
       {!draft && !recording && !simulatingAudio && (
-        <p className="mt-1 pl-[7.5rem] text-[10px] text-muted-foreground">
-          Dica: Digite <span className="font-mono text-emerald-500 font-semibold">/</span> para abrir o menu do ZapPlus com atalhos de áudios e textos
-        </p>
+        <div className="mt-1 pl-[7.5rem] pr-2 flex items-center justify-between text-[10px] text-muted-foreground">
+          <p>
+            Dica: Digite <span className="font-mono text-emerald-500 font-semibold">/</span> para abrir o menu do ZapPlus
+          </p>
+          <p className="hidden sm:inline-flex items-center gap-1 text-muted-foreground/80">
+            Cole print/mídia com <kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[9px] border border-border">Ctrl+V</kbd>
+          </p>
+        </div>
       )}
 
       {/* Interactive message builder dialog */}

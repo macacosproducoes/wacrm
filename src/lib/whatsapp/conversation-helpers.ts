@@ -12,6 +12,8 @@ export interface FindOrCreateContactParams {
   userId: string;
   phone: string;
   name?: string | null;
+  instanceName?: string | null;
+  avatarUrl?: string | null;
 }
 
 export interface FindOrCreateConversationParams {
@@ -37,6 +39,41 @@ export function normalizePhoneDigits(phone: string): string {
 }
 
 /**
+ * Determines whether a contact name is a generic placeholder, phone number,
+ * punctuation/dot, or the instance's own business name.
+ */
+export function isGenericContactName(
+  name?: string | null,
+  phone?: string | null,
+  instanceName?: string | null
+): boolean {
+  if (!name) return true;
+  const trimmed = name.trim();
+  if (!trimmed) return true;
+
+  // 1. Single or repeated punctuation, dots, spaces, symbols like ".", "..", "-", "~", "*"
+  if (/^[.\s\-_,;:*~]+$/.test(trimmed)) return true;
+
+  // 2. Pure phone numbers or formatted phone numbers (e.g. +5511999999999, +55 (11) 9999-9999, 5511999999999)
+  if (/^\+?[\d\s()\-+.]+$/.test(trimmed) && trimmed.replace(/\D/g, '').length >= 6) return true;
+
+  // 3. Generic "Cliente", "Cliente 1234", "Lead", etc.
+  if (/^(cliente|lead|contato|user|usuario)\s*(\d+)?$/i.test(trimmed)) return true;
+
+  // 4. Matches the instance or connection name (e.g. "Cegcell", "Larissa")
+  if (instanceName && trimmed.toLowerCase() === instanceName.trim().toLowerCase()) return true;
+
+  // 5. Matches the phone number itself
+  if (phone) {
+    const rawP = phone.replace(/\D/g, '');
+    const rawN = trimmed.replace(/\D/g, '');
+    if (rawP && rawN && (rawP === rawN || rawP.endsWith(rawN) || rawN.endsWith(rawP))) return true;
+  }
+
+  return false;
+}
+
+/**
  * Find or create a contact by account_id and phone number.
  * Updates the contact's name if it was previously generic and a better name is provided.
  */
@@ -51,7 +88,7 @@ export async function findOrCreateContact(
     // 1. Look up existing contact by exact phone or phone_normalized
     const { data: existing, error: findErr } = await admin
       .from('contacts')
-      .select('id, name')
+      .select('id, name, avatar_url')
       .eq('account_id', params.accountId)
       .or(`phone.eq.${normPhone},phone_normalized.eq.${normPhone}`)
       .maybeSingle();
@@ -64,23 +101,35 @@ export async function findOrCreateContact(
       // If contact exists and we now have a real person/business name, update it
       const providedName = params.name?.trim();
       const currentName = existing.name?.trim() || '';
-      const isCurrentGeneric =
-        !currentName ||
-        currentName.startsWith('+') ||
-        currentName.startsWith('Cliente ') ||
-        currentName === normPhone;
+      const currentIsGeneric = isGenericContactName(currentName, normPhone, params.instanceName);
+      const providedIsReal = Boolean(providedName && !isGenericContactName(providedName, normPhone, params.instanceName));
 
-      if (providedName && isCurrentGeneric && providedName !== currentName) {
+      const updates: Record<string, unknown> = {};
+
+      if (providedIsReal && (currentIsGeneric || providedName !== currentName)) {
+        updates.name = providedName;
+      }
+
+      if (params.avatarUrl && !existing.avatar_url) {
+        updates.avatar_url = params.avatarUrl;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        updates.updated_at = new Date().toISOString();
         await admin
           .from('contacts')
-          .update({ name: providedName, updated_at: new Date().toISOString() })
+          .update(updates)
           .eq('id', existing.id);
       }
       return existing.id;
     }
 
     // 2. Insert new contact
-    const displayName = params.name?.trim() || `Cliente ${normPhone.slice(-4)}`;
+    const providedName = params.name?.trim();
+    const displayName = (providedName && !isGenericContactName(providedName, normPhone, params.instanceName))
+      ? providedName
+      : `Cliente ${normPhone.slice(-4)}`;
+
     const { data: created, error: insertErr } = await admin
       .from('contacts')
       .insert({
@@ -88,6 +137,7 @@ export async function findOrCreateContact(
         user_id: params.userId,
         phone: normPhone,
         name: displayName,
+        avatar_url: params.avatarUrl || null,
       })
       .select('id')
       .single();

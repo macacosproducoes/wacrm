@@ -2,13 +2,14 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { createClient as createAdminClient } from '@supabase/supabase-js';
 import { decrypt } from '@/lib/whatsapp/encryption';
-import { normalizeBaseUrl, formatUazApiNumber } from '@/lib/whatsapp/uazapi-client';
+import { normalizeBaseUrl, formatUazApiNumber, getUazApiContacts } from '@/lib/whatsapp/uazapi-client';
 import { isRealWhatsAppContact } from '@/lib/whatsapp/phone-utils';
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
 import {
   findOrCreateContact,
   findOrCreateConversation,
   updateConversationWithMessage,
+  isGenericContactName,
 } from '@/lib/whatsapp/conversation-helpers';
 
 function supabaseAdmin() {
@@ -119,16 +120,24 @@ export async function POST(request: Request) {
 
     // 2. Pre-fetch existing contacts and conversations in this account
     const [{ data: existingContacts }, { data: existingConvs }] = await Promise.all([
-      admin.from('contacts').select('id, phone').eq('account_id', accountId),
+      admin.from('contacts').select('id, phone, name, avatar_url').eq('account_id', accountId),
       admin
         .from('conversations')
         .select('id, contact_id, last_message_at, last_message_text')
         .eq('account_id', accountId),
     ]);
 
-    const contactMap = new Map<string, string>();
+    interface ContactMeta {
+      id: string;
+      name: string | null;
+      avatar_url: string | null;
+    }
+
+    const contactMap = new Map<string, ContactMeta>();
     for (const c of existingContacts || []) {
-      if (c.phone) contactMap.set(c.phone, c.id);
+      if (c.phone) {
+        contactMap.set(c.phone, { id: c.id, name: c.name, avatar_url: c.avatar_url });
+      }
     }
 
     interface ConvMeta {
@@ -145,6 +154,55 @@ export async function POST(request: Request) {
           last_message_at: conv.last_message_at,
           last_message_text: conv.last_message_text,
         });
+      }
+    }
+
+    // 2.1 Fetch WhatsApp address book (GET /contacts) from the connected instance
+    const uazContacts = await getUazApiContacts(baseUrl, token);
+    const waBookMap = new Map<string, { name: string; avatar?: string }>();
+    for (const item of uazContacts) {
+      const rawP = String(item.jid || item.phone || '').split('@')[0].replace(/\D/g, '');
+      const realName = (item.contact_name || item.contact_FirstName || item.name || '').trim();
+      const avatar = item.imagePreview || item.image;
+      if (rawP && realName && !isGenericContactName(realName, rawP, conn.display_name)) {
+        waBookMap.set(rawP, { name: realName, avatar });
+        waBookMap.set(formatUazApiNumber(rawP), { name: realName, avatar });
+      }
+    }
+
+    // 2.2 Pre-sync address book contacts into CRM database
+    for (const [phone, bookEntry] of waBookMap.entries()) {
+      const existing = contactMap.get(phone);
+      if (existing) {
+        // If current name is generic, update immediately to the real name from WhatsApp
+        if (isGenericContactName(existing.name, phone, conn.display_name)) {
+          const updates: Record<string, unknown> = {
+            name: bookEntry.name,
+            updated_at: new Date().toISOString(),
+          };
+          if (bookEntry.avatar && !existing.avatar_url) {
+            updates.avatar_url = bookEntry.avatar;
+          }
+          await admin.from('contacts').update(updates).eq('id', existing.id);
+          existing.name = bookEntry.name;
+        }
+      } else {
+        // Create new contact from WhatsApp address book
+        const newContactId = await findOrCreateContact(admin, {
+          accountId,
+          userId: ownerUserId,
+          phone,
+          name: bookEntry.name,
+          instanceName: conn.display_name,
+          avatarUrl: bookEntry.avatar || null,
+        });
+        if (newContactId) {
+          contactMap.set(phone, {
+            id: String(newContactId),
+            name: bookEntry.name,
+            avatar_url: bookEntry.avatar || null,
+          });
+        }
       }
     }
 
@@ -202,30 +260,56 @@ export async function POST(request: Request) {
 
       const formattedPhone = formatUazApiNumber(rawPhone);
 
-      const contactName =
-        (c.wa_contactName as string) ||
-        (c.name as string) ||
-        (c.lead_fullName as string) ||
-        `+${formattedPhone}`;
+      // Prioritize: WhatsApp address book name > chat name > wa_name > wa_contactName > lead_fullName
+      const bookEntry = waBookMap.get(formattedPhone) || waBookMap.get(rawPhone);
+      const candidates = [
+        bookEntry?.name,
+        c.name,
+        c.wa_name,
+        c.wa_contactName,
+        c.lead_fullName,
+      ].filter(Boolean);
+
+      let bestContactName = '';
+      for (const cand of candidates) {
+        const trimmed = String(cand).trim();
+        if (trimmed && !isGenericContactName(trimmed, formattedPhone, conn.display_name)) {
+          bestContactName = trimmed;
+          break;
+        }
+      }
 
       // A. Contact resolution via resilient helper
-      let contactId = contactMap.get(formattedPhone);
+      let contactMeta = contactMap.get(formattedPhone);
+      let contactId = contactMeta?.id;
+
       if (!contactId) {
         const createdContactId = await findOrCreateContact(admin, {
           accountId,
           userId: ownerUserId,
           phone: formattedPhone,
-          name: contactName,
+          name: bestContactName || `Cliente ${formattedPhone.slice(-4)}`,
+          instanceName: conn.display_name,
         });
         if (!createdContactId) return;
         contactId = String(createdContactId);
-        contactMap.set(formattedPhone, contactId);
+        contactMeta = { id: contactId, name: bestContactName || null, avatar_url: null };
+        contactMap.set(formattedPhone, contactMeta);
+      } else if (contactMeta) {
+        // Contact exists: if currently generic and we now have a real name, update it!
+        if (bestContactName && isGenericContactName(contactMeta.name, formattedPhone, conn.display_name)) {
+          await admin
+            .from('contacts')
+            .update({ name: bestContactName, updated_at: new Date().toISOString() })
+            .eq('id', contactId);
+          contactMeta.name = bestContactName;
+        }
       }
 
       const resolvedContactId: string = contactId;
 
       // Update avatar if provided
-      const realAvatar = (c.image || c.imagePreview || c.profilePicUrl || c.profilePictureUrl) as string | undefined;
+      const realAvatar = (bookEntry?.avatar || c.image || c.imagePreview || c.profilePicUrl || c.profilePictureUrl) as string | undefined;
       if (realAvatar && typeof realAvatar === 'string' && (realAvatar.startsWith('http') || realAvatar.startsWith('data:image/'))) {
         void admin.from('contacts').update({ avatar_url: realAvatar }).eq('id', resolvedContactId);
       }

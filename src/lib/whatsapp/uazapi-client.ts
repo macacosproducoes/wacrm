@@ -569,4 +569,51 @@ export async function addUazApiContact(
   }
 }
 
+export interface UazApiContactItem {
+  jid?: string;
+  phone?: string;
+  contact_name?: string;
+  contact_FirstName?: string;
+  name?: string;
+  image?: string;
+  imagePreview?: string;
+}
+
+/**
+ * Fetch contacts directly from the phone's WhatsApp address book via UazAPI.
+ * Endpoint: GET /contacts
+ */
+export async function getUazApiContacts(
+  baseUrl: string,
+  token: string
+): Promise<UazApiContactItem[]> {
+  const endpoint = `${normalizeBaseUrl(baseUrl)}/contacts`;
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        token,
+        'Content-Type': 'application/json',
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!res.ok) {
+      console.warn(`[uazapi-client] getUazApiContacts returned HTTP ${res.status}`);
+      return [];
+    }
+
+    const data = await res.json().catch(() => []);
+    if (Array.isArray(data)) return data;
+    if (Array.isArray((data as { contacts?: unknown[] })?.contacts)) {
+      return (data as { contacts: UazApiContactItem[] }).contacts;
+    }
+    return [];
+  } catch (err) {
+    console.warn('[uazapi-client] getUazApiContacts fetch error:', err);
+    return [];
+  }
+}
+
 

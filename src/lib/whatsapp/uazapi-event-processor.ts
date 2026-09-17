@@ -12,6 +12,7 @@ import {
   findOrCreateContact,
   findOrCreateConversation,
   updateConversationWithMessage,
+  isGenericContactName,
 } from '@/lib/whatsapp/conversation-helpers';
 
 async function downloadUazApiMediaDirect(
@@ -553,14 +554,28 @@ export async function processUazApiEvent(
     return { success: true, reason: 'empty_event_ignored' };
   }
 
-  const pushName = String(
-    msgData.senderName ||
-    chatData.wa_name ||
-    chatData.name ||
-    msgData.pushName ||
-    msgData.name ||
-    `+${formattedPhone}`
-  );
+  const nameCandidates = [
+    chatData.wa_name,
+    chatData.name,
+    chatData.wa_contactName,
+    msgData.senderName,
+    msgData.pushName,
+    body.pushName,
+    msgData.sender_name,
+    msgData.name,
+    body.name,
+  ].filter(Boolean);
+
+  let bestInboundName = '';
+  for (const cand of nameCandidates) {
+    const trimmed = String(cand).trim();
+    if (trimmed && !isGenericContactName(trimmed, formattedPhone, connection.display_name)) {
+      bestInboundName = trimmed;
+      break;
+    }
+  }
+
+  const pushName = bestInboundName || `Cliente ${formattedPhone.slice(-4)}`;
   const rawExternalId = String(
     msgData.messageid ||
     key.id ||
@@ -616,7 +631,8 @@ export async function processUazApiEvent(
     accountId: connection.account_id,
     userId,
     phone: formattedPhone,
-    name: pushName,
+    name: bestInboundName || undefined,
+    instanceName: connection.display_name,
   });
 
   if (!contactId) {
