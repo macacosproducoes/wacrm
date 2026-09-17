@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MockInstagramProfileProvider } from './providers/mock-provider';
+import { DirectInstagramProfileProvider } from './providers/direct-provider';
+import { ApiInstagramProfileProvider } from './providers/api-provider';
+import { getInstagramProfileProvider } from './providers/factory';
 
 describe('MockInstagramProfileProvider', () => {
   let provider: MockInstagramProfileProvider;
@@ -38,3 +41,24 @@ describe('MockInstagramProfileProvider', () => {
     expect(data.profileImageUrl).toBe('https://example.com/avatar.png');
   });
 });
+
+describe('getInstagramProfileProvider factory', () => {
+  it('returns DirectInstagramProfileProvider when "direct" is requested', () => {
+    const provider = getInstagramProfileProvider('direct');
+    expect(provider).toBeInstanceOf(DirectInstagramProfileProvider);
+    expect(provider.providerName).toBe('direct');
+  });
+
+  it('returns ApiInstagramProfileProvider when "api" is requested', () => {
+    const provider = getInstagramProfileProvider('api');
+    expect(provider).toBeInstanceOf(ApiInstagramProfileProvider);
+    expect(provider.providerName).toBe('external_api');
+  });
+
+  it('returns MockInstagramProfileProvider when "mock" is requested', () => {
+    const provider = getInstagramProfileProvider('mock');
+    expect(provider).toBeInstanceOf(MockInstagramProfileProvider);
+    expect(provider.providerName).toBe('mock');
+  });
+});
+

@@ -13,6 +13,7 @@ import type {
 } from './types';
 import { parseInstagramUsername, buildInstagramProfileUrl } from './parser';
 import { getInstagramProfileProvider } from './providers/factory';
+import { ApiInstagramProfileProvider } from './providers/api-provider';
 import { InstagramImageStorage } from './storage';
 
 const DEFAULT_TTL_HOURS = 24;
@@ -122,9 +123,43 @@ export class InstagramProfileResolver {
     console.log(`[INSTAGRAM] PROFILE_RESOLUTION_STARTED for @${normalizedUsername}`);
 
     try {
-      // 5. Query Provider
+      // 5. Query Provider (Direct provider by default, with optional API fallback)
       const provider = getInstagramProfileProvider(options.providerName);
-      const profileData: InstagramProfileData = await provider.resolve(normalizedUsername);
+      let profileData: InstagramProfileData;
+
+      try {
+        profileData = await provider.resolve(normalizedUsername);
+      } catch (directErr) {
+        // If direct provider threw and an external API provider is configured, attempt fallback
+        if (
+          provider.providerName === 'direct' &&
+          (process.env.INSTAGRAM_PROFILE_API_URL || process.env.INSTAGRAM_PROFILE_API_KEY)
+        ) {
+          console.warn(`[INSTAGRAM] Direct provider failed, attempting configured API fallback...`, directErr);
+          const apiFallback = new ApiInstagramProfileProvider();
+          profileData = await apiFallback.resolve(normalizedUsername);
+        } else {
+          throw directErr;
+        }
+      }
+
+      // If direct provider returned without an image, and external API is configured, attempt API fallback
+      if (
+        !profileData.profileImageUrl &&
+        provider.providerName === 'direct' &&
+        (process.env.INSTAGRAM_PROFILE_API_URL || process.env.INSTAGRAM_PROFILE_API_KEY)
+      ) {
+        try {
+          console.log(`[INSTAGRAM] Direct provider found no image, attempting configured API fallback...`);
+          const apiFallback = new ApiInstagramProfileProvider();
+          const fallbackData = await apiFallback.resolve(normalizedUsername);
+          if (fallbackData.profileImageUrl) {
+            profileData = fallbackData;
+          }
+        } catch (fallbackErr) {
+          console.warn(`[INSTAGRAM] Fallback API provider attempt failed:`, fallbackErr);
+        }
+      }
 
       console.log(`[INSTAGRAM] PROFILE_RESOLUTION_SUCCESS from provider ${provider.providerName}`);
 
@@ -139,7 +174,7 @@ export class InstagramProfileResolver {
         console.log(`[INSTAGRAM] PROFILE_IMAGE_DOWNLOADED (${validated.buffer.length} bytes, hash: ${validated.hash.slice(0, 10)})`);
 
         // Check if image hash is unchanged
-        if (contact.profile_image_hash === validated.hash && contact.profile_image_url) {
+        if (!options.forceRefresh && contact.profile_image_hash === validated.hash && contact.profile_image_url) {
           console.log(`[INSTAGRAM] Image hash matches stored hash. Reusing existing storage URL.`);
           finalImageUrl = contact.profile_image_url;
           finalHash = validated.hash;

@@ -7,6 +7,7 @@ export * from './parser';
 export * from './providers/provider';
 export * from './providers/mock-provider';
 export * from './providers/api-provider';
+export * from './providers/direct-provider';
 export * from './providers/factory';
 export * from './storage';
 export * from './resolver';

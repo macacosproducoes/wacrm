@@ -63,7 +63,7 @@ export async function handleInboundMessageInstagram(params: {
     // Check existing contact to see if handle changed
     const { data: contact } = await supabase
       .from('contacts')
-      .select('instagram_username, profile_image_source')
+      .select('instagram_username, profile_image_source, profile_image_url, instagram_resolve_status')
       .eq('id', contactId)
       .eq('account_id', accountId)
       .single();
@@ -71,20 +71,34 @@ export async function handleInboundMessageInstagram(params: {
     const handleChanged = contact?.instagram_username !== username;
 
     if (handleChanged) {
-      console.log(`[INSTAGRAM] Updating contact handle to @${username}`);
+      console.log(`[INSTAGRAM] Handle changed from @${contact?.instagram_username || 'none'} to @${username}. Resetting previous profile photo.`);
+      const updates: Record<string, any> = {
+        instagram_username: username,
+        instagram_url: detection.profileUrl,
+        instagram_resolve_status: 'PENDING',
+      };
+
+      // If previous image was not manually uploaded, reset it so we don't mix photos
+      if (contact?.profile_image_source !== 'MANUAL') {
+        updates.profile_image_url = null;
+        updates.profile_image_hash = null;
+        updates.profile_image_updated_at = null;
+      }
+
       await supabase
         .from('contacts')
-        .update({
-          instagram_username: username,
-          instagram_url: detection.profileUrl,
-          instagram_resolve_status: 'PENDING',
-        })
+        .update(updates)
         .eq('id', contactId)
         .eq('account_id', accountId);
 
       // Trigger background resolution (fire-and-forget, never block response)
-      void InstagramProfileResolver.resolveContact(accountId, contactId).catch((err) => {
+      void InstagramProfileResolver.resolveContact(accountId, contactId, { forceRefresh: true }).catch((err) => {
         console.warn(`[INSTAGRAM] Background resolution error for @${username}:`, err);
+      });
+    } else if (!contact?.profile_image_url || contact?.instagram_resolve_status !== 'IMAGE_AVAILABLE') {
+      // If handle is unchanged but profile image is not available yet, retry resolution
+      void InstagramProfileResolver.resolveContact(accountId, contactId).catch((err) => {
+        console.warn(`[INSTAGRAM] Background resolution retry error for @${username}:`, err);
       });
     }
 
