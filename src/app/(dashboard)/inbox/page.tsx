@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUazApiSse } from "@/hooks/use-uazapi-sse";
+import { RealtimeStatusBar } from "@/components/inbox/realtime-status-bar";
 
 // Remembers the agent's show/hide choice for the desktop contact panel
 // across reloads and sessions (device-scoped, like the theme prefs).
@@ -705,6 +706,8 @@ function InboxPageInner() {
 
   return (
     <div className="-m-4 flex h-[calc(100vh-3.5rem)] flex-col overflow-hidden sm:-m-6">
+      <RealtimeStatusBar isRealtimeConnected={isConnected} />
+
       {/* WhatsApp connection banner — in the flex column, not absolute,
           so it pushes the panels down instead of overlapping them. */}
       {whatsappConnected === false && (

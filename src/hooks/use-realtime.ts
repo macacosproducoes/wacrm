@@ -5,10 +5,18 @@ import { createClient } from "@/lib/supabase/client";
 import type { Message, Conversation } from "@/types";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
-interface RealtimeEvent<T> {
+export interface RealtimeEvent<T> {
   eventType: "INSERT" | "UPDATE" | "DELETE";
   new: T;
   old: Partial<T>;
+}
+
+export interface RealtimeTelemetry {
+  isConnected: boolean;
+  connectedAt: string | null;
+  disconnectedAt: string | null;
+  reconnectAttempts: number;
+  lastEventAt: string | null;
 }
 
 interface UseRealtimeOptions {
@@ -25,13 +33,17 @@ export function useRealtime({
   enabled = true,
 }: UseRealtimeOptions) {
   const channelRef = useRef<RealtimeChannel | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectAttemptsRef = useRef(0);
 
-  // Store latest callbacks in refs to avoid re-subscribing when the
-  // parent re-renders with fresh closures. Assigned inside an effect
-  // so the mutation doesn't happen during render (React 19's refs
-  // rule) — subscribers only read `.current` inside async Realtime
-  // callbacks, which always run after the render that updates it.
+  const [telemetry, setTelemetry] = useState<RealtimeTelemetry>({
+    isConnected: false,
+    connectedAt: null,
+    disconnectedAt: null,
+    reconnectAttempts: 0,
+    lastEventAt: null,
+  });
+
   const onMessageRef = useRef(onMessageEvent);
   const onConversationRef = useRef(onConversationEvent);
   useEffect(() => {
@@ -44,27 +56,43 @@ export function useRealtime({
 
     const supabase = createClient();
     let isMounted = true;
-    let channel: RealtimeChannel | null = null;
+    let activeChannel: RealtimeChannel | null = null;
 
-    (async () => {
-      // Ensure WebSocket connection is authenticated so Supabase RLS allows postgres_changes
+    async function subscribeWithReconnect() {
+      if (!isMounted) return;
+
+      // Clean up any stale channel before subscribing
+      if (activeChannel) {
+        try {
+          await supabase.removeChannel(activeChannel);
+        } catch {}
+        activeChannel = null;
+      }
+
+      // 1. Authenticate WebSocket connection with session JWT before subscribing
+      // Essential for Supabase Realtime RLS evaluation on postgres_changes
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (session?.access_token) {
-          supabase.realtime.setAuth(session.access_token);
+          await supabase.realtime.setAuth(session.access_token);
         }
-      } catch {
-        // Non-blocking
+      } catch (authErr) {
+        console.warn("[realtime] setAuth error:", authErr);
       }
 
       if (!isMounted) return;
 
-      channel = supabase
-        .channel(channelName)
+      // Unique channel identifier per subscription instance prevents collision
+      const uniqueChannelName = `${channelName}_${Date.now()}`;
+
+      activeChannel = supabase
+        .channel(uniqueChannelName)
         .on(
           "postgres_changes",
           { event: "*", schema: "public", table: "messages" },
           (payload) => {
+            const now = new Date().toISOString();
+            setTelemetry((prev) => ({ ...prev, lastEventAt: now }));
             onMessageRef.current?.({
               eventType: payload.eventType as RealtimeEvent<Message>["eventType"],
               new: payload.new as Message,
@@ -76,6 +104,8 @@ export function useRealtime({
           "postgres_changes",
           { event: "*", schema: "public", table: "conversations" },
           (payload) => {
+            const now = new Date().toISOString();
+            setTelemetry((prev) => ({ ...prev, lastEventAt: now }));
             onConversationRef.current?.({
               eventType: payload.eventType as RealtimeEvent<Conversation>["eventType"],
               new: payload.new as Conversation,
@@ -83,23 +113,72 @@ export function useRealtime({
             });
           }
         )
-        .subscribe((status) => {
-          if (isMounted) {
-            setIsConnected(status === "SUBSCRIBED");
+        .subscribe((status, err) => {
+          if (!isMounted) return;
+
+          const now = new Date().toISOString();
+          if (status === "SUBSCRIBED") {
+            reconnectAttemptsRef.current = 0;
+            setTelemetry((prev) => ({
+              ...prev,
+              isConnected: true,
+              connectedAt: now,
+              reconnectAttempts: 0,
+            }));
+
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(
+                new CustomEvent("wacrm:realtime-status", {
+                  detail: { isConnected: true, timestamp: now },
+                })
+              );
+            }
+          } else if (status === "CLOSED" || status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+            reconnectAttemptsRef.current += 1;
+            setTelemetry((prev) => ({
+              ...prev,
+              isConnected: false,
+              disconnectedAt: now,
+              reconnectAttempts: reconnectAttemptsRef.current,
+            }));
+
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(
+                new CustomEvent("wacrm:realtime-status", {
+                  detail: { isConnected: false, timestamp: now, error: err },
+                })
+              );
+            }
+
+            // Exponential backoff automatic reconnect: 1s, 2s, 4s, capped at 10s
+            const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current - 1), 10000);
+            console.warn(`[realtime] Connection status: ${status}. Scheduling reconnect attempt ${reconnectAttemptsRef.current} in ${delay}ms...`);
+            
+            if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+            reconnectTimeoutRef.current = setTimeout(() => {
+              if (isMounted) {
+                void subscribeWithReconnect();
+              }
+            }, delay);
           }
         });
 
-      channelRef.current = channel;
-    })();
+      channelRef.current = activeChannel;
+    }
 
-    // Also listen to internal WhatsApp SSE bridge events for instant local dispatch
+    void subscribeWithReconnect();
+
+    // Listen to internal custom realtime event bridge
     const handleCustomRealtime = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (!detail) return;
 
+      const now = new Date().toISOString();
+      setTelemetry((prev) => ({ ...prev, lastEventAt: now }));
+
       if (detail.message && onMessageRef.current) {
         onMessageRef.current({
-          eventType: (detail.eventType as RealtimeEvent<Message>['eventType']) || 'INSERT',
+          eventType: (detail.eventType as RealtimeEvent<Message>["eventType"]) || "INSERT",
           new: detail.message as Message,
           old: {} as Partial<Message>,
         });
@@ -107,29 +186,30 @@ export function useRealtime({
 
       if (detail.conversation && onConversationRef.current) {
         onConversationRef.current({
-          eventType: (detail.eventType as RealtimeEvent<Conversation>['eventType']) || 'UPDATE',
+          eventType: (detail.eventType as RealtimeEvent<Conversation>["eventType"]) || "UPDATE",
           new: detail.conversation as Conversation,
           old: {} as Partial<Conversation>,
         });
       }
     };
 
-    if (typeof window !== 'undefined') {
-      window.addEventListener('wacrm:realtime', handleCustomRealtime);
+    if (typeof window !== "undefined") {
+      window.addEventListener("wacrm:realtime", handleCustomRealtime);
     }
 
     return () => {
       isMounted = false;
-      if (typeof window !== 'undefined') {
-        window.removeEventListener('wacrm:realtime', handleCustomRealtime);
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      if (typeof window !== "undefined") {
+        window.removeEventListener("wacrm:realtime", handleCustomRealtime);
       }
-      if (channel) {
-        supabase.removeChannel(channel);
+      if (activeChannel) {
+        supabase.removeChannel(activeChannel);
       } else if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
       }
       channelRef.current = null;
-      setIsConnected(false);
+      setTelemetry((prev) => ({ ...prev, isConnected: false }));
     };
   }, [channelName, enabled]);
 
@@ -138,9 +218,13 @@ export function useRealtime({
       const supabase = createClient();
       supabase.removeChannel(channelRef.current);
       channelRef.current = null;
-      setIsConnected(false);
+      setTelemetry((prev) => ({ ...prev, isConnected: false }));
     }
   }, []);
 
-  return { isConnected, unsubscribe };
+  return {
+    isConnected: telemetry.isConnected,
+    telemetry,
+    unsubscribe,
+  };
 }

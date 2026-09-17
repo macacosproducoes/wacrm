@@ -918,25 +918,24 @@ export async function processUazApiEvent(
     }
   }
 
-  // Evaluate Automated Follower Order (Instagram Handle -> Resolver -> Creative Template 960x960 -> WhatsApp Delivery)
+  // Evaluate Automated Follower Order in background (non-blocking so it never delays message intake or AI dispatch)
   if (!fromMe && trimmed && !isIgnoredText && isFreshMessage) {
-    try {
-      const orderRes = await handleFollowerOrder({
-        accountId: connection.account_id,
-        contactId,
-        conversationId,
-        phone: formattedPhone,
-        messageText: trimmed,
-        messageId: externalMessageId,
-        pushName,
-        traceId,
-      });
-      if (orderRes.handled) {
+    void handleFollowerOrder({
+      accountId: connection.account_id,
+      contactId,
+      conversationId,
+      phone: formattedPhone,
+      messageText: trimmed,
+      messageId: externalMessageId,
+      pushName,
+      traceId,
+    }).then((orderRes) => {
+      if (orderRes?.handled) {
         console.log(`[UazAPI Event Processor] Automated follower order #${orderRes.orderCode} processed & delivered successfully for contact ${contactId}`);
       }
-    } catch (orderErr) {
-      console.error('[UazAPI Event Processor] Error processing follower order:', orderErr);
-    }
+    }).catch((orderErr) => {
+      console.error('[UazAPI Event Processor] Error processing follower order in background:', orderErr);
+    });
   }
 
   // Trigger AI auto-reply for inbound customer messages (strictly for real-time text turns within last 60m, never reactions/emojis or historical syncs)
