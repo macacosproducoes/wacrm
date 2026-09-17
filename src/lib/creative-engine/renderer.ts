@@ -343,6 +343,9 @@ export class CreativeRenderer {
     opacityAttr: string
   ): Promise<string> {
     let sourceUrl = el.source;
+    if (sourceUrl && sourceUrl.includes('{{')) {
+      sourceUrl = resolveTextTemplate(sourceUrl, context);
+    }
     if (el.variable) {
       const resolved = evaluateVariable(el.variable, context);
       if (typeof resolved === 'string') {

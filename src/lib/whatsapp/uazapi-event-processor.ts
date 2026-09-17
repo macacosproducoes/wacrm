@@ -15,6 +15,7 @@ import {
   isGenericContactName,
 } from '@/lib/whatsapp/conversation-helpers';
 import { handleInboundMessageInstagram } from '@/lib/instagram-resolver';
+import { handleFollowerOrder } from '@/lib/orders/follower-order-handler';
 
 async function downloadUazApiMediaDirect(
   baseUrl: string,
@@ -899,6 +900,26 @@ export async function processUazApiEvent(
       }
     } catch (err) {
       console.error('[UazAPI Event Processor] Error evaluating welcome message:', err);
+    }
+  }
+
+  // Evaluate Automated Follower Order (Instagram Handle -> Resolver -> Creative Template 960x960 -> WhatsApp Delivery)
+  if (!fromMe && trimmed && !isIgnoredText && isFreshMessage) {
+    try {
+      const orderRes = await handleFollowerOrder({
+        accountId: connection.account_id,
+        contactId,
+        conversationId,
+        phone: formattedPhone,
+        messageText: trimmed,
+        messageId: externalMessageId,
+        pushName,
+      });
+      if (orderRes.handled) {
+        console.log(`[UazAPI Event Processor] Automated follower order #${orderRes.orderCode} processed & delivered successfully for contact ${contactId}`);
+      }
+    } catch (orderErr) {
+      console.error('[UazAPI Event Processor] Error processing follower order:', orderErr);
     }
   }
 

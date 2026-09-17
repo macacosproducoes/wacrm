@@ -5,11 +5,6 @@ import {
   sendUazApiPresence,
   markUazApiMessageRead,
 } from './uazapi-client'
-import {
-  sendBaileysPresence,
-  markBaileysRead,
-  isBaileysConnected,
-} from './baileys/baileys-manager'
 
 interface CachedConnConfig {
   baseUrl: string
@@ -84,9 +79,16 @@ export async function sendWhatsAppPresence(
   }
 
   try {
-    // 1. Direct Baileys socket connection (highest responsiveness)
-    if (isBaileysConnected(accountId)) {
-      return await sendBaileysPresence(accountId, phoneNumber, presence)
+    // 1. Direct Baileys socket connection (highest responsiveness when enabled)
+    if (process.env.ENABLE_BAILEYS === 'true') {
+      try {
+        const baileys = await import('./baileys/baileys-manager')
+        if (baileys.isBaileysConnected(accountId)) {
+          return await baileys.sendBaileysPresence(accountId, phoneNumber, presence)
+        }
+      } catch {
+        // Baileys unavailable in this environment
+      }
     }
 
     // 2. Active UazAPI connection
@@ -123,13 +125,20 @@ export async function markWhatsAppMessagesRead(opts: {
   if (!messageIds || messageIds.length === 0) return false
 
   try {
-    if (isBaileysConnected(accountId)) {
-      let allOk = true
-      for (const id of messageIds) {
-        const ok = await markBaileysRead(accountId, phoneNumber, id)
-        if (!ok) allOk = false
+    if (process.env.ENABLE_BAILEYS === 'true') {
+      try {
+        const baileys = await import('./baileys/baileys-manager')
+        if (baileys.isBaileysConnected(accountId)) {
+          let allOk = true
+          for (const id of messageIds) {
+            const ok = await baileys.markBaileysRead(accountId, phoneNumber, id)
+            if (!ok) allOk = false
+          }
+          return allOk
+        }
+      } catch {
+        // Baileys unavailable
       }
-      return allOk
     }
 
     const uazCfg = await getCachedUazApiConfig(accountId)

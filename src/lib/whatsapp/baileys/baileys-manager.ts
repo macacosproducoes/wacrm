@@ -11,7 +11,6 @@ import makeWASocket, {
   type proto,
 } from '@whiskeysockets/baileys';
 import { createClient as createAdminClient } from '@supabase/supabase-js';
-import { processUazApiEvent } from '@/lib/whatsapp/uazapi-event-processor';
 import { isRealWhatsAppContact } from '@/lib/whatsapp/phone-utils';
 import { formatUazApiNumber } from '@/lib/whatsapp/uazapi-client';
 import { notifyClientPresence } from '@/lib/ai/auto-reply-debouncer';
@@ -568,6 +567,7 @@ export async function connectBaileys(accountId: string): Promise<BaileysSessionI
         });
 
         console.log(`[Baileys] Processing ${genuineMsgs.length} genuine history messages`);
+        const { processUazApiEvent } = await import('@/lib/whatsapp/uazapi-event-processor');
         const BATCH_SIZE = 25;
         for (let i = 0; i < genuineMsgs.length; i += BATCH_SIZE) {
           const batch = genuineMsgs.slice(i, i + BATCH_SIZE);
@@ -673,6 +673,7 @@ export async function connectBaileys(accountId: string): Promise<BaileysSessionI
         };
       }
 
+      const { processUazApiEvent } = await import('@/lib/whatsapp/uazapi-event-processor');
       for (const msg of rawMessages) {
         const jid = msg.key?.remoteJid;
         if (!jid || !isRealWhatsAppContact(jid)) continue;

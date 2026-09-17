@@ -9,7 +9,6 @@ import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import type { DeliveryProvider } from './provider';
 import type { CreativeJob, DeliveryOptions, DeliveryResult } from '../types';
 import { sendUazApiMedia, normalizeBaseUrl, formatUazApiNumber } from '@/lib/whatsapp/uazapi-client';
-import { sendBaileysMedia, isBaileysConnected } from '@/lib/whatsapp/baileys/baileys-manager';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { updateConversationWithMessage } from '@/lib/whatsapp/conversation-helpers';
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
@@ -65,23 +64,28 @@ export class WhatsAppDeliveryProvider implements DeliveryProvider {
 
       let providerMessageId = '';
 
-      // Check Baileys
-      let baileysActive = false;
-      try {
-        baileysActive = isBaileysConnected(accountId);
-      } catch {
-        baileysActive = false;
+      // Check Baileys if explicitly enabled in environment
+      let baileysHandled = false;
+      if (process.env.ENABLE_BAILEYS === 'true') {
+        try {
+          const baileys = await import('@/lib/whatsapp/baileys/baileys-manager');
+          if (baileys.isBaileysConnected(accountId)) {
+            const sendRes = await baileys.sendBaileysMedia(
+              accountId,
+              recipientPhone,
+              mediaUrl,
+              'image',
+              caption
+            );
+            providerMessageId = sendRes.messageId;
+            baileysHandled = true;
+          }
+        } catch {
+          baileysHandled = false;
+        }
       }
-      if (baileysActive) {
-        const sendRes = await sendBaileysMedia(
-          accountId,
-          recipientPhone,
-          mediaUrl,
-          'image',
-          caption
-        );
-        providerMessageId = sendRes.messageId;
-      } else if (conn && conn.provider === 'uazapi') {
+
+      if (!baileysHandled && conn && conn.provider === 'uazapi') {
         const config = (conn.provider_config || {}) as Record<string, unknown>;
         let token = '';
         try {

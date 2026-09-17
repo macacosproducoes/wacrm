@@ -10,7 +10,6 @@ import { latestUserMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { sendUazApiText, sendUazApiMedia, normalizeBaseUrl } from '@/lib/whatsapp/uazapi-client'
-import { sendBaileysText, isBaileysConnected } from '@/lib/whatsapp/baileys/baileys-manager'
 import { sendWhatsAppPresence } from '@/lib/whatsapp/unified-presence'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus'
@@ -306,10 +305,12 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
     }
     if (!isUncapped && claimed !== true) return
 
-    // 1. Direct Baileys socket connection (highest responsiveness, zero latency)
-    if (isBaileysConnected(accountId) && contact?.phone) {
+    // 1. Direct Baileys socket connection (if explicitly enabled in environment)
+    if (process.env.ENABLE_BAILEYS === 'true' && contact?.phone) {
       try {
-        const sendRes = await sendBaileysText(accountId, contact.phone, text)
+        const baileys = await import('@/lib/whatsapp/baileys/baileys-manager');
+        if (baileys.isBaileysConnected(accountId)) {
+          const sendRes = await baileys.sendBaileysText(accountId, contact.phone, text)
 
         const cleanMsgId = String(sendRes.messageId || '').includes(':')
           ? String(sendRes.messageId).split(':').pop()!
@@ -370,6 +371,7 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
           presence: 'paused',
         })
         return
+        }
       } catch (baileysErr) {
         console.warn('[ai auto-reply] Baileys send failed, trying other providers:', baileysErr)
       }

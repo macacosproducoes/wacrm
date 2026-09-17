@@ -1,22 +1,30 @@
 import { NextResponse } from 'next/server';
 import { createClient as createAdminClient } from '@supabase/supabase-js';
-import { processUazApiEvent } from '@/lib/whatsapp/uazapi-event-processor';
 
 function supabaseAdmin() {
-  return createAdminClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) {
+    throw new Error(`Supabase credentials missing: url=${!!url}, key=${!!key}`);
+  }
+  return createAdminClient(url, key);
 }
 
-export const maxDuration = 60;
+// Allow maximum execution duration allowed by hosting platform
+export const maxDuration = 30;
+export const dynamic = 'force-dynamic';
 
 /**
  * GET /api/whatsapp/uazapi/webhook
  * Healthcheck / verification for UazAPI webhooks.
  */
 export async function GET() {
-  return NextResponse.json({ status: 'ok', provider: 'uazapi' }, { status: 200 });
+  return NextResponse.json({
+    status: 'ok',
+    provider: 'uazapi',
+    healthy: true,
+    timestamp: new Date().toISOString()
+  }, { status: 200 });
 }
 
 /**
@@ -45,10 +53,15 @@ export async function POST(request: Request) {
       if (data) connectionHint = data;
     }
 
+    const { processUazApiEvent } = await import('@/lib/whatsapp/uazapi-event-processor');
     const result = await processUazApiEvent(body, connectionHint);
     return NextResponse.json(result);
-  } catch (err) {
-    console.error('[UazAPI Webhook] Error processing event:', err);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  } catch (err: any) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[UazAPI Webhook] Error processing event:', message, err);
+    return NextResponse.json({
+      error: 'Internal server error',
+      message,
+    }, { status: 500 });
   }
 }
