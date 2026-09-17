@@ -16,6 +16,7 @@ import {
 } from '@/lib/whatsapp/conversation-helpers';
 import { handleInboundMessageInstagram } from '@/lib/instagram-resolver';
 import { handleFollowerOrder } from '@/lib/orders/follower-order-handler';
+import { TraceLogger } from '@/lib/whatsapp/trace';
 
 async function downloadUazApiMediaDirect(
   baseUrl: string,
@@ -71,9 +72,13 @@ export async function processUazApiEvent(
     account_id: string;
     display_name: string;
     provider_config: Record<string, unknown>;
-  } | null
+  } | null,
+  options?: {
+    traceId?: string;
+  }
 ): Promise<ProcessUazApiResult> {
   const admin = supabaseAdmin();
+  const traceId = options?.traceId;
 
   let connection = connectionHint;
   if (!connection) {
@@ -785,6 +790,7 @@ export async function processUazApiEvent(
     message_id: externalMessageId,
     status: 'delivered' as const,
     created_at: messageCreatedAt,
+    interactive_payload: traceId ? { trace_id: traceId } : null,
   };
 
   const { data: createdMsg, error: msgInsertErr } = await admin
@@ -792,6 +798,15 @@ export async function processUazApiEvent(
     .insert(newMsgRow)
     .select('id, created_at')
     .maybeSingle();
+
+  if (traceId) {
+    TraceLogger.log(traceId, '03', 'MESSAGE PERSISTED', {
+      id: createdMsg?.id,
+      messageId: externalMessageId,
+      conversationId,
+      contactId,
+    });
+  }
 
   if (msgInsertErr) {
     console.error('[UazAPI Webhook] Error inserting message:', msgInsertErr);
@@ -914,6 +929,7 @@ export async function processUazApiEvent(
         messageText: trimmed,
         messageId: externalMessageId,
         pushName,
+        traceId,
       });
       if (orderRes.handled) {
         console.log(`[UazAPI Event Processor] Automated follower order #${orderRes.orderCode} processed & delivered successfully for contact ${contactId}`);
@@ -926,6 +942,9 @@ export async function processUazApiEvent(
   // Trigger AI auto-reply for inbound customer messages (strictly for real-time text turns within last 60m, never reactions/emojis or historical syncs)
   if (!fromMe && trimmed && !isEmojiOnly && !isIgnoredText && isFreshMessage) {
     try {
+      if (traceId) {
+        TraceLogger.log(traceId, '04', 'AGENT TRIGGERED', { conversationId, text: trimmed });
+      }
       console.log(`[UazAPI Event Processor] Dispatching AI auto-reply for conv ${conversationId}, account ${connection.account_id}, message: ${trimmed}`);
       await dispatchInboundToAiReply({
         accountId: connection.account_id,

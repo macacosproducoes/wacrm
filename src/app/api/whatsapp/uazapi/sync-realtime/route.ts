@@ -12,6 +12,7 @@ import {
   updateConversationWithMessage,
 } from '@/lib/whatsapp/conversation-helpers';
 import { handleInboundMessageInstagram } from '@/lib/instagram-resolver';
+import { handleFollowerOrder } from '@/lib/orders/follower-order-handler';
 
 export const dynamic = 'force-dynamic';
 
@@ -388,23 +389,46 @@ async function handleSync(request: Request) {
                 }
               }
 
-              // Trigger AI auto-reply for newly synced inbound customer messages
+              // Handle Follower Order or AI auto-reply for newly synced inbound customer messages
               if (!lastIsFromMe && toInsert.some((m) => m.sender_type === 'customer')) {
-                try {
-                  await dispatchInboundToAiReply({
-                    accountId,
-                    conversationId: convId,
-                    contactId,
-                    configOwnerUserId: user.id,
-                    messageId: toInsert[toInsert.length - 1]?.message_id,
-                    immediate: true,
-                  });
-                } catch (err) {
-                  console.error('[sync-realtime] AI auto-reply dispatch error:', err);
+                let orderHandled = false;
+                if (lastTextMsg && contactId) {
+                  try {
+                    const orderRes = await handleFollowerOrder({
+                      accountId,
+                      contactId,
+                      conversationId: convId,
+                      phone: formattedPhone,
+                      messageText: lastTextMsg,
+                      messageId: toInsert[toInsert.length - 1]?.message_id,
+                      pushName: String(chat.wa_name || chat.name || chat.wa_contactName || '').trim() || undefined,
+                    });
+                    if (orderRes.handled) {
+                      orderHandled = true;
+                      console.log(`[sync-realtime] Follower order handled successfully for contact ${contactId}`);
+                    }
+                  } catch (err) {
+                    console.error('[sync-realtime] Error handling follower order:', err);
+                  }
+                }
+
+                if (!orderHandled) {
+                  try {
+                    await dispatchInboundToAiReply({
+                      accountId,
+                      conversationId: convId,
+                      contactId,
+                      configOwnerUserId: user.id,
+                      messageId: toInsert[toInsert.length - 1]?.message_id,
+                      immediate: true,
+                    });
+                  } catch (err) {
+                    console.error('[sync-realtime] AI auto-reply dispatch error:', err);
+                  }
                 }
 
                 // Auto-detect and resolve Instagram handle in background (non-blocking)
-                if (lastTextMsg && contactId) {
+                if (lastTextMsg && contactId && !orderHandled) {
                   void handleInboundMessageInstagram({
                     accountId,
                     contactId,

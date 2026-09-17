@@ -13,6 +13,7 @@ import { InstagramProfileResolver } from '@/lib/instagram-resolver/resolver';
 import { CreativeJobManager } from '@/lib/creative-engine/jobs';
 import { CreativeTemplateService } from '@/lib/creative-engine/templates';
 import type { CreativeJob } from '@/lib/creative-engine/types';
+import { TraceLogger } from '@/lib/whatsapp/trace';
 
 export const FOLLOWER_TEMPLATE_ID = 'b7e8d641-5a02-4f76-88c9-cf91b29a5a78';
 
@@ -111,6 +112,7 @@ export interface HandleFollowerOrderParams {
   messageText: string;
   messageId: string;
   pushName?: string;
+  traceId?: string;
 }
 
 export interface HandleFollowerOrderResult {
@@ -129,11 +131,19 @@ export interface HandleFollowerOrderResult {
 export async function handleFollowerOrder(
   params: HandleFollowerOrderParams
 ): Promise<HandleFollowerOrderResult> {
-  const { accountId, contactId, conversationId, phone, messageText, messageId, pushName } = params;
+  const { accountId, contactId, conversationId, phone, messageText, messageId, pushName, traceId } = params;
 
   const parsed = parseFollowerOrder(messageText);
   if (!parsed.isFollowerOrder || !parsed.username || !parsed.quantity) {
     return { handled: false };
+  }
+
+  if (traceId) {
+    TraceLogger.log(traceId, '05', 'ORDER PARSED', {
+      username: parsed.username,
+      quantity: parsed.quantity,
+      phone,
+    });
   }
 
   console.log(`[FOLLOWER_ORDER] Detected valid order from phone ${phone}: @${parsed.username}, quantity: ${parsed.quantity}`);
@@ -160,6 +170,13 @@ export async function handleFollowerOrder(
     console.warn(`[FOLLOWER_ORDER] Profile resolver warning:`, resErr);
   }
 
+  if (traceId) {
+    TraceLogger.log(traceId, '06', 'INSTAGRAM RESOLVED', {
+      username: parsed.username,
+      profileImageUrl: profileImageUrl ? profileImageUrl.slice(0, 50) + '...' : null,
+    });
+  }
+
   // Fetch updated contact
   const { data: contact } = await supabase
     .from('contacts')
@@ -167,11 +184,26 @@ export async function handleFollowerOrder(
     .eq('id', contactId)
     .single();
 
+  if (traceId) {
+    TraceLogger.log(traceId, '07', 'CONTACT UPDATED', {
+      contactId,
+      username: contact?.instagram_username || parsed.username,
+      hasPhoto: !!contact?.profile_image_url,
+    });
+  }
+
   const finalAvatarUrl = contact?.profile_image_url || profileImageUrl || 'https://pps.whatsapp.net/v/t61.24694-24/placeholder.jpg';
 
   // 3. Generate Order Code & Idempotency Key
   const orderCode = `PED-${parsed.quantity}-${parsed.username.toUpperCase()}`;
   const idempotencyKey = `follower_order_${accountId}_${contactId}_${parsed.username}_${parsed.quantity}_${messageId}`;
+
+  if (traceId) {
+    TraceLogger.log(traceId, '08', 'ORDER CREATED', {
+      orderCode,
+      idempotencyKey,
+    });
+  }
 
   // 4. Resolve Follower Creative Template
   let templateId = FOLLOWER_TEMPLATE_ID;
@@ -209,7 +241,15 @@ export async function handleFollowerOrder(
     date: new Date().toLocaleDateString('pt-BR'),
     profile_image: finalAvatarUrl,
     amount: 'R$ 49,90',
+    trace_id: traceId,
   };
+
+  if (traceId) {
+    TraceLogger.log(traceId, '09', 'CREATIVE JOB CREATED', {
+      templateId,
+      orderCode,
+    });
+  }
 
   // 6. Process Creative Job (Render -> Storage -> WhatsApp Delivery)
   console.log(`[FOLLOWER_ORDER] Triggering Creative Job for order #${orderCode}...`);
@@ -233,8 +273,20 @@ export async function handleFollowerOrder(
     deliveryOptions: {
       recipient: phone,
       caption,
+      metadata: { traceId },
     },
   });
+
+  if (traceId) {
+    TraceLogger.log(traceId, '10', 'CREATIVE RENDERED', {
+      jobId: job.id,
+      dimensions: '960x960',
+    });
+    TraceLogger.log(traceId, '11', 'STORAGE UPLOAD', {
+      jobId: job.id,
+      outputUrl: job.output_url ? job.output_url.slice(0, 60) + '...' : null,
+    });
+  }
 
   console.log(`[FOLLOWER_ORDER] Job completed: ${job.id}, status: ${job.status}, output_url: ${job.output_url}`);
 

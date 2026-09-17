@@ -70,6 +70,7 @@ const nextConfig: NextConfig = {
   output: process.env.VERCEL ? undefined : "standalone",
   outputFileTracingRoot: path.resolve(__dirname),
   serverExternalPackages: [
+    "sharp",
     "@whiskeysockets/baileys",
     "whatsapp-rust-bridge",
     "pino",

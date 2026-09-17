@@ -12,6 +12,7 @@ import { sendUazApiMedia, normalizeBaseUrl, formatUazApiNumber } from '@/lib/wha
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { updateConversationWithMessage } from '@/lib/whatsapp/conversation-helpers';
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
+import { TraceLogger } from '@/lib/whatsapp/trace';
 
 function getAdminClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -96,6 +97,14 @@ export class WhatsAppDeliveryProvider implements DeliveryProvider {
 
         const baseUrl = normalizeBaseUrl(config.base_url as string);
         const formattedPhone = formatUazApiNumber(recipientPhone);
+        const traceId = (options.metadata?.traceId as string) || (job.input_data?.trace_id as string);
+
+        if (traceId) {
+          TraceLogger.log(traceId, '12', 'UAZAPI SEND REQUEST', {
+            recipient: formattedPhone,
+            mediaUrl: mediaUrl.slice(0, 60) + '...',
+          });
+        }
 
         const sendRes = await sendUazApiMedia(baseUrl, token, {
           number: formattedPhone,
@@ -104,6 +113,13 @@ export class WhatsAppDeliveryProvider implements DeliveryProvider {
           caption,
         });
         providerMessageId = sendRes.messageId;
+
+        if (traceId) {
+          TraceLogger.log(traceId, '13', 'UAZAPI SEND ACCEPTED', {
+            messageId: providerMessageId,
+            status: 'accepted',
+          });
+        }
       } else {
         // If neither UazAPI nor Baileys connection is active, simulate provider message id
         // to permit development, staging, or automated environments without blocking
@@ -113,11 +129,12 @@ export class WhatsAppDeliveryProvider implements DeliveryProvider {
 
       // 2. Unify with CRM Conversation and Message History
       // Find or link with contact/conversation
+      const formattedRecipient = formatUazApiNumber(recipientPhone);
       const { data: contact } = await supabase
         .from('contacts')
         .select('id')
         .eq('account_id', accountId)
-        .eq('phone', recipientPhone)
+        .or(`phone.eq.${recipientPhone},phone.eq.${formattedRecipient},phone_normalized.eq.${formattedRecipient}`)
         .maybeSingle();
 
       let conversationId: string | null = null;

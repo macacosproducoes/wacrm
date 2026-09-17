@@ -6,7 +6,6 @@
  * 100% deterministic: NO LLM or generative AI drawing.
  */
 
-import sharp from 'sharp';
 import type {
   TemplateDefinition,
   CreativeElement,
@@ -133,8 +132,9 @@ export class CreativeRenderer {
   ${renderedElements.join('\n  ')}
 </svg>`;
 
-    // Deterministic compile via Sharp
-    const pngBuffer = await sharp(Buffer.from(svg))
+    // Deterministic compile via Sharp (dynamically imported for serverless safety)
+    const sharpModule = (await import('sharp')).default;
+    const pngBuffer = await sharpModule(Buffer.from(svg))
       .png({
         quality: 95,
         compressionLevel: 8,

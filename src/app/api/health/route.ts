@@ -95,28 +95,76 @@ export async function GET() {
       }
     }
 
-    // 2. Last Message Ingestion
-    const { data: latestMsg } = await supabase
-      .from('messages')
-      .select('created_at')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    // 2. Database Connectivity & Inbound / Outbound Messages
+    let dbStatus = 'HEALTHY';
+    let lastInboundAgo = 'N/A';
+    let lastInboundMinutes: number | null = null;
+    let lastOutboundAgo = 'N/A';
+    let lastOutboundMinutes: number | null = null;
 
-    if (latestMsg?.created_at) {
-      const msgTime = new Date(latestMsg.created_at).getTime();
-      const diffMinutes = Math.floor((Date.now() - msgTime) / 60000);
-      lastMessageMinutes = diffMinutes;
-      lastMessageAgo = diffMinutes === 0 ? 'Agora mesmo' : `${diffMinutes} minutos atrás`;
+    try {
+      // Inbound
+      const { data: latestInbound, error: inErr } = await supabase
+        .from('messages')
+        .select('created_at')
+        .eq('sender_type', 'customer')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (inErr) dbStatus = 'DEGRADED';
+      if (latestInbound?.created_at) {
+        const inTime = new Date(latestInbound.created_at).getTime();
+        const diffM = Math.floor((Date.now() - inTime) / 60000);
+        lastInboundMinutes = diffM;
+        lastInboundAgo = diffM === 0 ? 'Agora mesmo' : `${diffM} min atrás`;
+      }
+
+      // Outbound
+      const { data: latestOutbound } = await supabase
+        .from('messages')
+        .select('created_at')
+        .eq('sender_type', 'agent')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (latestOutbound?.created_at) {
+        const outTime = new Date(latestOutbound.created_at).getTime();
+        const diffM = Math.floor((Date.now() - outTime) / 60000);
+        lastOutboundMinutes = diffM;
+        lastOutboundAgo = diffM === 0 ? 'Agora mesmo' : `${diffM} min atrás`;
+      }
+    } catch {
+      dbStatus = 'ERROR';
     }
 
-    // 3. Pending Messages / Executions
+    // 3. Pending & Failed Creative Jobs
+    let failedCreativeJobs = 0;
+    let pendingCreativeJobs = 0;
+    try {
+      const { count: failedCount } = await supabase
+        .from('creative_jobs')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'FAILED');
+      failedCreativeJobs = failedCount || 0;
+
+      const { count: processingCount } = await supabase
+        .from('creative_jobs')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'PROCESSING');
+      pendingCreativeJobs = processingCount || 0;
+    } catch {
+      // non-blocking
+    }
+
+    // 4. Pending Automations
     const { count: pendingExecs } = await supabase
       .from('automation_pending_executions')
       .select('id', { count: 'exact', head: true })
       .eq('status', 'pending');
 
-    pendingCount = pendingExecs || 0;
+    pendingCount = (pendingExecs || 0) + pendingCreativeJobs;
 
     // Check AI config presence
     const { data: aiConfig } = await supabase
@@ -130,22 +178,30 @@ export async function GET() {
       agentStatus = 'NOT_CONFIGURED';
     }
 
-    const isSystemHealthy = whatsappStatus === 'CONNECTED' && webhookStatus === 'HEALTHY';
+    // Silence detection: WhatsApp connected but no inbound for > 360m (6h)
+    const silenceWarning = whatsappStatus === 'CONNECTED' && lastInboundMinutes !== null && lastInboundMinutes > 360;
+
+    const isSystemHealthy = whatsappStatus === 'CONNECTED' && webhookStatus === 'HEALTHY' && dbStatus === 'HEALTHY';
 
     return NextResponse.json({
       status: isSystemHealthy ? 'HEALTHY' : 'DEGRADED',
       checks: {
+        DATABASE: dbStatus,
         WHATSAPP: whatsappStatus,
         WEBHOOK: webhookStatus,
-        'LAST MESSAGE': lastMessageAgo,
         AGENT: agentStatus,
-        PENDING: pendingCount,
+        'LAST INBOUND': lastInboundAgo,
+        'LAST OUTBOUND': lastOutboundAgo,
+        'PENDING JOBS': pendingCount,
+        'FAILED JOBS': failedCreativeJobs,
+        'SILENCE WARNING': silenceWarning ? 'YES (>6h sem mensagens)' : 'NO',
         'LAST ERROR': lastError,
       },
       details: {
         phone: activePhone,
         instance: activeInstance,
-        lastMessageMinutes,
+        lastInboundMinutes,
+        lastOutboundMinutes,
         responseTimeMs: Date.now() - startTime,
         timestamp: new Date().toISOString(),
       },
@@ -155,6 +211,7 @@ export async function GET() {
       status: 'UNHEALTHY',
       error: err.message,
       checks: {
+        DATABASE: 'ERROR',
         WHATSAPP: 'ERROR',
         WEBHOOK: 'ERROR',
         'LAST ERROR': err.message,
