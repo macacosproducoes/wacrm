@@ -286,6 +286,21 @@ export async function handleFollowerOrder(
     contact_id: contactId,
     phone,
     recipient: phone,
+    order: {
+      code: orderCode,
+      quantity: parsed.quantityFormatted || String(parsed.quantity),
+      service: 'Seguidores Instagram',
+      amount: 'R$ 49,90',
+      date: new Date().toLocaleDateString('pt-BR'),
+    },
+    customer: {
+      name: recipientName,
+      phone,
+    },
+    instagram: {
+      username: parsed.username,
+      profile_image: templateProfileImage,
+    },
   };
 
   if (traceId) {

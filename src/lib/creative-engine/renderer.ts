@@ -133,15 +133,24 @@ export class CreativeRenderer {
 </svg>`;
 
     // Deterministic compile: Try @resvg/resvg-js first (Rust N-API, standalone, zero libvips dependencies)
-    // with automatic fallback to Sharp.
+    // with embedded true-type font buffers (guarantees text glyph rendering on AWS Lambda/Vercel Serverless)
+    // and automatic fallback to Sharp.
     let pngBuffer: Buffer;
     try {
       const { Resvg } = await import('@resvg/resvg-js');
+      const { getFontFiles } = await import('./embedded-fonts');
+      const fontFiles = getFontFiles();
+
       const resvg = new Resvg(svg, {
         fitTo: { mode: 'width', value: width },
         shapeRendering: 2,
         textRendering: 1,
         imageRendering: 0,
+        font: {
+          loadSystemFonts: true,
+          fontFiles,
+          defaultFontFamily: 'Roboto',
+        },
       });
       const pngData = resvg.render();
       pngBuffer = Buffer.from(pngData.asPng());
@@ -271,7 +280,7 @@ export class CreativeRenderer {
     }
 
     const fontSize = el.fontSize || 24;
-    const fontFamily = el.fontFamily || "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+    const fontFamily = el.fontFamily || "Roboto, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif";
     const fontWeight = el.fontWeight || 'normal';
     const color = el.color || '#000000';
     const alignment = el.alignment || 'left';
