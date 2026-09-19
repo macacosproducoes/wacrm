@@ -442,7 +442,7 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
               ) : (
                 <>
                   <Send className="h-3.5 w-3.5" />
-                  <span>📤 ENVIAR</span>
+                  <span>⚡ GERAR E ENVIAR CONFIRMAÇÃO</span>
                 </>
               )}
             </Button>

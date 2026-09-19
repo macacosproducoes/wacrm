@@ -400,17 +400,17 @@ export function InstagramProfileCard({
           size="sm"
           onClick={handleSendTemplate}
           disabled={isSendingTemplate || loading || !username}
-          className="w-full h-8 text-xs font-semibold gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground shadow-xs"
+          className="w-full h-8 text-xs font-semibold gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
         >
           {isSendingTemplate ? (
             <>
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              <span>Gerando e Enviando Arte...</span>
+              <span>Gerando e Enviando Arte Instantânea...</span>
             </>
           ) : (
             <>
               <Send className="h-3.5 w-3.5" />
-              <span>Gerar e Enviar Confirmação</span>
+              <span>⚡ Gerar Foto Instantânea (Template WhatsApp)</span>
             </>
           )}
         </Button>
@@ -422,26 +422,26 @@ export function InstagramProfileCard({
             onClick={() => handleResolve(true)}
             disabled={loading || isSendingTemplate || !username}
             className="h-7 flex-1 text-[11px] gap-1 px-2"
-            title="Consultar novamente o Instagram Provider"
+            title="Buscar novamente a foto de perfil oficial no Instagram"
           >
             {loading ? (
               <Loader2 className="h-3 w-3 animate-spin" />
             ) : (
               <RefreshCw className="h-3 w-3" />
             )}
-            <span>Atualizar Foto</span>
+            <span>Buscar no Instagram</span>
           </Button>
 
           <Button
             size="sm"
-            variant="outline"
+            variant="ghost"
             onClick={() => fileInputRef.current?.click()}
             disabled={loading || isSendingTemplate}
-            className="h-7 flex-1 text-[11px] gap-1 px-2 text-muted-foreground hover:text-foreground"
-            title="Fazer upload de foto do computador"
+            className="h-7 text-[11px] gap-1 px-2 text-muted-foreground hover:text-foreground border border-dashed border-border"
+            title="Importar imagem salva no seu computador (apenas se o Instagram não tiver foto pública)"
           >
             <Upload className="h-3 w-3" />
-            <span>Upload Manual</span>
+            <span>Arquivo do PC</span>
           </Button>
 
           <input

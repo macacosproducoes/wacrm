@@ -528,12 +528,12 @@ export function InstagramDiagnosticModal({
               {isSendingOrder ? (
                 <>
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  <span>Gerando & Enviando...</span>
+                  <span>Gerando & Enviando Arte...</span>
                 </>
               ) : (
                 <>
                   <Send className="h-3.5 w-3.5" />
-                  <span>Enviar Confirmação</span>
+                  <span>⚡ Gerar e Enviar Confirmação</span>
                 </>
               )}
             </Button>
@@ -554,7 +554,7 @@ export function InstagramDiagnosticModal({
             ) : (
               <RefreshCw className="h-3 w-3" />
             )}
-            <span>Consultar Perfil</span>
+            <span>Buscar no Instagram</span>
           </Button>
 
           <input
@@ -568,12 +568,13 @@ export function InstagramDiagnosticModal({
           <Button
             variant="ghost"
             size="sm"
-            className="h-8 gap-1 text-xs text-muted-foreground hover:text-foreground"
+            className="h-8 gap-1 text-xs text-muted-foreground hover:text-foreground border border-dashed border-border"
             onClick={() => fileInputRef.current?.click()}
             disabled={isResolving}
+            title="Importar imagem do seu computador (caso o Instagram não tenha foto)"
           >
             <Upload className="h-3 w-3" />
-            <span>Upload Manual</span>
+            <span>Arquivo do PC</span>
           </Button>
 
           {contact.profile_image_url && (

@@ -70,6 +70,7 @@ const nextConfig: NextConfig = {
   output: process.env.VERCEL ? undefined : "standalone",
   outputFileTracingRoot: path.resolve(__dirname),
   serverExternalPackages: [
+    "@resvg/resvg-js",
     "sharp",
     "@whiskeysockets/baileys",
     "whatsapp-rust-bridge",
@@ -78,6 +79,7 @@ const nextConfig: NextConfig = {
   ],
   outputFileTracingIncludes: {
     "/api/**/*": [
+      "./node_modules/@resvg/**/*",
       "./node_modules/@img/**/*",
       "./node_modules/sharp/**/*",
     ],

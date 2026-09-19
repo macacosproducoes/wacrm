@@ -132,15 +132,30 @@ export class CreativeRenderer {
   ${renderedElements.join('\n  ')}
 </svg>`;
 
-    // Deterministic compile via Sharp (dynamically imported for serverless safety)
-    const sharpModule = (await import('sharp')).default;
-    const pngBuffer = await sharpModule(Buffer.from(svg))
-      .png({
-        quality: 95,
-        compressionLevel: 8,
-        adaptiveFiltering: true,
-      })
-      .toBuffer();
+    // Deterministic compile: Try @resvg/resvg-js first (Rust N-API, standalone, zero libvips dependencies)
+    // with automatic fallback to Sharp.
+    let pngBuffer: Buffer;
+    try {
+      const { Resvg } = await import('@resvg/resvg-js');
+      const resvg = new Resvg(svg, {
+        fitTo: { mode: 'width', value: width },
+        shapeRendering: 2,
+        textRendering: 1,
+        imageRendering: 0,
+      });
+      const pngData = resvg.render();
+      pngBuffer = Buffer.from(pngData.asPng());
+    } catch (resvgErr) {
+      console.warn('[CreativeRenderer] @resvg/resvg-js failed, falling back to sharp:', resvgErr);
+      const sharpModule = (await import('sharp')).default;
+      pngBuffer = await sharpModule(Buffer.from(svg))
+        .png({
+          quality: 95,
+          compressionLevel: 8,
+          adaptiveFiltering: true,
+        })
+        .toBuffer();
+    }
 
     return {
       pngBuffer,
@@ -327,7 +342,7 @@ export class CreativeRenderer {
       clipAttr = ` clip-path="url(#${clipId})"`;
     }
 
-    return `<image href="${dataUri}" x="${el.x}" y="${el.y}" width="${el.width}" height="${el.height}" preserveAspectRatio="${preserveAspect}"${clipAttr}${transformAttr}${opacityAttr}/>`;
+    return `<image href="${dataUri}" xlink:href="${dataUri}" x="${el.x}" y="${el.y}" width="${el.width}" height="${el.height}" preserveAspectRatio="${preserveAspect}"${clipAttr}${transformAttr}${opacityAttr}/>`;
   }
 
   /**
@@ -369,7 +384,7 @@ export class CreativeRenderer {
       </clipPath>
     `);
 
-    const imageSvg = `<image href="${dataUri}" x="${cx - radius}" y="${cy - radius}" width="${radius * 2}" height="${radius * 2}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clipId})"${transformAttr}${opacityAttr}/>`;
+    const imageSvg = `<image href="${dataUri}" xlink:href="${dataUri}" x="${cx - radius}" y="${cy - radius}" width="${radius * 2}" height="${radius * 2}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clipId})"${transformAttr}${opacityAttr}/>`;
 
     // Optional border circle on top
     let borderSvg = '';
