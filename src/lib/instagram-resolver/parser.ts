@@ -43,12 +43,22 @@ const RESERVED_PATHS = new Set([
   'ola',
   'olá',
   'obrigado',
+  'obrigada',
   'quero',
+  'manda',
+  'envia',
+  'favor',
+  'porfavor',
+  'por',
   'seguidores',
+  'seguidor',
+  'followers',
+  'follower',
   'preco',
   'preço',
   'valor',
   'comprei',
+  'comprar',
   'tabela',
   'catalogo',
   'catálogo',
@@ -63,6 +73,19 @@ const RESERVED_PATHS = new Set([
   'nós',
   'voce',
   'você',
+  'nome',
+  'sou',
+  'para',
+  'pra',
+  'pro',
+  'amigo',
+  'amiga',
+  'cliente',
+  'dia',
+  'tarde',
+  'noite',
+  'bom',
+  'boa',
 ]);
 
 /**
@@ -199,11 +222,33 @@ export function extractInstagramIdentifier(text: string | null | undefined): Ins
     }
   }
 
-  // 3. Match contextual phrases like "insta: joaosilva" or "instagram é joaosilva"
-  // ONLY if no explicit URL or @mention was found (prevents false matches on message body words like "pix")
+  // 3. Match contextual phrases and conversational introductions (only if no explicit URL or @mention)
   if (detectedUsernames.size === 0) {
-    const contextRegex = /(?:insta(?:gram)?|perfil)\s*(?:é|e|:|-|=|\s)\s*([a-zA-Z0-9._]{2,30})\b/gi;
+    // 3a. Explicit keywords: "insta: joaosilva", "instagram é joaosilva", "perfil joaosilva"
+    const contextRegex = /(?:insta(?:gram)?|perfil|usuario|usuário|user)\s*(?:é|e|:|-|=|\s)\s*([a-zA-Z0-9._]{2,30})\b/gi;
     while ((match = contextRegex.exec(rawText)) !== null) {
+      const candidate = match[1];
+      const parsed = parseInstagramUsername(candidate);
+      if (parsed) {
+        detectedUsernames.add(parsed);
+      }
+    }
+
+    // 3b. Conversational self-introductions:
+    // "sou o cristiano", "sou a maria", "sou cristiano", "meu nome é cristiano", "me chamo cristiano"
+    const introRegex = /(?:^|[\s,;:!?"'()[\]{}])(?:sou\s+(?:o\s+|a\s+)?|meu\s+nome\s+[ée]\s+|me\s+chamo\s+|eu\s+sou\s+)([a-zA-Z0-9._]{2,30})\b/gi;
+    while ((match = introRegex.exec(rawText)) !== null) {
+      const candidate = match[1];
+      const parsed = parseInstagramUsername(candidate);
+      if (parsed) {
+        detectedUsernames.add(parsed);
+      }
+    }
+
+    // 3c. Target recipient phrases:
+    // "para o cristiano", "pro cristiano", "pra maria", "para cristiano", "conta do cristiano"
+    const targetRegex = /(?:^|[\s,;:!?"'()[\]{}])(?:para\s+(?:o\s+|a\s+)?|pro\s+(?:o\s+)?|pra\s+(?:a\s+)?|pro\s+|pra\s+|para\s+|conta\s+do\s+|perfil\s+do\s+|insta\s+do\s+)([a-zA-Z0-9._]{2,30})\b/gi;
+    while ((match = targetRegex.exec(rawText)) !== null) {
       const candidate = match[1];
       const parsed = parseInstagramUsername(candidate);
       if (parsed) {

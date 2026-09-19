@@ -3,6 +3,7 @@ import { requireRole, toErrorResponse } from '@/lib/auth/account';
 import { supabaseAdmin } from '@/lib/flows/admin-client';
 import { InstagramProfileResolver } from '@/lib/instagram-resolver';
 import { parseInstagramUsername, buildInstagramProfileUrl } from '@/lib/instagram-resolver/parser';
+import { getInstagramDiagnosticInfo } from '@/lib/instagram-resolver/types';
 
 export const runtime = 'nodejs';
 
@@ -42,18 +43,22 @@ export async function GET(request: Request, context: RouteContext) {
       return NextResponse.json({ error: 'Contato não encontrado.' }, { status: 404 });
     }
 
+    const diagnostic = getInstagramDiagnosticInfo(contact);
+
     return NextResponse.json({
       success: true,
       instagram: {
         username: contact.instagram_username || null,
         url: contact.instagram_url || (contact.instagram_username ? buildInstagramProfileUrl(contact.instagram_username) : null),
-        profile_image_url: contact.profile_image_url || contact.avatar_url || null,
+        profile_image_url: contact.profile_image_url || null, // STRICTLY separate from WhatsApp avatar_url
         profile_image_source: contact.profile_image_source || 'INSTAGRAM_PROVIDER',
         profile_image_updated_at: contact.profile_image_updated_at || null,
+        profile_image_hash: contact.profile_image_hash || null,
         status: contact.instagram_resolve_status || 'NOT_REQUESTED',
         last_error: contact.instagram_last_error || null,
         attempt_count: contact.instagram_attempt_count || 0,
         last_attempt_at: contact.instagram_last_attempt_at || null,
+        diagnostic,
       },
     });
   } catch (err) {

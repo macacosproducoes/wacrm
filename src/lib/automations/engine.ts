@@ -637,7 +637,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
           .eq('account_id', args.automation.account_id)
           .maybeSingle()
         if (contact) {
-          const profileImg = contact.profile_image_url || contact.avatar_url || null
+          const profileImg = contact.profile_image_url || null;
           contactData = {
             contact: {
               ...contact,

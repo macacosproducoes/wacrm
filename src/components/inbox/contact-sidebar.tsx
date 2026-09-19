@@ -27,7 +27,8 @@ import { formatContactDisplayName } from "@/lib/contacts/format-contact";
 import { format } from "date-fns";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { InstagramProfileCard } from "@/components/contacts/instagram-profile-card";
+import { InstagramDiagnosticModal } from "@/components/contacts/instagram-diagnostic-modal";
+import { FollowerOrderCard } from "./follower-order-card";
 
 interface ContactSidebarProps {
   contact: Contact | null;
@@ -336,9 +337,17 @@ export function ContactSidebar({ contact, onContactUpdated }: ContactSidebarProp
             )}
           </div>
 
-          {/* Instagram Profile */}
+          {/* Follower Order Confirmation Card (Realtime Preview & One-Click Send) */}
           <div className="mt-4">
-            <InstagramProfileCard
+            <FollowerOrderCard
+              contact={contact}
+              onContactUpdated={onContactUpdated}
+            />
+          </div>
+
+          {/* Instagram Diagnostic & Action Button */}
+          <div className="mt-3">
+            <InstagramDiagnosticModal
               contact={contact}
               onContactUpdated={onContactUpdated}
             />

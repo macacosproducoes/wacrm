@@ -100,7 +100,7 @@ export class WhatsAppDeliveryProvider implements DeliveryProvider {
         const traceId = (options.metadata?.traceId as string) || (job.input_data?.trace_id as string);
 
         if (traceId) {
-          TraceLogger.log(traceId, '12', 'UAZAPI SEND REQUEST', {
+          TraceLogger.log(traceId, 'T12', 'UAZAPI SEND REQUEST', {
             recipient: formattedPhone,
             mediaUrl: mediaUrl.slice(0, 60) + '...',
           });
@@ -115,7 +115,7 @@ export class WhatsAppDeliveryProvider implements DeliveryProvider {
         providerMessageId = sendRes.messageId;
 
         if (traceId) {
-          TraceLogger.log(traceId, '13', 'UAZAPI SEND ACCEPTED', {
+          TraceLogger.log(traceId, 'T13', 'UAZAPI SEND ACCEPTED', {
             messageId: providerMessageId,
             status: 'accepted',
           });
@@ -205,6 +205,16 @@ export class WhatsAppDeliveryProvider implements DeliveryProvider {
         })
         .select('id')
         .single();
+
+      const traceId = (options.metadata?.traceId as string) || (job.input_data?.trace_id as string);
+      if (traceId) {
+        TraceLogger.log(traceId, 'T14', 'DELIVERY REGISTERED', {
+          jobId: job.id,
+          providerMessageId,
+          deliveryId: deliveryRow?.id,
+          channel: 'whatsapp',
+        });
+      }
 
       if (deliveryErr) {
         console.warn('[Creative Engine] Failed to record delivery row in creative_deliveries:', deliveryErr);

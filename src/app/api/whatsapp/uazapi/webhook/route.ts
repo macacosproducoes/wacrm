@@ -87,7 +87,7 @@ export async function POST(request: Request) {
       }, { status: 200 });
     }
 
-    TraceLogger.log(traceId, '02', 'WEBHOOK RECEIVED', {
+    TraceLogger.log(traceId, 'T2', 'WEBHOOK RECEIVED', {
       eventId: ingestResult.id,
       timestamp: now,
     });
@@ -110,43 +110,72 @@ export async function POST(request: Request) {
     const { processUazApiEvent } = await import('@/lib/whatsapp/uazapi-event-processor');
     const processResult = await processUazApiEvent(body, connectionHint, {
       traceId,
-      skipAiDispatch: true, // We delegate AI execution to after() so HTTP response returns instantly
+      skipAiDispatch: true, // We delegate AI/order execution to after() so HTTP response returns instantly
     });
+
+    if (processResult.success && processResult.messageId) {
+      TraceLogger.log(traceId, 'T3', 'MESSAGE PERSISTED TO DB', {
+        conversationId: processResult.conversationId,
+        messageId: processResult.messageId,
+      });
+    }
 
     // 3. Mark event state QUEUED
     await WebhookEventManager.updateStatus(traceId, 'QUEUED');
 
-    // 4. Delegate AI Agent execution to Next.js serverless-safe after()
-    // This keeps the Vercel Lambda alive until the AI response is delivered,
+    // 4. Delegate asynchronous background processing to Next.js serverless-safe after()
+    // This keeps the Vercel Lambda alive until the follower order or AI response is delivered,
     // independent of whether the CRM frontend is open or closed!
-    if (processResult.shouldTriggerAi && processResult.conversationId && processResult.accountId && processResult.userId) {
+    const hasFollowerOrder = Boolean(processResult.followerOrderParams);
+    const hasAiTask = Boolean(
+      processResult.shouldTriggerAi &&
+      processResult.conversationId &&
+      processResult.accountId &&
+      processResult.userId
+    );
+
+    if (hasFollowerOrder || hasAiTask) {
       after(async () => {
         try {
           await WebhookEventManager.updateStatus(traceId, 'PROCESSING');
-          TraceLogger.log(traceId, '04', 'AGENT TRIGGERED', {
-            conversationId: processResult.conversationId,
-            text: processResult.messageText,
-          });
 
-          const { dispatchInboundToAiReply } = await import('@/lib/ai/auto-reply');
-          await dispatchInboundToAiReply({
-            accountId: processResult.accountId!,
-            conversationId: processResult.conversationId!,
-            contactId: processResult.contactId!,
-            configOwnerUserId: processResult.userId!,
-            messageId: processResult.messageId,
-            immediate: true,
-          });
+          // Priority 1: Automated Follower Order Workflow (Instagram Resolver -> Creative Job -> UAZAPI Send)
+          if (processResult.followerOrderParams) {
+            console.log(`[TRACE ${traceId}] Processing automated follower order inside serverless after()...`);
+            const { handleFollowerOrder } = await import('@/lib/orders/follower-order-handler');
+            const orderRes = await handleFollowerOrder(processResult.followerOrderParams);
+            if (orderRes.handled) {
+              console.log(`[TRACE ${traceId}] Automated follower order #${orderRes.orderCode} successfully handled! Sent: ${orderRes.deliverySuccess}`);
+            }
+          }
+
+          // Priority 2: AI auto-reply for general inquiries (only if not an order)
+          if (hasAiTask && !hasFollowerOrder) {
+            TraceLogger.log(traceId, '04', 'AGENT TRIGGERED', {
+              conversationId: processResult.conversationId,
+              text: processResult.messageText,
+            });
+
+            const { dispatchInboundToAiReply } = await import('@/lib/ai/auto-reply');
+            await dispatchInboundToAiReply({
+              accountId: processResult.accountId!,
+              conversationId: processResult.conversationId!,
+              contactId: processResult.contactId!,
+              configOwnerUserId: processResult.userId!,
+              messageId: processResult.messageId,
+              immediate: true,
+            });
+            console.log(`[TRACE ${traceId}] AI auto-reply completed in after() execution context.`);
+          }
 
           await WebhookEventManager.updateStatus(traceId, 'COMPLETED');
-          console.log(`[TRACE ${traceId}] AI auto-reply completed in after() execution context.`);
-        } catch (agentErr: any) {
-          console.error(`[TRACE ${traceId}] Error in after() AI execution:`, agentErr);
-          await WebhookEventManager.updateStatus(traceId, 'FAILED', agentErr?.message || String(agentErr));
+        } catch (taskErr: any) {
+          console.error(`[TRACE ${traceId}] Error in after() background execution:`, taskErr);
+          await WebhookEventManager.updateStatus(traceId, 'FAILED', taskErr?.message || String(taskErr));
         }
       });
     } else {
-      // Non-AI event (e.g. status ack or outgoing message)
+      // Non-background event (e.g. status ack or outgoing message)
       await WebhookEventManager.updateStatus(traceId, 'COMPLETED');
     }
 
@@ -159,7 +188,8 @@ export async function POST(request: Request) {
       trace_id: traceId,
       received: true,
       persisted: processResult.success,
-      queued: processResult.shouldTriggerAi,
+      queued: hasFollowerOrder || hasAiTask,
+      is_order: hasFollowerOrder,
       conversation_id: processResult.conversationId,
       latency_ms: Math.round(tTotal),
     }, { status: 200 });

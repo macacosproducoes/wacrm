@@ -63,6 +63,16 @@ export interface ProcessUazApiResult {
   accountId?: string;
   userId?: string;
   shouldTriggerAi?: boolean;
+  followerOrderParams?: {
+    accountId: string;
+    contactId: string;
+    conversationId: string;
+    phone: string;
+    messageText: string;
+    messageId: string;
+    pushName?: string;
+    traceId?: string;
+  };
 }
 
 /**
@@ -264,6 +274,27 @@ export async function processUazApiEvent(
             eventType: 'UPDATE',
             message: updatedMsg,
           });
+        }
+
+        // T15: If this message corresponds to a creative delivery, update creative_deliveries status
+        if (normalizedStatus === 'delivered' || normalizedStatus === 'read') {
+          const { data: updatedDelivery } = await admin
+            .from('creative_deliveries')
+            .update({
+              status: 'DELIVERED',
+              delivered_at: new Date().toISOString(),
+            })
+            .or(`provider_message_id.eq.${cleanMsgId},provider_message_id.eq.${rawMsgId}`)
+            .select('id, job_id, trace_id')
+            .maybeSingle();
+
+          if (updatedDelivery?.trace_id) {
+            TraceLogger.log(updatedDelivery.trace_id, 'T15', 'DELIVERY CONFIRMED ON WHATSAPP', {
+              deliveryId: updatedDelivery.id,
+              jobId: updatedDelivery.job_id,
+              status: normalizedStatus,
+            });
+          }
         }
       }
     }
@@ -924,30 +955,33 @@ export async function processUazApiEvent(
     }
   }
 
-  // Evaluate Automated Follower Order in background (non-blocking so it never delays message intake or AI dispatch)
+  // Evaluate Automated Follower Order (synchronously parsed, delegated to serverless after() or executed directly)
+  let followerOrderParams: ProcessUazApiResult['followerOrderParams'] | undefined;
   if (!fromMe && trimmed && !isIgnoredText && isFreshMessage) {
-    void import('@/lib/orders/follower-order-handler').then(({ handleFollowerOrder }) => {
-      return handleFollowerOrder({
-        accountId: connection.account_id,
-        contactId,
-        conversationId,
-        phone: formattedPhone,
-        messageText: trimmed,
-        messageId: externalMessageId,
-        pushName,
-        traceId,
-      });
-    }).then((orderRes) => {
-      if (orderRes?.handled) {
-        console.log(`[UazAPI Event Processor] Automated follower order #${orderRes.orderCode} processed & delivered successfully for contact ${contactId}`);
+    try {
+      const { parseFollowerOrder } = await import('@/lib/orders/follower-order-handler');
+      const parsedOrder = parseFollowerOrder(trimmed);
+      if (parsedOrder.isFollowerOrder && parsedOrder.username && parsedOrder.quantity) {
+        followerOrderParams = {
+          accountId: connection.account_id,
+          contactId,
+          conversationId,
+          phone: formattedPhone,
+          messageText: trimmed,
+          messageId: externalMessageId,
+          pushName,
+          traceId,
+        };
+        console.log(`[UazAPI Event Processor] Follower order identified for contact ${contactId}: @${parsedOrder.username} (${parsedOrder.quantity} followers)`);
       }
-    }).catch((orderErr) => {
-      console.error('[UazAPI Event Processor] Error processing follower order in background:', orderErr);
-    });
+    } catch (parseErr) {
+      console.error('[UazAPI Event Processor] Error checking follower order:', parseErr);
+    }
   }
 
-  // Trigger AI auto-reply for inbound customer messages (strictly for real-time text turns within last 60m, never reactions/emojis or historical syncs)
-  const shouldTriggerAi = Boolean(!fromMe && trimmed && !isEmojiOnly && !isIgnoredText && isFreshMessage);
+  // Trigger AI auto-reply for inbound customer messages (strictly when not a follower order)
+  const isOrder = Boolean(followerOrderParams);
+  const shouldTriggerAi = Boolean(!fromMe && trimmed && !isEmojiOnly && !isIgnoredText && isFreshMessage && !isOrder);
 
   if (shouldTriggerAi && !options?.skipAiDispatch) {
     try {
@@ -977,5 +1011,6 @@ export async function processUazApiEvent(
     accountId: connection.account_id,
     userId,
     shouldTriggerAi,
+    followerOrderParams,
   };
 }

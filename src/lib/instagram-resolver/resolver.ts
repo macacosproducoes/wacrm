@@ -194,10 +194,11 @@ export class InstagramProfileResolver {
         resolveStatus = 'IMAGE_AVAILABLE';
       } else {
         console.log(`[INSTAGRAM] PROFILE_IMAGE_UNAVAILABLE for @${normalizedUsername}`);
+        resolveStatus = 'IMAGE_UNAVAILABLE';
       }
 
-      // 7. Update Contact in DB
-      const updates = {
+      // 7. Update Contact in DB (CRITICAL: NEVER touch contact.avatar_url, which belongs strictly to WhatsApp)
+      const updates: Record<string, unknown> = {
         instagram_username: normalizedUsername,
         instagram_url: profileData.profileUrl || buildInstagramProfileUrl(normalizedUsername),
         profile_image_url: finalImageUrl,
@@ -205,8 +206,7 @@ export class InstagramProfileResolver {
         profile_image_updated_at: new Date().toISOString(),
         profile_image_hash: finalHash,
         instagram_resolve_status: resolveStatus,
-        instagram_last_error: null,
-        avatar_url: finalImageUrl || contact.avatar_url,
+        instagram_last_error: resolveStatus === 'IMAGE_UNAVAILABLE' ? 'IMAGE_UNAVAILABLE: Perfil não possui foto pública ou está inacessível' : null,
       };
 
       await supabase
@@ -223,17 +223,30 @@ export class InstagramProfileResolver {
         profileImageSource: 'INSTAGRAM_PROVIDER',
         resolveStatus: resolveStatus as any,
         hash: finalHash,
-        updatedAt: updates.profile_image_updated_at,
+        updatedAt: updates.profile_image_updated_at as string,
       };
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error(`[INSTAGRAM] PROFILE_RESOLUTION_FAILED for @${normalizedUsername}:`, errorMsg);
 
+      let formattedError = errorMsg;
+      if (errorMsg.includes('429')) {
+        formattedError = `INSTAGRAM_HTTP_429: ${errorMsg}`;
+      } else if (errorMsg.includes('404') || errorMsg.toLowerCase().includes('not found')) {
+        formattedError = `INSTAGRAM_PROFILE_NOT_FOUND: ${errorMsg}`;
+      } else if (errorMsg.toLowerCase().includes('storage') || errorMsg.toLowerCase().includes('upload')) {
+        formattedError = `STORAGE_UPLOAD_FAILED: ${errorMsg}`;
+      } else if (errorMsg.toLowerCase().includes('invalid')) {
+        formattedError = `IMAGE_INVALID: ${errorMsg}`;
+      } else if (errorMsg.toLowerCase().includes('timeout') || errorMsg.toLowerCase().includes('abort')) {
+        formattedError = `IMAGE_URL_UNREACHABLE: ${errorMsg}`;
+      }
+
       await supabase
         .from('contacts')
         .update({
           instagram_resolve_status: 'FAILED',
-          instagram_last_error: errorMsg,
+          instagram_last_error: formattedError,
         })
         .eq('id', contactId)
         .eq('account_id', accountId);
@@ -246,7 +259,7 @@ export class InstagramProfileResolver {
         profileImageSource: contact.profile_image_source || 'INSTAGRAM_PROVIDER',
         resolveStatus: 'FAILED',
         updatedAt: new Date().toISOString(),
-        error: errorMsg,
+        error: formattedError,
       };
     }
   }
@@ -290,7 +303,7 @@ export class InstagramProfileResolver {
         profile_image_updated_at: now,
         profile_image_hash: stored.hash,
         instagram_resolve_status: 'IMAGE_AVAILABLE',
-        avatar_url: stored.publicUrl,
+        instagram_last_error: null,
       })
       .eq('id', contactId)
       .eq('account_id', accountId);
@@ -315,7 +328,8 @@ export class InstagramProfileResolver {
   }
 
   /**
-   * Removes a profile photo from a contact
+   * Removes an Instagram profile photo from a contact.
+   * CRITICAL: Leaves contact.avatar_url (WhatsApp photo) completely untouched.
    */
   static async removePhoto(accountId: string, contactId: string): Promise<void> {
     const supabase = getAdminClient();
@@ -326,8 +340,8 @@ export class InstagramProfileResolver {
         profile_image_url: null,
         profile_image_hash: null,
         profile_image_source: 'INSTAGRAM_PROVIDER',
-        instagram_resolve_status: 'MANUAL_REQUIRED',
-        avatar_url: null,
+        instagram_resolve_status: 'IMAGE_UNAVAILABLE',
+        instagram_last_error: 'Foto do Instagram removida manualmente.',
       })
       .eq('id', contactId)
       .eq('account_id', accountId);

@@ -182,11 +182,11 @@ export class CreativeJobManager {
       );
       console.log(`[CREATIVE] template resolved: ${templateId} (v${templateVersion})`);
 
-      // 6. Data Resolution
+      // 6. Data Resolution (CRITICAL: Never fall back to WhatsApp avatar; Instagram photo is strictly separate)
       const resolvedData = { ...inputData };
       const contactObj = resolvedData.contact as Record<string, unknown> | undefined;
       if (contactObj && !resolvedData.profile_image) {
-        resolvedData.profile_image = contactObj.profile_image_url || contactObj.avatar_url || contactObj.profile_image;
+        resolvedData.profile_image = (contactObj.profile_image_url as string) || null;
       }
       console.log(`[CREATIVE] data resolved for job ${job.id}`);
 

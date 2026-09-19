@@ -13,6 +13,8 @@ import {
   X,
   Pencil,
   Check,
+  Send,
+  Sparkles,
 } from "lucide-react";
 
 function InstagramIcon({ className = "h-3 w-3" }: { className?: string }) {
@@ -62,13 +64,46 @@ export function InstagramProfileCard({
   const [usernameInput, setUsernameInput] = useState(
     contact.instagram_username || ""
   );
+  const [isSendingTemplate, setIsSendingTemplate] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const handleSendTemplate = async () => {
+    const handle = (contact.instagram_username || usernameInput || "").trim().replace(/^@+/, "");
+    if (!handle) {
+      toast.error("Informe o @ do Instagram antes de gerar.");
+      return;
+    }
+    setIsSendingTemplate(true);
+    try {
+      const res = await fetch(`/api/contacts/${contact.id}/follower-order`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: handle,
+          quantity: 5000,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "Falha ao gerar e enviar confirmação.");
+      }
+      toast.success(data.message || "✅ Confirmação gerada e enviada ao WhatsApp!");
+      if (data.profile_image_url && onContactUpdated) {
+        onContactUpdated({
+          ...contact,
+          profile_image_url: data.profile_image_url,
+          instagram_resolve_status: "IMAGE_AVAILABLE",
+        });
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Erro ao gerar confirmação.");
+    } finally {
+      setIsSendingTemplate(false);
+    }
+  };
+
   const status = contact.instagram_resolve_status || "NOT_REQUESTED";
-  const profileImage =
-    contact.profile_image_url ||
-    (contact as any).avatar_url ||
-    null;
+  const profileImage = contact.profile_image_url || null;
   const source = contact.profile_image_source || "INSTAGRAM_PROVIDER";
   const updatedAt = contact.profile_image_updated_at;
   const username = contact.instagram_username;
@@ -360,46 +395,67 @@ export function InstagramProfileCard({
       )}
 
       {/* Action Buttons */}
-      <div className="mt-3 flex items-center gap-1.5">
+      <div className="mt-3 space-y-1.5">
         <Button
           size="sm"
-          variant="outline"
-          onClick={() => handleResolve(true)}
-          disabled={loading || !username}
-          className="h-7 flex-1 text-[11px] gap-1 px-2"
-          title="Consultar novamente o Instagram Provider"
+          onClick={handleSendTemplate}
+          disabled={isSendingTemplate || loading || !username}
+          className="w-full h-8 text-xs font-semibold gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground shadow-xs"
         >
-          {loading ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
+          {isSendingTemplate ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <span>Gerando e Enviando Arte...</span>
+            </>
           ) : (
-            <RefreshCw className="h-3 w-3" />
+            <>
+              <Send className="h-3.5 w-3.5" />
+              <span>Gerar e Enviar Confirmação</span>
+            </>
           )}
-          <span>Atualizar Foto</span>
         </Button>
 
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={loading}
-          className="h-7 flex-1 text-[11px] gap-1 px-2"
-          title="Fazer upload de foto manualmente"
-        >
-          <Camera className="h-3 w-3" />
-          <span>Enviar Foto</span>
-        </Button>
+        <div className="flex items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => handleResolve(true)}
+            disabled={loading || isSendingTemplate || !username}
+            className="h-7 flex-1 text-[11px] gap-1 px-2"
+            title="Consultar novamente o Instagram Provider"
+          >
+            {loading ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3 w-3" />
+            )}
+            <span>Atualizar Foto</span>
+          </Button>
 
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/png,image/jpeg,image/webp"
-          className="hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) void handleUploadPhoto(file);
-            e.target.value = "";
-          }}
-        />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={loading || isSendingTemplate}
+            className="h-7 flex-1 text-[11px] gap-1 px-2 text-muted-foreground hover:text-foreground"
+            title="Fazer upload de foto do computador"
+          >
+            <Upload className="h-3 w-3" />
+            <span>Upload Manual</span>
+          </Button>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void handleUploadPhoto(file);
+              e.target.value = "";
+            }}
+          />
+        </div>
       </div>
     </div>
   );
