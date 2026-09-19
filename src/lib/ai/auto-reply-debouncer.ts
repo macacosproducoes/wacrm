@@ -14,6 +14,7 @@ export interface AutoReplyDebounceArgs {
   contactId: string;
   configOwnerUserId: string;
   messageId?: string;
+  isOrderFollowup?: boolean;
 }
 
 export interface DebouncerOptions {

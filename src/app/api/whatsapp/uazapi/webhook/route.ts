@@ -140,20 +140,30 @@ export async function POST(request: Request) {
           await WebhookEventManager.updateStatus(traceId, 'PROCESSING');
 
           // Priority 1: Automated Follower Order Workflow (Instagram Resolver -> Creative Job -> UAZAPI Send)
+          let followerOrderHandled = false;
           if (processResult.followerOrderParams) {
             console.log(`[TRACE ${traceId}] Processing automated follower order inside serverless after()...`);
             const { handleFollowerOrder } = await import('@/lib/orders/follower-order-handler');
             const orderRes = await handleFollowerOrder(processResult.followerOrderParams);
             if (orderRes.handled) {
+              followerOrderHandled = true;
               console.log(`[TRACE ${traceId}] Automated follower order #${orderRes.orderCode} successfully handled! Sent: ${orderRes.deliverySuccess}`);
             }
           }
 
-          // Priority 2: AI auto-reply for general inquiries (only if not an order)
-          if (hasAiTask && !hasFollowerOrder) {
+          // Priority 2: AI auto-reply
+          // Synchronized companion follow-up right after visual confirmation photo,
+          // or normal conversational reply for customer inquiries and questions.
+          if (hasAiTask || followerOrderHandled) {
+            if (followerOrderHandled) {
+              // Brief pause so visual confirmation photo lands on WhatsApp first
+              await new Promise((resolve) => setTimeout(resolve, 1500));
+            }
+
             TraceLogger.log(traceId, '04', 'AGENT TRIGGERED', {
               conversationId: processResult.conversationId,
               text: processResult.messageText,
+              isOrderFollowup: followerOrderHandled,
             });
 
             const { dispatchInboundToAiReply } = await import('@/lib/ai/auto-reply');
@@ -164,6 +174,7 @@ export async function POST(request: Request) {
               configOwnerUserId: processResult.userId!,
               messageId: processResult.messageId,
               immediate: true,
+              isOrderFollowup: followerOrderHandled,
             });
             console.log(`[TRACE ${traceId}] AI auto-reply completed in after() execution context.`);
           }

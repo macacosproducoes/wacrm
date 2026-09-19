@@ -102,24 +102,37 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
 
     const messages = await buildConversationContext(db, conversationId)
     if (messages.length === 0) return
-    // Auto-reply only responds to customer turns — if the latest message is already
-    // from an agent or bot, stand down to prevent replying to ourselves.
-    if (messages[messages.length - 1].role === 'assistant') return
+
+    // Auto-reply only responds to customer turns — unless this execution is explicitly
+    // following up an automated order confirmation (where the system just delivered the photo).
+    const isOrderFollowup = Boolean(args.isOrderFollowup)
+    if (!isOrderFollowup && messages[messages.length - 1].role === 'assistant') return
 
     // DUPLICATE GUARD: Check if the latest customer message was already
     // processed by a previous AI run. This prevents duplicate replies when
     // multiple sources (webhook, poller, sync) dispatch for the same turn.
-    const { data: latestCustomerMsg } = await db
-      .from('messages')
-      .select('ai_processed_at')
-      .eq('conversation_id', conversationId)
-      .eq('sender_type', 'customer')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    if (latestCustomerMsg?.ai_processed_at) {
-      console.log(`[ai auto-reply] SKIP: latest customer message already processed at ${latestCustomerMsg.ai_processed_at} for conv ${conversationId}`)
-      return
+    if (!isOrderFollowup) {
+      const { data: latestCustomerMsg } = await db
+        .from('messages')
+        .select('ai_processed_at')
+        .eq('conversation_id', conversationId)
+        .eq('sender_type', 'customer')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (latestCustomerMsg?.ai_processed_at) {
+        console.log(`[ai auto-reply] SKIP: latest customer message already processed at ${latestCustomerMsg.ai_processed_at} for conv ${conversationId}`)
+        return
+      }
+    }
+
+    // For order follow-up, append an instructional user turn so chat models have a valid
+    // final user turn and know precisely to follow up the delivered photo.
+    if (isOrderFollowup) {
+      messages.push({
+        role: 'user',
+        content: '(A foto de confirmação de pedido acima acabou de ser gerada e entregue no WhatsApp do cliente. Envie agora uma mensagem curta, cordial e simpática confirmando o recebimento do pedido e perguntando se ele prefere finalizar via Pix ou Cartão de Crédito.)',
+      })
     }
 
     // 2. STRICT REACTION & EMOJI VETO: Never reply to emoji reactions or system placeholders
@@ -214,7 +227,7 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
       `[ai auto-reply] Calling AI model ${config.model} for conversation ${conversationId}. Prompt turns: ${messages.length}.`
     )
 
-    const { text, handoff, usage } = await generateReply({
+    let { text, handoff, usage } = await generateReply({
       config,
       systemPrompt,
       messages,
@@ -247,11 +260,17 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
       const update: Record<string, unknown> = {
         ai_handoff_summary: summary,
       }
-      if (config.handoffAgentId && !conv.assigned_agent_id) {
+      if (!isExplicitlyEnabledOnThread && config.handoffAgentId && !conv.assigned_agent_id) {
         update.assigned_agent_id = config.handoffAgentId
       }
       await db.from('conversations').update(update).eq('id', conversationId)
-      return
+
+      // When "IA Ativa nesta conversa" is explicitly enabled, don't leave customer in silence
+      if (!text && isExplicitlyEnabledOnThread) {
+        text = 'Vou verificar essa informação para você agora mesmo! Um instante, por favor 😊'
+      } else {
+        return
+      }
     }
 
     // If no text was returned due to transient upstream issues, leave thread active

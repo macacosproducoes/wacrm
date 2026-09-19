@@ -4,21 +4,20 @@ import { aiContextMessageLimit } from './defaults'
 
 interface DbMessage {
   sender_type: 'customer' | 'agent' | 'bot'
+  content_type?: string | null
   content_text: string | null
 }
 
 /**
- * Fetch the last N text messages of a conversation and map them to the
- * provider-neutral chat shape. Customer messages become `user`; agent
- * and bot messages become `assistant`. Non-text messages (media,
- * templates, interactive) are excluded — they carry no text to model.
+ * Fetch the last N messages of a conversation (text and captioned images)
+ * and map them to the provider-neutral chat shape. Customer messages become `user`;
+ * agent and bot messages become `assistant`.
  *
  * Ordered oldest-first (chronological) so the transcript reads
  * naturally and the most recent customer message lands last.
  *
  * Automatically groups consecutive messages from the same sender role
- * (e.g. rapid customer messages) into a single cohesive turn separated
- * by newlines (`\n`) so the AI models process them as a single intent.
+ * into a single cohesive turn separated by newlines (`\n`).
  */
 export async function buildConversationContext(
   db: SupabaseClient,
@@ -27,9 +26,9 @@ export async function buildConversationContext(
 ): Promise<ChatMessage[]> {
   const { data, error } = await db
     .from('messages')
-    .select('sender_type, content_text')
+    .select('sender_type, content_type, content_text')
     .eq('conversation_id', conversationId)
-    .eq('content_type', 'text')
+    .in('content_type', ['text', 'image'])
     .order('created_at', { ascending: false })
     .limit(limit)
 
@@ -45,10 +44,16 @@ export async function buildConversationContext(
       }
       return true
     })
-    .map((m) => ({
-      role: m.sender_type === 'customer' ? ('user' as const) : ('assistant' as const),
-      content: m.content_text!.trim(),
-    }))
+    .map((m) => {
+      let content = m.content_text!.trim()
+      if (m.content_type === 'image') {
+        content = `[Confirmação de Pedido com Foto gerada]: ${content}`
+      }
+      return {
+        role: m.sender_type === 'customer' ? ('user' as const) : ('assistant' as const),
+        content,
+      }
+    })
 
   // Group consecutive messages from the same role into a single message turn
   const grouped: ChatMessage[] = []

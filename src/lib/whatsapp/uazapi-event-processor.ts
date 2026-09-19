@@ -979,11 +979,11 @@ export async function processUazApiEvent(
     }
   }
 
-  // Trigger AI auto-reply for inbound customer messages (strictly when not a follower order)
+  // Trigger AI auto-reply for inbound customer messages
   const isOrder = Boolean(followerOrderParams);
-  const shouldTriggerAi = Boolean(!fromMe && trimmed && !isEmojiOnly && !isIgnoredText && isFreshMessage && !isOrder);
+  const shouldTriggerAi = Boolean(!fromMe && trimmed && !isEmojiOnly && !isIgnoredText && isFreshMessage);
 
-  if (shouldTriggerAi && !options?.skipAiDispatch) {
+  if (shouldTriggerAi && !isOrder && !options?.skipAiDispatch) {
     try {
       if (traceId) {
         TraceLogger.log(traceId, '04', 'AGENT TRIGGERED', { conversationId, text: trimmed });
