@@ -620,9 +620,33 @@ function ConversationItem({
       {/* Content */}
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
-          <span className="truncate text-sm font-medium text-foreground">
-            {displayName}
-          </span>
+          <div className="flex items-center gap-1.5 truncate min-w-0">
+            <span className="truncate text-sm font-medium text-foreground">
+              {displayName}
+            </span>
+            {conversation.ai_autoreply_disabled === true ? (
+              <span
+                className="inline-flex items-center px-1 py-0.5 rounded text-[9px] font-semibold border border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0"
+                title="IA pausada nesta conversa (Atendimento humano)"
+              >
+                ⏸️ Humano
+              </span>
+            ) : conversation.assigned_agent_id ? (
+              <span
+                className="inline-flex items-center px-1 py-0.5 rounded text-[9px] font-semibold border border-muted bg-muted text-muted-foreground shrink-0"
+                title="Atendente humano atribuído"
+              >
+                👤 Operador
+              </span>
+            ) : (
+              <span
+                className="inline-flex items-center px-1 py-0.5 rounded text-[9px] font-semibold border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0"
+                title="IA Ativa (Respondendo automaticamente)"
+              >
+                🤖 IA
+              </span>
+            )}
+          </div>
           <span className="shrink-0 text-[10px] text-muted-foreground">{timeAgo}</span>
         </div>
         <div className="mt-0.5 flex items-center justify-between gap-2">

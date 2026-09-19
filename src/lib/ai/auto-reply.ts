@@ -15,6 +15,7 @@ import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus'
 import { autoReplyDebouncer, AutoReplyDebounceArgs } from './auto-reply-debouncer'
 import { updateConversationWithMessage } from '@/lib/whatsapp/conversation-helpers'
+import { recordAiDecision } from './trace'
 
 export interface DispatchArgs extends AutoReplyDebounceArgs {
   /** If true, bypasses the debounce window and executes immediately. */
@@ -43,19 +44,105 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
     // If AI is explicitly turned OFF for this conversation, stand down
     if (conv.ai_autoreply_disabled === true) {
       console.log(`[ai auto-reply] SKIP: AI auto-reply disabled for conversation ${conversationId}`)
+      await recordAiDecision(db, {
+        conversationId,
+        accountId,
+        status: 'skipped',
+        reason: 'IA pausada nesta conversa pelo operador',
+        steps: [
+          {
+            name: '1. Recebimento da Mensagem',
+            status: 'success',
+            detail: 'Mensagem recebida e analisada',
+            timestamp: new Date().toISOString(),
+          },
+          {
+            name: '2. Status da IA na Conversa',
+            status: 'skipped',
+            detail: 'A IA está explicitamente pausada para esta conversa (ai_autoreply_disabled = true)',
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      })
       return
     }
 
     const config = await loadAiConfig(db, accountId)
-    if (!config) return
+    if (!config) {
+      await recordAiDecision(db, {
+        conversationId,
+        accountId,
+        status: 'error',
+        reason: 'Configuração ou chave de IA não encontrada',
+        steps: [
+          {
+            name: '1. Recebimento da Mensagem',
+            status: 'success',
+            detail: 'Mensagem recebida e analisada',
+            timestamp: new Date().toISOString(),
+          },
+          {
+            name: '2. Configuração da Conta',
+            status: 'error',
+            detail: 'Nenhum provedor de IA ou chave BYO ativa encontrada para a conta',
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      })
+      return
+    }
 
     // When "IA Ativa nesta conversa" is turned ON (ai_autoreply_disabled === false),
     // the AI MUST ALWAYS respond to incoming customer messages without fail!
     const isExplicitlyEnabledOnThread = conv.ai_autoreply_disabled === false
 
     if (!isExplicitlyEnabledOnThread) {
-      if (conv.assigned_agent_id) return // human owns thread unless IA Ativa is explicitly ON
-      if (!config.autoReplyEnabled) return
+      if (conv.assigned_agent_id) {
+        await recordAiDecision(db, {
+          conversationId,
+          accountId,
+          status: 'skipped',
+          reason: 'Atendimento humano ativo — IA em espera',
+          steps: [
+            {
+              name: '1. Recebimento da Mensagem',
+              status: 'success',
+              detail: 'Mensagem recebida e analisada',
+              timestamp: new Date().toISOString(),
+            },
+            {
+              name: '2. Atendente Humano',
+              status: 'skipped',
+              detail: 'Atendente humano atribuído à conversa. A IA fica em espera para evitar conflito com o operador.',
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        })
+        return // human owns thread unless IA Ativa is explicitly ON
+      }
+      if (!config.autoReplyEnabled) {
+        await recordAiDecision(db, {
+          conversationId,
+          accountId,
+          status: 'skipped',
+          reason: 'Auto-resposta desativada nas configurações gerais',
+          steps: [
+            {
+              name: '1. Recebimento da Mensagem',
+              status: 'success',
+              detail: 'Mensagem recebida e analisada',
+              timestamp: new Date().toISOString(),
+            },
+            {
+              name: '2. Chave Geral de Auto-resposta',
+              status: 'skipped',
+              detail: 'Auto-resposta geral desligada nas configurações da conta.',
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        })
+        return
+      }
 
       const { data: autoResponders } = await db
         .from('automations')
@@ -64,7 +151,29 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
         .eq('is_active', true)
         .in('trigger_type', ['new_message_received', 'keyword_match'])
         .limit(1)
-      if (autoResponders && autoResponders.length > 0) return
+      if (autoResponders && autoResponders.length > 0) {
+        await recordAiDecision(db, {
+          conversationId,
+          accountId,
+          status: 'skipped',
+          reason: 'Automação ativa tem prioridade sobre a IA',
+          steps: [
+            {
+              name: '1. Recebimento da Mensagem',
+              status: 'success',
+              detail: 'Mensagem recebida e analisada',
+              timestamp: new Date().toISOString(),
+            },
+            {
+              name: '2. Concorrência de Automações',
+              status: 'skipped',
+              detail: 'Existe uma automação de palavras-chave ou fluxo prioritário em execução.',
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        })
+        return
+      }
     } else {
       console.log(`[ai auto-reply] FORCE: "IA Ativa nesta conversa" is ON for conversation ${conversationId}`)
     }
@@ -145,6 +254,26 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
 
     if (!lastUserTurn || isEmojiOnly || isIgnoredText) {
       console.log('[ai auto-reply] VETO: skipping reaction or emoji-only customer turn:', lastUserTurn)
+      await recordAiDecision(db, {
+        conversationId,
+        accountId,
+        status: 'skipped',
+        reason: 'Mensagem descartada (apenas emoji ou reação)',
+        steps: [
+          {
+            name: '1. Recebimento da Mensagem',
+            status: 'success',
+            detail: 'Mensagem recebida do cliente',
+            timestamp: new Date().toISOString(),
+          },
+          {
+            name: '2. Filtro de Conteúdo',
+            status: 'skipped',
+            detail: `Mensagem contém apenas emoji ou reação (${lastUserTurn || 'vazio'})`,
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      })
       if (contact?.phone) {
         void sendWhatsAppPresence({
           accountId,
@@ -461,6 +590,48 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
               last_message_at: botMsgRow.created_at,
               unread_count: 0,
             },
+          })
+
+          // Record successful AI reply decision & steps
+          await recordAiDecision(db, {
+            conversationId,
+            accountId,
+            status: 'replied',
+            reason: `Resposta enviada com sucesso via WhatsApp (${config.model})`,
+            steps: [
+              {
+                name: '1. Recebimento & Triagem',
+                status: 'success',
+                detail: 'Mensagem recebida e analisada com sucesso',
+                timestamp: new Date().toISOString(),
+              },
+              {
+                name: '2. Filtros de Elegibilidade',
+                status: 'success',
+                detail: 'Todos os filtros de validação e segurança aprovados',
+                timestamp: new Date().toISOString(),
+              },
+              {
+                name: '3. Contexto & Conhecimento',
+                status: 'success',
+                detail: `Histórico montado (${messages.length} mensagens) e diretrizes de negócio aplicadas`,
+                timestamp: new Date().toISOString(),
+              },
+              {
+                name: '4. Modelo Gemini',
+                status: 'success',
+                detail: `Resposta gerada com sucesso pelo modelo ${config.model}`,
+                timestamp: new Date().toISOString(),
+              },
+              {
+                name: '5. Entrega WhatsApp',
+                status: 'success',
+                detail: 'Mensagem entregue via WhatsApp e sincronizada no CRM',
+                timestamp: new Date().toISOString(),
+              },
+            ],
+            model: config.model,
+            provider: config.provider,
           })
 
           // Mark processed customer messages in this turn
