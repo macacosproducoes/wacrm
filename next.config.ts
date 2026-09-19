@@ -76,6 +76,12 @@ const nextConfig: NextConfig = {
     "pino",
     "qrcode",
   ],
+  outputFileTracingIncludes: {
+    "/api/**/*": [
+      "./node_modules/@img/**/*",
+      "./node_modules/sharp/**/*",
+    ],
+  },
 
   /**
    * Cross-origin dev access (Next.js 16).
