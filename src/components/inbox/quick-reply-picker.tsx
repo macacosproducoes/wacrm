@@ -23,6 +23,7 @@ import {
   ChevronUp,
   ChevronDown,
   Trash2,
+  Layers,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
@@ -55,10 +56,11 @@ interface QuickReplyPickerProps {
   onPick: (qr: QuickReply) => void;
   onSendAudio?: (qr: QuickReply, simulateRecording: boolean) => void;
   onSendTextDirect?: (text: string) => void;
+  onSelectSequence?: (qr: QuickReply) => void;
   contactContext?: VariableContext;
 }
 
-type TabFilter = "all" | "audio" | "text" | "interactive";
+type TabFilter = "all" | "audio" | "text" | "sequence" | "interactive";
 
 export function QuickReplyPicker({
   open,
@@ -66,6 +68,7 @@ export function QuickReplyPicker({
   onPick,
   onSendAudio,
   onSendTextDirect,
+  onSelectSequence,
   contactContext = {},
 }: QuickReplyPickerProps) {
   const t = useTranslations("Inbox.composer");
@@ -237,6 +240,7 @@ export function QuickReplyPicker({
       // Tab filter
       if (currentTab === "audio" && qr.kind !== "audio") return false;
       if (currentTab === "text" && qr.kind !== "text") return false;
+      if (currentTab === "sequence" && qr.kind !== "sequence") return false;
       if (currentTab === "interactive" && qr.kind !== "interactive") return false;
 
       // Category filter
@@ -261,6 +265,7 @@ export function QuickReplyPicker({
   // Counts for tabs
   const audioCount = useMemo(() => items.filter((i) => i.kind === "audio").length, [items]);
   const textCount = useMemo(() => items.filter((i) => i.kind === "text").length, [items]);
+  const sequenceCount = useMemo(() => items.filter((i) => i.kind === "sequence").length, [items]);
   const interactiveCount = useMemo(() => items.filter((i) => i.kind === "interactive").length, [items]);
 
   // Handle in-picker mic recording
@@ -567,6 +572,18 @@ export function QuickReplyPicker({
               </button>
               <button
                 type="button"
+                onClick={() => setCurrentTab("sequence")}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-medium transition-colors ${
+                  currentTab === "sequence"
+                    ? "bg-orange-600 text-white shadow-xs"
+                    : "bg-muted/80 text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                <Layers className="h-3.5 w-3.5" />
+                Sequências ({sequenceCount})
+              </button>
+              <button
+                type="button"
                 onClick={() => setCurrentTab("interactive")}
                 className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-medium transition-colors ${
                   currentTab === "interactive"
@@ -781,6 +798,7 @@ export function QuickReplyPicker({
           ) : (
             filteredItems.map((qr, index) => {
               const isAudio = qr.kind === "audio";
+              const isSequence = qr.kind === "sequence";
               const isInteractive = qr.kind === "interactive";
 
               return (
@@ -858,6 +876,8 @@ export function QuickReplyPicker({
                         className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
                           isAudio
                             ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                            : isSequence
+                            ? "bg-orange-500/15 text-orange-600 dark:text-orange-400"
                             : isInteractive
                             ? "bg-purple-500/15 text-purple-600 dark:text-purple-400"
                             : "bg-primary/10 text-primary"
@@ -865,6 +885,8 @@ export function QuickReplyPicker({
                       >
                         {isAudio ? (
                           <Mic className="h-4 w-4" />
+                        ) : isSequence ? (
+                          <Layers className="h-4 w-4" />
                         ) : isInteractive ? (
                           <Zap className="h-4 w-4" />
                         ) : (
@@ -1033,6 +1055,71 @@ export function QuickReplyPicker({
                             </button>
                           </>
                         )
+                      ) : isSequence ? (
+                        confirmDeleteId === qr.id ? (
+                          <div
+                            className="flex items-center gap-1.5 shrink-0 bg-red-500/10 border border-red-500/30 rounded-md px-2 py-1 animate-in fade-in"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <span className="text-[11px] font-medium text-red-600 dark:text-red-400">
+                              Excluir da base?
+                            </span>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="destructive"
+                              disabled={deletingId === qr.id}
+                              onClick={(e) => void handleConfirmDelete(qr.id, e)}
+                              className="h-6 px-2 text-[11px] font-medium gap-1 bg-red-600 hover:bg-red-700 text-white shadow-none"
+                            >
+                              {deletingId === qr.id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3 w-3" />
+                              )}
+                              Sim
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConfirmDeleteId(null);
+                              }}
+                              className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                            >
+                              <X className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <>
+                            <Button
+                              size="sm"
+                              onClick={() => {
+                                onOpenChange(false);
+                                onSelectSequence?.(qr);
+                              }}
+                              className="h-8 bg-orange-600 hover:bg-orange-700 text-white text-xs px-2.5 shadow-xs gap-1.5"
+                              title="Disparar sequência de mensagens em ordem no WhatsApp"
+                            >
+                              <Layers className="h-3.5 w-3.5" />
+                              Iniciar Sequência
+                            </Button>
+
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConfirmDeleteId(qr.id);
+                              }}
+                              title="Excluir esta sequência da base"
+                              className="p-1.5 rounded-md text-muted-foreground hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        )
                       ) : (
                         <>
                           {/* Pick / Insert in textarea */}
@@ -1079,6 +1166,24 @@ export function QuickReplyPicker({
                         url={qr.media_url}
                         duration={qr.media_duration}
                       />
+                    </div>
+                  )}
+
+                  {/* Sequence Steps Flow Preview */}
+                  {isSequence && qr.sequence_items && qr.sequence_items.length > 0 && (
+                    <div className="mt-2.5 pt-2 border-t border-orange-500/15 flex items-center gap-1.5 flex-wrap">
+                      {qr.sequence_items.map((step, sIdx) => (
+                        <span
+                          key={step.id || sIdx}
+                          className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-orange-500/10 border border-orange-500/20 text-orange-800 dark:text-orange-200"
+                        >
+                          <span className="font-bold">{sIdx + 1}º</span>
+                          <span className="capitalize font-medium">{step.type}</span>
+                          {step.delay_seconds ? (
+                            <span className="text-muted-foreground font-mono">({step.delay_seconds}s)</span>
+                          ) : null}
+                        </span>
+                      ))}
                     </div>
                   )}
                 </div>

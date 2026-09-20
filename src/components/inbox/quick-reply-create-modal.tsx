@@ -25,15 +25,16 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import type { QuickReply, QuickReplyKind, QuickReplySequenceStep } from "@/types";
-import { uploadAccountMedia } from "@/lib/storage/upload-media";
+import { uploadAccountMedia, CHAT_MEDIA_BUCKET } from "@/lib/storage/upload-media";
 import { getDefaultColorForKind } from "@/lib/inbox/quick-reply-colors";
-import { CHAT_MEDIA_BUCKET } from "./message-composer";
+import { SequenceStepBuilder } from "./sequence-step-builder";
 
 interface QuickReplyCreateModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   defaultKind?: QuickReplyKind;
   initialData?: QuickReply | null;
+  availableReplies?: QuickReply[];
   onCreated: () => void;
 }
 
@@ -62,12 +63,29 @@ export function QuickReplyCreateModal({
   onOpenChange,
   defaultKind = "text",
   initialData = null,
+  availableReplies,
   onCreated,
 }: QuickReplyCreateModalProps) {
   const [kind, setKind] = useState<QuickReplyKind>(defaultKind);
   const [title, setTitle] = useState("");
   const [shortcut, setShortcut] = useState("");
   const [category, setCategory] = useState("Vendas");
+  const [availableRepliesList, setAvailableRepliesList] = useState<QuickReply[]>(availableReplies || []);
+
+  useEffect(() => {
+    if (availableReplies && availableReplies.length > 0) {
+      setAvailableRepliesList(availableReplies);
+    } else if (open) {
+      void fetch("/api/quick-replies")
+        .then((r) => r.json())
+        .then((data) => {
+          if (Array.isArray(data.quick_replies)) {
+            setAvailableRepliesList(data.quick_replies);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [open, availableReplies]);
   const [contentText, setContentText] = useState("");
   const [mediaUrl, setMediaUrl] = useState("");
   const [mediaDuration, setMediaDuration] = useState<number>(0);
@@ -549,97 +567,11 @@ export function QuickReplyCreateModal({
           )}
 
           {kind === "sequence" && (
-            <div className="space-y-3 p-3 rounded-lg border border-orange-500/30 bg-orange-500/5">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold text-orange-800 dark:text-orange-200">
-                  Etapas da Sequência
-                </label>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={handleAddSequenceStep}
-                  className="h-6 text-[11px] gap-1 border-orange-500/40 text-orange-700 dark:text-orange-300"
-                >
-                  <Plus className="h-3 w-3" />
-                  Adicionar Passo
-                </Button>
-              </div>
-
-              <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                {sequenceItems.map((step, idx) => (
-                  <div
-                    key={step.id || idx}
-                    className="p-2.5 rounded-md border border-border/80 bg-background flex flex-col gap-2 shadow-2xs"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-semibold text-foreground">
-                        {idx + 1}. Tipo:
-                      </span>
-                      <select
-                        value={step.type}
-                        onChange={(e) => {
-                          const val = e.target.value as any;
-                          const next = [...sequenceItems];
-                          next[idx] = { ...next[idx], type: val };
-                          setSequenceItems(next);
-                        }}
-                        className="h-6 text-[11px] rounded border px-1 bg-background text-foreground"
-                      >
-                        <option value="text">Texto</option>
-                        <option value="audio">Áudio</option>
-                        <option value="image">Imagem</option>
-                        <option value="video">Vídeo</option>
-                        <option value="document">Documento</option>
-                      </select>
-
-                      <div className="flex items-center gap-1 text-[11px] text-muted-foreground ml-auto">
-                        <span>Delay:</span>
-                        <input
-                          type="number"
-                          min={0}
-                          max={120}
-                          value={step.delay_seconds}
-                          onChange={(e) => {
-                            const val = Number(e.target.value) || 0;
-                            const next = [...sequenceItems];
-                            next[idx] = { ...next[idx], delay_seconds: val };
-                            setSequenceItems(next);
-                          }}
-                          className="w-12 h-6 text-[11px] rounded border px-1 bg-background text-foreground text-center"
-                        />
-                        <span>s</span>
-                      </div>
-
-                      {sequenceItems.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveSequenceStep(idx)}
-                          className="text-muted-foreground hover:text-red-500 p-0.5"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </div>
-
-                    <Input
-                      placeholder={step.type === "text" ? "Texto da mensagem..." : "URL da mídia..."}
-                      value={step.content || step.media_url || ""}
-                      onChange={(e) => {
-                        const next = [...sequenceItems];
-                        if (step.type === "text") {
-                          next[idx] = { ...next[idx], content: e.target.value };
-                        } else {
-                          next[idx] = { ...next[idx], media_url: e.target.value };
-                        }
-                        setSequenceItems(next);
-                      }}
-                      className="h-7 text-xs bg-background"
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
+            <SequenceStepBuilder
+              steps={sequenceItems}
+              onChange={setSequenceItems}
+              availableReplies={availableRepliesList.filter((i) => i.id !== initialData?.id)}
+            />
           )}
         </div>
 

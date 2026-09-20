@@ -137,6 +137,7 @@ interface MessageComposerProps {
   contactPhone?: string;
   insertedTextPayload?: InsertedTextPayload | null;
   externalAudioAction?: ExternalAudioActionPayload | null;
+  onSelectSequence?: (qr: QuickReply) => void;
 }
 
 function formatDuration(seconds: number): string {
@@ -170,6 +171,7 @@ export function MessageComposer({
   contactPhone,
   insertedTextPayload,
   externalAudioAction,
+  onSelectSequence,
 }: MessageComposerProps) {
   const t = useTranslations("Inbox.composer");
 
@@ -1430,6 +1432,7 @@ export function MessageComposer({
         onPick={handlePickQuickReply}
         onSendAudio={handleSendAudioWithPresence}
         onSendTextDirect={(txt) => onSend(txt, replyTo?.id)}
+        onSelectSequence={onSelectSequence}
         contactContext={variableContext}
       />
     </div>

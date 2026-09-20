@@ -54,6 +54,7 @@ import {
   cleanAudioTitle,
   uploadAudioQuickReply,
 } from "@/lib/audio/audio-file-normalizer";
+import { SequenceStepBuilder } from "@/components/inbox/sequence-step-builder";
 
 interface DraftState {
   id?: string;
@@ -947,112 +948,11 @@ export function QuickRepliesManager() {
               )}
 
               {draft.kind === "sequence" && (
-                <div className="space-y-3 p-3.5 rounded-lg border border-orange-500/30 bg-orange-500/5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-semibold text-orange-800 dark:text-orange-200">
-                      Etapas da Sequência
-                    </label>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        const next = [
-                          ...(draft.sequence_items || []),
-                          {
-                            id: String(Date.now()),
-                            order: (draft.sequence_items?.length || 0) + 1,
-                            type: "text" as const,
-                            content: "",
-                            delay_seconds: 2,
-                          },
-                        ];
-                        setDraft({ ...draft, sequence_items: next });
-                      }}
-                      className="h-6 text-[11px] gap-1 border-orange-500/40 text-orange-700 dark:text-orange-300"
-                    >
-                      <Plus className="h-3 w-3" />
-                      Adicionar Etapa
-                    </Button>
-                  </div>
-
-                  <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                    {(draft.sequence_items || []).map((step, idx) => (
-                      <div
-                        key={step.id || idx}
-                        className="p-2.5 rounded-md border border-border/80 bg-background flex flex-col gap-2 shadow-2xs"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[11px] font-semibold text-foreground">
-                            {idx + 1}. Tipo:
-                          </span>
-                          <select
-                            value={step.type}
-                            onChange={(e) => {
-                              const val = e.target.value as any;
-                              const next = [...(draft.sequence_items || [])];
-                              next[idx] = { ...next[idx], type: val };
-                              setDraft({ ...draft, sequence_items: next });
-                            }}
-                            className="h-6 text-[11px] rounded border px-1 bg-background text-foreground"
-                          >
-                            <option value="text">Texto</option>
-                            <option value="audio">Áudio</option>
-                            <option value="image">Imagem</option>
-                            <option value="video">Vídeo</option>
-                            <option value="document">Documento</option>
-                          </select>
-
-                          <div className="flex items-center gap-1 text-[11px] text-muted-foreground ml-auto">
-                            <span>Delay:</span>
-                            <input
-                              type="number"
-                              min={0}
-                              max={120}
-                              value={step.delay_seconds}
-                              onChange={(e) => {
-                                const val = Number(e.target.value) || 0;
-                                const next = [...(draft.sequence_items || [])];
-                                next[idx] = { ...next[idx], delay_seconds: val };
-                                setDraft({ ...draft, sequence_items: next });
-                              }}
-                              className="w-12 h-6 text-[11px] rounded border px-1 bg-background text-foreground text-center"
-                            />
-                            <span>s</span>
-                          </div>
-
-                          {(draft.sequence_items?.length || 0) > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const next = (draft.sequence_items || []).filter((_, i) => i !== idx);
-                                setDraft({ ...draft, sequence_items: next });
-                              }}
-                              className="text-muted-foreground hover:text-red-500 p-0.5"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                        </div>
-
-                        <Input
-                          placeholder={step.type === "text" ? "Texto da mensagem..." : "URL do arquivo/mídia..."}
-                          value={step.content || step.media_url || ""}
-                          onChange={(e) => {
-                            const next = [...(draft.sequence_items || [])];
-                            if (step.type === "text") {
-                              next[idx] = { ...next[idx], content: e.target.value };
-                            } else {
-                              next[idx] = { ...next[idx], media_url: e.target.value };
-                            }
-                            setDraft({ ...draft, sequence_items: next });
-                          }}
-                          className="h-7 text-xs bg-background"
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <SequenceStepBuilder
+                  steps={draft.sequence_items || []}
+                  onChange={(nextSteps) => setDraft({ ...draft, sequence_items: nextSteps })}
+                  availableReplies={items.filter((i) => i.id !== draft.id)}
+                />
               )}
             </div>
 

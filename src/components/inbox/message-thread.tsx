@@ -1547,6 +1547,7 @@ export function MessageThread({
         contactPhone={contact?.phone}
         insertedTextPayload={insertedTextPayload}
         externalAudioAction={externalAudioAction}
+        onSelectSequence={startSequence}
       />
 
       <TemplatePicker
@@ -1582,6 +1583,7 @@ export function MessageThread({
         }}
         defaultKind={createDefaultKind}
         initialData={editingQuickReply}
+        availableReplies={quickReplies}
         onCreated={loadQuickReplies}
       />
 
