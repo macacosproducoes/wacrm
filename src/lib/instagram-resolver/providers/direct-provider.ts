@@ -18,6 +18,7 @@ const REQUEST_TIMEOUT_MS = 8000;
 // Whitelisted social preview crawlers (Instagram guarantees public Open Graph metadata without 429 or login walls)
 const USER_AGENTS = [
   'WhatsApp/2.21.12.21 A',
+  'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
   'Twitterbot/1.0',
   'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
   'TelegramBot (like TwitterBot)',
@@ -36,6 +37,22 @@ function decodeHtmlEntities(str: string): string {
     .replace(/&#8226;/g, '•');
 }
 
+/**
+ * Checks if an image URL is a Meta generic/fallback placeholder rather than a real user avatar.
+ */
+function isStaticPlaceholder(url: string | null | undefined): boolean {
+  if (!url) return true;
+  const lower = url.toLowerCase();
+  return (
+    lower.includes('rsrc.php') ||
+    lower.includes('khwimm5b8pw') ||
+    lower.includes('no-avatar') ||
+    lower.includes('default-avatar') ||
+    lower.includes('placeholder') ||
+    lower.includes('transparent.png')
+  );
+}
+
 export class DirectInstagramProfileProvider implements InstagramProfileProvider {
   readonly providerName = 'direct';
 
@@ -49,27 +66,63 @@ export class DirectInstagramProfileProvider implements InstagramProfileProvider 
     console.log(`[INSTAGRAM_DIRECT] Resolving @${cleanUsername} directly via ${profileUrl}`);
 
     let lastError: Error | null = null;
+    let is404 = false;
 
-    // Try primary and fallback user agents
+    // Strategy 1: Direct Instagram Open Graph / Schema / Inlined JSON
     for (let i = 0; i < USER_AGENTS.length; i++) {
       const ua = USER_AGENTS[i];
       try {
         const result = await this.fetchAndExtract(cleanUsername, profileUrl, ua);
-        if (result && result.profileImageUrl) {
-          console.log(`[INSTAGRAM_DIRECT] Successfully resolved photo for @${cleanUsername} on attempt ${i + 1}`);
+        if (result && result.profileImageUrl && !isStaticPlaceholder(result.profileImageUrl)) {
+          console.log(`[INSTAGRAM_DIRECT] Successfully resolved photo for @${cleanUsername} directly on attempt ${i + 1}`);
           return result;
-        } else if (result) {
-          // Found profile info but no profile picture available
+        } else if (result && result.displayName && result.displayName !== cleanUsername) {
+          // If we found profile info (name, bio) but no photo, check Threads for the photo
+          const threadsFallback = await this.fetchViaThreads(cleanUsername, profileUrl);
+          if (threadsFallback?.profileImageUrl) {
+            return {
+              ...result,
+              profileImageUrl: threadsFallback.profileImageUrl,
+            };
+          }
           return result;
         }
       } catch (err: unknown) {
-        lastError = err instanceof Error ? err : new Error(String(err));
-        console.warn(`[INSTAGRAM_DIRECT] Attempt ${i + 1} for @${cleanUsername} failed: ${lastError.message}`);
+        const error = err instanceof Error ? err : new Error(String(err));
+        if (error.message.includes('Unexpected redirect domain')) {
+          throw error;
+        }
+        if (error.message.includes('404')) {
+          is404 = true;
+          lastError = error;
+          break; // Profile does not exist on Instagram
+        }
+        if (error.message.includes('429')) {
+          console.warn(`[INSTAGRAM_DIRECT] Direct attempt hit 429 rate limit. Switching immediately to Meta Threads fallback...`);
+          lastError = error;
+          break; // Break early to avoid waiting through all UAs on an IP-level rate limit
+        }
+        lastError = error;
+        console.warn(`[INSTAGRAM_DIRECT] Direct attempt ${i + 1} for @${cleanUsername} failed: ${lastError.message}`);
       }
     }
 
-    if (lastError) {
+    if (is404 && lastError) {
       throw lastError;
+    }
+
+    // Strategy 2: Meta Threads.net Open Graph fallback
+    // Ordinary/common Instagram profiles are often blocked on direct instagram.com from datacenter/cloud IPs (HTTP 429),
+    // but Meta serves their exact Instagram CDN avatar publicly via Threads.net Open Graph without rate limiting.
+    console.log(`[INSTAGRAM_DIRECT] Attempting Meta Threads Open Graph fallback for @${cleanUsername}...`);
+    try {
+      const threadsResult = await this.fetchViaThreads(cleanUsername, profileUrl);
+      if (threadsResult && threadsResult.profileImageUrl) {
+        console.log(`[INSTAGRAM_DIRECT] Successfully resolved photo for @${cleanUsername} via Threads Open Graph!`);
+        return threadsResult;
+      }
+    } catch (threadsErr: unknown) {
+      console.warn(`[INSTAGRAM_DIRECT] Threads fallback failed for @${cleanUsername}:`, threadsErr);
     }
 
     return {
@@ -80,6 +133,95 @@ export class DirectInstagramProfileProvider implements InstagramProfileProvider 
       source: 'INSTAGRAM_PROVIDER',
       fetchedAt: new Date().toISOString(),
     };
+  }
+
+  private async fetchViaThreads(
+    username: string,
+    profileUrl: string
+  ): Promise<InstagramProfileData | null> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    try {
+      const threadsUrl = `https://www.threads.net/@${username}`;
+      const response = await fetch(threadsUrl, {
+        headers: {
+          'User-Agent': 'WhatsApp/2.21.12.21 A',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+          'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+          'Cache-Control': 'no-cache',
+        },
+        redirect: 'follow',
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        return null;
+      }
+
+      // Check redirected URL SSRF
+      if (response.url) {
+        const finalHost = new URL(response.url).hostname.toLowerCase();
+        if (!finalHost.endsWith('threads.net')) {
+          return null;
+        }
+      }
+
+      const html = await response.text();
+
+      // Extract og:image or twitter:image
+      const ogMatch =
+        html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]+content=["']([^"']+)["']/i) ||
+        html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image)["']/i);
+
+      let profileImageUrl: string | null = null;
+      if (ogMatch && ogMatch[1]) {
+        const candidate = decodeHtmlEntities(ogMatch[1].trim());
+        if (candidate.startsWith('http') && !isStaticPlaceholder(candidate)) {
+          profileImageUrl = candidate;
+        }
+      }
+
+      // Extract Display Name
+      let displayName = username;
+      const titleMatch =
+        html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
+        html.match(/<title>([^<]+)<\/title>/i);
+
+      if (titleMatch && titleMatch[1]) {
+        const cleanTitle = decodeHtmlEntities(titleMatch[1]);
+        const namePart = cleanTitle.split(/[(•|]/)[0]?.trim();
+        if (namePart && namePart.length > 0 && namePart !== 'Threads') {
+          displayName = namePart;
+        }
+      }
+
+      // Extract Biography
+      let biography: string | undefined;
+      const descMatch =
+        html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i) ||
+        html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i);
+
+      if (descMatch && descMatch[1]) {
+        biography = decodeHtmlEntities(descMatch[1].trim());
+      }
+
+      if (!profileImageUrl) {
+        return null;
+      }
+
+      return {
+        username,
+        profileUrl,
+        profileImageUrl,
+        displayName,
+        biography,
+        source: 'INSTAGRAM_PROVIDER',
+        fetchedAt: new Date().toISOString(),
+      };
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   private async fetchAndExtract(

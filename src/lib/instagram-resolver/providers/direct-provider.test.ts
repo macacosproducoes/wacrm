@@ -121,4 +121,81 @@ describe('DirectInstagramProfileProvider', () => {
 
     await expect(provider.resolve('victim')).rejects.toThrow('Unexpected redirect domain');
   });
+
+  it('resolves photo via Meta Threads fallback when Instagram direct fails with 429', async () => {
+    const mockThreadsHtml = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta property="og:title" content="Maju Brook (&#064;majubrook) • Threads" />
+          <meta property="og:image" content="https://scontent.cdninstagram.com/maju_avatar.jpg" />
+          <meta property="og:description" content="Moda e lifestyle" />
+        </head>
+        <body></body>
+      </html>
+    `;
+
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('instagram.com')) {
+        return {
+          status: 429,
+          ok: false,
+          url,
+          text: async () => 'Too Many Requests',
+        } as unknown as Response;
+      }
+      if (url.includes('threads.net')) {
+        return {
+          status: 200,
+          ok: true,
+          url,
+          text: async () => mockThreadsHtml,
+        } as unknown as Response;
+      }
+      return { status: 404, ok: false } as unknown as Response;
+    });
+
+    const result = await provider.resolve('majubrook');
+    expect(result.username).toBe('majubrook');
+    expect(result.profileImageUrl).toBe('https://scontent.cdninstagram.com/maju_avatar.jpg');
+    expect(result.displayName).toBe('Maju Brook');
+  });
+
+  it('ignores Threads placeholder image and returns null image', async () => {
+    const mockThreadsPlaceholderHtml = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta property="og:title" content="Threads • Log in" />
+          <meta property="og:image" content="https://static.cdninstagram.com/rsrc.php/yd/r/kHwIMM5b8PW.webp" />
+        </head>
+        <body></body>
+      </html>
+    `;
+
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('instagram.com')) {
+        return {
+          status: 429,
+          ok: false,
+          url,
+          text: async () => 'Too Many Requests',
+        } as unknown as Response;
+      }
+      if (url.includes('threads.net')) {
+        return {
+          status: 200,
+          ok: true,
+          url,
+          text: async () => mockThreadsPlaceholderHtml,
+        } as unknown as Response;
+      }
+      return { status: 404, ok: false } as unknown as Response;
+    });
+
+    const result = await provider.resolve('unknown_user');
+    expect(result.username).toBe('unknown_user');
+    expect(result.profileImageUrl).toBeNull();
+  });
 });
+
