@@ -704,7 +704,7 @@ export function QuickRepliesManager() {
       {/* Edit / Create Dialog */}
       {draft && (
         <Dialog open={true} onOpenChange={(open) => !open && setDraft(null)}>
-          <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden border-border bg-card">
+          <DialogContent className="max-w-2xl max-h-[min(82vh,680px)] flex flex-col p-0 gap-0 overflow-hidden border-border bg-card">
             <DialogHeader className="px-6 py-4 border-b border-border/70 flex flex-row items-center justify-between">
               <DialogTitle className="text-base font-semibold text-foreground">
                 {draft.id ? "Editar Resposta Rápida / Atalho" : "Nova Resposta Rápida / Atalho"}

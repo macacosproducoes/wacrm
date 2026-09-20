@@ -20,9 +20,54 @@ interface RequestProfile {
   headers: Record<string, string>;
 }
 
-// Cohesive request profiles with accurately paired headers (avoids bot fingerprint detection)
+// Cohesive request profiles prioritizing social preview crawlers that receive Open Graph meta tags
 const REQUEST_PROFILES: RequestProfile[] = [
-  // 1. Modern Chrome Desktop (Primary - bypasses crawler-specific bot walls on profile endpoints)
+  // 1. WhatsApp Social Preview Crawler (Primary - Meta serves full Open Graph CDN avatars)
+  {
+    name: 'WhatsApp-Bot',
+    headers: {
+      'User-Agent': 'WhatsApp/2.21.12.21 A',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+      'Cache-Control': 'no-cache',
+    },
+  },
+  // 2. Facebook External Hit (Meta's native crawler)
+  {
+    name: 'Facebook-Bot',
+    headers: {
+      'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+      'Accept': '*/*',
+      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
+    },
+  },
+  // 3. Twitterbot Social Preview
+  {
+    name: 'Twitterbot',
+    headers: {
+      'User-Agent': 'Twitterbot/1.0',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
+    },
+  },
+  // 4. TelegramBot
+  {
+    name: 'TelegramBot',
+    headers: {
+      'User-Agent': 'TelegramBot (like TwitterBot)',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
+    },
+  },
+  // 5. Applebot (iMessage link preview)
+  {
+    name: 'Applebot',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15 (Applebot/0.1)',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    },
+  },
+  // 6. Modern Chrome Desktop (Fallback for text metadata and title)
   {
     name: 'Chrome-Desktop',
     headers: {
@@ -39,36 +84,16 @@ const REQUEST_PROFILES: RequestProfile[] = [
       'Upgrade-Insecure-Requests': '1',
     },
   },
-  // 2. WhatsApp Social Preview Crawler
-  {
-    name: 'WhatsApp-Bot',
-    headers: {
-      'User-Agent': 'WhatsApp/2.21.12.21 A',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
-    },
-  },
-  // 3. Facebook External Hit (Meta crawler)
-  {
-    name: 'Facebook-Bot',
-    headers: {
-      'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
-      'Accept': '*/*',
-      'Accept-Language': 'en-US,en;q=0.9',
-    },
-  },
-  // 4. Twitterbot Social Preview
-  {
-    name: 'Twitterbot',
-    headers: {
-      'User-Agent': 'Twitterbot/1.0',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    },
-  },
 ];
 
 function decodeHtmlEntities(str: string): string {
   return str
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
+      try { return String.fromCodePoint(parseInt(hex, 16)); } catch { return ''; }
+    })
+    .replace(/&#([0-9]+);/g, (_, dec) => {
+      try { return String.fromCodePoint(parseInt(dec, 10)); } catch { return ''; }
+    })
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
@@ -109,25 +134,24 @@ export class DirectInstagramProfileProvider implements InstagramProfileProvider 
 
     let lastError: Error | null = null;
     let is404 = false;
+    let bestMetadata: InstagramProfileData | null = null;
 
-    // Strategy 1: Direct Instagram with paired client headers
+    // Strategy 1: Direct Instagram with paired social preview crawlers
     for (let i = 0; i < REQUEST_PROFILES.length; i++) {
       const profile = REQUEST_PROFILES[i];
       try {
         const result = await this.fetchAndExtract(cleanUsername, profileUrl, profile.headers);
-        if (result && result.profileImageUrl && !isStaticPlaceholder(result.profileImageUrl)) {
-          console.log(`[INSTAGRAM_DIRECT] Successfully resolved photo for @${cleanUsername} directly via ${profile.name}`);
-          return result;
-        } else if (result && result.displayName && result.displayName !== cleanUsername) {
-          // If profile info exists but no image, check Threads for the image
-          const threadsFallback = await this.fetchViaThreads(cleanUsername, profileUrl);
-          if (threadsFallback?.profileImageUrl) {
-            return {
-              ...result,
-              profileImageUrl: threadsFallback.profileImageUrl,
-            };
+        if (result) {
+          // If we found a real profile picture, return immediately!
+          if (result.profileImageUrl && !isStaticPlaceholder(result.profileImageUrl)) {
+            console.log(`[INSTAGRAM_DIRECT] Successfully resolved official photo for @${cleanUsername} directly via ${profile.name}`);
+            return result;
           }
-          return result;
+
+          // Retain best metadata (displayName, bio) if encountered, but CONTINUE searching for the photo!
+          if (!bestMetadata || (result.displayName && result.displayName !== cleanUsername)) {
+            bestMetadata = result;
+          }
         }
       } catch (err: unknown) {
         const error = err instanceof Error ? err : new Error(String(err));
@@ -154,17 +178,25 @@ export class DirectInstagramProfileProvider implements InstagramProfileProvider 
     }
 
     // Strategy 2: Meta Threads.net Open Graph fallback
-    // Common Instagram profiles may be blocked on direct instagram.com,
-    // but Meta serves their exact Instagram CDN avatar publicly via Threads.net Open Graph.
+    // Common Instagram profiles that share CDN avatars with Threads
     console.log(`[INSTAGRAM_DIRECT] Attempting Meta Threads Open Graph fallback for @${cleanUsername}...`);
     try {
       const threadsResult = await this.fetchViaThreads(cleanUsername, profileUrl);
-      if (threadsResult && threadsResult.profileImageUrl) {
-        console.log(`[INSTAGRAM_DIRECT] Successfully resolved photo for @${cleanUsername} via Threads Open Graph!`);
-        return threadsResult;
+      if (threadsResult && threadsResult.profileImageUrl && !isStaticPlaceholder(threadsResult.profileImageUrl)) {
+        console.log(`[INSTAGRAM_DIRECT] Successfully resolved official photo for @${cleanUsername} via Threads Open Graph!`);
+        return {
+          ...threadsResult,
+          displayName: bestMetadata?.displayName || threadsResult.displayName,
+          biography: bestMetadata?.biography || threadsResult.biography,
+        };
       }
     } catch (threadsErr: unknown) {
       console.warn(`[INSTAGRAM_DIRECT] Threads fallback failed for @${cleanUsername}:`, threadsErr);
+    }
+
+    // If we have text metadata but no image could be extracted, return best metadata
+    if (bestMetadata) {
+      return bestMetadata;
     }
 
     return {

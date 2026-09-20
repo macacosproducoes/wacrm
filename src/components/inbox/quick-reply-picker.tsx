@@ -338,7 +338,7 @@ export function QuickReplyPicker({
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        className="sm:max-w-2xl max-h-[88vh] flex flex-col p-0 gap-0 overflow-hidden bg-card border-border shadow-2xl relative"
+        className="sm:max-w-2xl max-h-[min(82vh,680px)] flex flex-col p-0 gap-0 overflow-hidden bg-card border-border shadow-2xl relative"
       >
         {/* Drag & Drop Visual Overlay */}
         {(isDragging || isDropping) && (

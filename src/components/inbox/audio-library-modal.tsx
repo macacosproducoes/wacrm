@@ -290,7 +290,7 @@ export function AudioLibraryModal({
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        className="max-w-2xl max-h-[85vh] flex flex-col p-0 gap-0 overflow-hidden border-border bg-card relative"
+        className="max-w-2xl max-h-[min(82vh,680px)] flex flex-col p-0 gap-0 overflow-hidden border-border bg-card relative"
       >
         {/* Drag & Drop Visual Overlay */}
         {(isDragging || isDropping) && (
