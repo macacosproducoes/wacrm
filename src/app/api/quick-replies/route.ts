@@ -213,3 +213,40 @@ export async function POST(request: Request) {
   return NextResponse.json({ quick_reply: normalizeQuickReply(data) }, { status: 201 });
 }
 
+export async function PUT(request: Request) {
+  let ctx;
+  try {
+    ctx = await requireRole('agent');
+  } catch (err) {
+    return toErrorResponse(err);
+  }
+
+  const body = await request.json().catch(() => null);
+  if (!body) return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+
+  const admin = supabaseAdmin();
+  let updates: Array<{ id: string; order_index: number }> = [];
+
+  if (Array.isArray(body.orders)) {
+    updates = body.orders;
+  } else if (Array.isArray(body.ids)) {
+    updates = body.ids.map((id: string, idx: number) => ({ id, order_index: idx }));
+  }
+
+  if (updates.length === 0) {
+    return NextResponse.json({ ok: true });
+  }
+
+  await Promise.all(
+    updates.map(({ id, order_index }) =>
+      admin
+        .from('quick_replies')
+        .update({ order_index: Number(order_index) })
+        .eq('id', id)
+        .eq('account_id', ctx.accountId)
+    )
+  );
+
+  return NextResponse.json({ ok: true, reordered: updates.length });
+}
+

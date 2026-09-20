@@ -16,6 +16,11 @@ import {
   Plus,
   X,
   Loader2,
+  GripVertical,
+  Pencil,
+  Check,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -76,16 +81,31 @@ export function AudioLibraryModal({
   const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Local copy of audios for instant drag-and-drop reordering and renaming
+  const [localAudios, setLocalAudios] = useState<QuickReply[]>(audioReplies);
+  useEffect(() => {
+    setLocalAudios(audioReplies);
+  }, [audioReplies]);
+
+  // Drag and drop reordering state
+  const [draggedAudioId, setDraggedAudioId] = useState<string | null>(null);
+  const [dragOverAudioId, setDragOverAudioId] = useState<string | null>(null);
+
+  // Audio rename state
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
+  const [savingRename, setSavingRename] = useState(false);
+
   const categories = useMemo(() => {
     const set = new Set<string>();
-    audioReplies.forEach((item) => {
+    localAudios.forEach((item) => {
       if (item.category) set.add(item.category);
     });
     return Array.from(set);
-  }, [audioReplies]);
+  }, [localAudios]);
 
   const filteredAudios = useMemo(() => {
-    return audioReplies.filter((qr) => {
+    return localAudios.filter((qr) => {
       if (qr.kind !== "audio") return false;
       if (selectedCategory !== "all" && qr.category !== selectedCategory) return false;
       if (search.trim()) {
@@ -97,7 +117,74 @@ export function AudioLibraryModal({
       }
       return true;
     });
-  }, [audioReplies, selectedCategory, search]);
+  }, [localAudios, selectedCategory, search]);
+
+  const handleMoveAudio = async (fromId: string, toId: string) => {
+    if (fromId === toId) return;
+    const currentList = [...localAudios];
+    const fromIdx = currentList.findIndex((a) => a.id === fromId);
+    const toIdx = currentList.findIndex((a) => a.id === toId);
+    if (fromIdx === -1 || toIdx === -1) return;
+
+    const [moved] = currentList.splice(fromIdx, 1);
+    currentList.splice(toIdx, 0, moved);
+    setLocalAudios(currentList);
+
+    try {
+      const orders = currentList.map((item, index) => ({ id: item.id, order_index: index }));
+      await fetch("/api/quick-replies", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orders }),
+      });
+      onRefreshReplies?.();
+      toast.success("Ordem dos áudios atualizada com sucesso!");
+    } catch {
+      toast.error("Erro ao salvar ordem dos áudios.");
+    }
+  };
+
+  const handleMoveStep = (id: string, direction: "up" | "down") => {
+    const idx = localAudios.findIndex((a) => a.id === id);
+    if (idx === -1) return;
+    const targetIdx = direction === "up" ? idx - 1 : idx + 1;
+    if (targetIdx < 0 || targetIdx >= localAudios.length) return;
+    void handleMoveAudio(id, localAudios[targetIdx].id);
+  };
+
+  const handleStartRename = (qr: QuickReply, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingId(qr.id);
+    setEditingTitle(qr.title);
+  };
+
+  const handleSaveRename = async (id: string) => {
+    const trimmed = editingTitle.trim();
+    if (!trimmed) {
+      toast.error("O título não pode ficar vazio.");
+      return;
+    }
+    setSavingRename(true);
+    try {
+      const res = await fetch(`/api/quick-replies/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: trimmed }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Falha ao renomear áudio.");
+      }
+      setLocalAudios((prev) => prev.map((a) => (a.id === id ? { ...a, title: trimmed } : a)));
+      setEditingId(null);
+      onRefreshReplies?.();
+      toast.success(`Áudio renomeado para "${trimmed}"!`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Falha ao renomear.");
+    } finally {
+      setSavingRename(false);
+    }
+  };
 
   const listContainerRef = useRef<HTMLDivElement>(null);
 
@@ -520,27 +607,134 @@ export function AudioLibraryModal({
               </p>
             </div>
           ) : (
-            filteredAudios.map((qr) => (
+            filteredAudios.map((qr, index) => (
               <div
                 key={qr.id}
-                className="group relative flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-lg border border-border/70 bg-card hover:border-purple-500/50 hover:bg-purple-500/5 transition-all shadow-xs"
+                draggable={editingId !== qr.id}
+                onDragStart={(e) => {
+                  setDraggedAudioId(qr.id);
+                  e.dataTransfer.setData("text/plain", qr.id);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (dragOverAudioId !== qr.id) setDragOverAudioId(qr.id);
+                }}
+                onDragLeave={(e) => {
+                  e.stopPropagation();
+                  if (dragOverAudioId === qr.id) setDragOverAudioId(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (draggedAudioId && draggedAudioId !== qr.id) {
+                    void handleMoveAudio(draggedAudioId, qr.id);
+                  }
+                  setDraggedAudioId(null);
+                  setDragOverAudioId(null);
+                }}
+                onDragEnd={() => {
+                  setDraggedAudioId(null);
+                  setDragOverAudioId(null);
+                }}
+                className={`group relative flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-lg border transition-all shadow-xs ${
+                  dragOverAudioId === qr.id
+                    ? "border-purple-500 bg-purple-500/15 ring-2 ring-purple-500/30 scale-[1.01]"
+                    : "border-border/70 bg-card hover:border-purple-500/50 hover:bg-purple-500/5"
+                }`}
               >
-                <div className="flex-1 min-w-0 space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-foreground truncate">
-                      🎙️ {qr.title}
-                    </span>
-                    {qr.shortcut && (
-                      <Badge variant="outline" className="text-[10px] font-mono px-1.5 py-0">
-                        /{qr.shortcut}
-                      </Badge>
-                    )}
-                    {qr.category && (
-                      <span className="text-[10px] text-muted-foreground font-medium px-1.5 py-0.5 rounded bg-muted">
-                        {qr.category}
-                      </span>
-                    )}
+                {/* Drag Handle & Move Up/Down Reorder Controls */}
+                <div className="flex items-center gap-1 self-start sm:self-center shrink-0">
+                  <div
+                    className="cursor-grab active:cursor-grabbing p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                    title="Arraste para reposicionar este áudio para cima ou para baixo"
+                  >
+                    <GripVertical className="h-4 w-4" />
                   </div>
+                  <div className="flex flex-col -space-y-1">
+                    <button
+                      type="button"
+                      disabled={index === 0}
+                      onClick={() => handleMoveStep(qr.id, "up")}
+                      title="Mover áudio para cima"
+                      className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-20 disabled:pointer-events-none transition-colors"
+                    >
+                      <ChevronUp className="h-3 w-3" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={index === filteredAudios.length - 1}
+                      onClick={() => handleMoveStep(qr.id, "down")}
+                      title="Mover áudio para baixo"
+                      className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-20 disabled:pointer-events-none transition-colors"
+                    >
+                      <ChevronDown className="h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex-1 min-w-0 space-y-1">
+                  {editingId === qr.id ? (
+                    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      <Input
+                        value={editingTitle}
+                        onChange={(e) => setEditingTitle(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void handleSaveRename(qr.id);
+                          if (e.key === "Escape") setEditingId(null);
+                        }}
+                        autoFocus
+                        placeholder="Nome do áudio..."
+                        className="h-7 text-xs bg-background max-w-xs"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={savingRename || !editingTitle.trim()}
+                        onClick={() => void handleSaveRename(qr.id)}
+                        className="h-7 px-2 text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
+                        title="Salvar novo nome"
+                      >
+                        {savingRename ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                        Salvar
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setEditingId(null)}
+                        className="h-7 px-2 text-xs"
+                        title="Cancelar"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-xs font-semibold text-foreground truncate">
+                        🎙️ {qr.title}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => handleStartRename(qr, e)}
+                        title="Renomear este áudio"
+                        className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                      {qr.shortcut && (
+                        <Badge variant="outline" className="text-[10px] font-mono px-1.5 py-0">
+                          /{qr.shortcut}
+                        </Badge>
+                      )}
+                      {qr.category && (
+                        <span className="text-[10px] text-muted-foreground font-medium px-1.5 py-0.5 rounded bg-muted">
+                          {qr.category}
+                        </span>
+                      )}
+                    </div>
+                  )}
 
                   {qr.media_url && (
                     <div className="pt-1">
@@ -550,7 +744,6 @@ export function AudioLibraryModal({
                       />
                     </div>
                   )}
-
                 </div>
 
                 {/* Send actions */}

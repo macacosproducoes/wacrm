@@ -98,17 +98,23 @@ export async function PATCH(
     update.content_text = null;
   } else if (nextKind === 'audio') {
     update.kind = 'text';
-    const mediaUrl = body.media_url || existingMeta.media_url;
+    const mediaUrl = body.media_url || existingMeta.media_url || existingRow.media_url;
     if (!mediaUrl) {
       return NextResponse.json({ error: 'media_url is required for audio quick replies' }, { status: 400 });
     }
     update.content_text = body.content_text || existingRow.content_text || '[Áudio Gravado]';
+    update.media_url = mediaUrl;
+    if (body.order_index !== undefined) update.order_index = order_index;
+    if (body.shortcut !== undefined) update.shortcut = shortcut;
+    if (body.category !== undefined) update.category = category;
+    if (body.is_favorite !== undefined) update.is_favorite = is_favorite;
+    if (body.is_active !== undefined) update.is_active = is_active;
     update.interactive_payload = {
       ...existingMeta,
       type: 'audio',
       media_url: mediaUrl,
-      media_duration: body.media_duration !== undefined ? Number(body.media_duration) : existingMeta.media_duration,
-      media_type: body.media_type || existingMeta.media_type || 'audio/ogg',
+      media_duration: body.media_duration !== undefined ? Number(body.media_duration) : (existingMeta.media_duration ?? existingRow.media_duration),
+      media_type: body.media_type || existingMeta.media_type || existingRow.media_type || 'audio/ogg',
       shortcut,
       category,
       color,

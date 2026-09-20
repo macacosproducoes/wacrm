@@ -18,6 +18,10 @@ import {
   Send,
   X,
   FileAudio,
+  GripVertical,
+  Pencil,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
@@ -89,6 +93,80 @@ export function QuickReplyPicker({
   const audioChunksRef = useRef<Blob[]>([]);
   const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Drag and drop reordering state
+  const [draggedAudioId, setDraggedAudioId] = useState<string | null>(null);
+  const [dragOverAudioId, setDragOverAudioId] = useState<string | null>(null);
+
+  // Audio rename state
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
+  const [savingRename, setSavingRename] = useState(false);
+
+  const handleMoveAudio = async (fromId: string, toId: string) => {
+    if (fromId === toId) return;
+    const currentList = [...items];
+    const fromIdx = currentList.findIndex((a) => a.id === fromId);
+    const toIdx = currentList.findIndex((a) => a.id === toId);
+    if (fromIdx === -1 || toIdx === -1) return;
+
+    const [moved] = currentList.splice(fromIdx, 1);
+    currentList.splice(toIdx, 0, moved);
+    setItems(currentList);
+
+    try {
+      const orders = currentList.map((item, index) => ({ id: item.id, order_index: index }));
+      await fetch("/api/quick-replies", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orders }),
+      });
+      toast.success("Ordem dos áudios atualizada com sucesso!");
+    } catch {
+      toast.error("Erro ao salvar ordem dos áudios.");
+    }
+  };
+
+  const handleMoveStep = (id: string, direction: "up" | "down") => {
+    const idx = items.findIndex((a) => a.id === id);
+    if (idx === -1) return;
+    const targetIdx = direction === "up" ? idx - 1 : idx + 1;
+    if (targetIdx < 0 || targetIdx >= items.length) return;
+    void handleMoveAudio(id, items[targetIdx].id);
+  };
+
+  const handleStartRename = (qr: QuickReply, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingId(qr.id);
+    setEditingTitle(qr.title);
+  };
+
+  const handleSaveRename = async (id: string) => {
+    const trimmed = editingTitle.trim();
+    if (!trimmed) {
+      toast.error("O título não pode ficar vazio.");
+      return;
+    }
+    setSavingRename(true);
+    try {
+      const res = await fetch(`/api/quick-replies/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: trimmed }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Falha ao renomear áudio.");
+      }
+      setItems((prev) => prev.map((a) => (a.id === id ? { ...a, title: trimmed } : a)));
+      setEditingId(null);
+      toast.success(`Áudio renomeado para "${trimmed}"!`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Falha ao renomear.");
+    } finally {
+      setSavingRename(false);
+    }
+  };
 
   const fetchQuickReplies = useCallback(async () => {
     setLoading(true);
@@ -677,20 +755,80 @@ export function QuickReplyPicker({
               )}
             </div>
           ) : (
-            filteredItems.map((qr) => {
+            filteredItems.map((qr, index) => {
               const isAudio = qr.kind === "audio";
               const isInteractive = qr.kind === "interactive";
 
               return (
                 <div
                   key={qr.id}
+                  draggable={editingId !== qr.id}
+                  onDragStart={(e) => {
+                    setDraggedAudioId(qr.id);
+                    e.dataTransfer.setData("text/plain", qr.id);
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (dragOverAudioId !== qr.id) setDragOverAudioId(qr.id);
+                  }}
+                  onDragLeave={(e) => {
+                    e.stopPropagation();
+                    if (dragOverAudioId === qr.id) setDragOverAudioId(null);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (draggedAudioId && draggedAudioId !== qr.id) {
+                      void handleMoveAudio(draggedAudioId, qr.id);
+                    }
+                    setDraggedAudioId(null);
+                    setDragOverAudioId(null);
+                  }}
+                  onDragEnd={() => {
+                    setDraggedAudioId(null);
+                    setDragOverAudioId(null);
+                  }}
                   className={`rounded-xl border p-3 transition-all ${
-                    isAudio
+                    dragOverAudioId === qr.id
+                      ? "border-emerald-500 bg-emerald-500/15 ring-2 ring-emerald-500/30 scale-[1.01]"
+                      : isAudio
                       ? "border-emerald-500/30 bg-emerald-500/[0.02] hover:border-emerald-500/50 hover:bg-emerald-500/[0.05]"
                       : "border-border bg-card hover:border-border/80 hover:bg-muted/40"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
+                    {/* Drag Handle & Move Up/Down Controls */}
+                    <div className="flex items-center gap-1 self-start sm:self-center shrink-0">
+                      <div
+                        className="cursor-grab active:cursor-grabbing p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                        title="Arraste para reposicionar para cima ou para baixo"
+                      >
+                        <GripVertical className="h-4 w-4" />
+                      </div>
+                      <div className="flex flex-col -space-y-1">
+                        <button
+                          type="button"
+                          disabled={index === 0}
+                          onClick={() => handleMoveStep(qr.id, "up")}
+                          title="Mover para cima"
+                          className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-20 disabled:pointer-events-none transition-colors"
+                        >
+                          <ChevronUp className="h-3 w-3" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={index === filteredItems.length - 1}
+                          onClick={() => handleMoveStep(qr.id, "down")}
+                          title="Mover para baixo"
+                          className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-20 disabled:pointer-events-none transition-colors"
+                        >
+                          <ChevronDown className="h-3 w-3" />
+                        </button>
+                      </div>
+                    </div>
+
                     <div className="flex items-start gap-2.5 min-w-0 flex-1">
                       <div
                         className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
@@ -711,26 +849,71 @@ export function QuickReplyPicker({
                       </div>
 
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-semibold text-sm text-foreground truncate">
-                            {qr.title}
-                          </span>
-                          {qr.shortcut && (
-                            <Badge variant="secondary" className="font-mono text-[10px] px-1.5 py-0 h-4">
-                              /{qr.shortcut}
-                            </Badge>
-                          )}
-                          {qr.category && (
-                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-muted-foreground">
-                              {qr.category}
-                            </Badge>
-                          )}
-                          {isAudio && qr.media_duration && (
-                            <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-mono">
-                              {Math.floor(qr.media_duration / 60)}:{(qr.media_duration % 60).toString().padStart(2, "0")}
+                        {editingId === qr.id ? (
+                          <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                            <Input
+                              value={editingTitle}
+                              onChange={(e) => setEditingTitle(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") void handleSaveRename(qr.id);
+                                if (e.key === "Escape") setEditingId(null);
+                              }}
+                              autoFocus
+                              placeholder="Nome do áudio..."
+                              className="h-7 text-xs bg-background max-w-xs"
+                            />
+                            <Button
+                              type="button"
+                              size="sm"
+                              disabled={savingRename || !editingTitle.trim()}
+                              onClick={() => void handleSaveRename(qr.id)}
+                              className="h-7 px-2 text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
+                              title="Salvar novo nome"
+                            >
+                              {savingRename ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                              Salvar
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setEditingId(null)}
+                              className="h-7 px-2 text-xs"
+                              title="Cancelar"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-sm text-foreground truncate">
+                              {qr.title}
                             </span>
-                          )}
-                        </div>
+                            <button
+                              type="button"
+                              onClick={(e) => handleStartRename(qr, e)}
+                              title="Renomear este áudio/item"
+                              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                            {qr.shortcut && (
+                              <Badge variant="secondary" className="font-mono text-[10px] px-1.5 py-0 h-4">
+                                /{qr.shortcut}
+                              </Badge>
+                            )}
+                            {qr.category && (
+                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-muted-foreground">
+                                {qr.category}
+                              </Badge>
+                            )}
+                            {isAudio && qr.media_duration && (
+                              <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-mono">
+                                {Math.floor(qr.media_duration / 60)}:{(qr.media_duration % 60).toString().padStart(2, "0")}
+                              </span>
+                            )}
+                          </div>
+                        )}
 
                         {/* Text Preview with variable replacement */}
                         {!isAudio && (
