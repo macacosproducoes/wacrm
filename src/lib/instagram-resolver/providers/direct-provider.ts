@@ -15,14 +15,56 @@ import { parseInstagramUsername, buildInstagramProfileUrl } from '../parser';
 
 const REQUEST_TIMEOUT_MS = 8000;
 
-// Whitelisted social preview crawlers (Instagram guarantees public Open Graph metadata without 429 or login walls)
-const USER_AGENTS = [
-  'WhatsApp/2.21.12.21 A',
-  'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
-  'Twitterbot/1.0',
-  'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-  'TelegramBot (like TwitterBot)',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15 (Applebot/0.1; +http://www.apple.com/bot.html)',
+interface RequestProfile {
+  name: string;
+  headers: Record<string, string>;
+}
+
+// Cohesive request profiles with accurately paired headers (avoids bot fingerprint detection)
+const REQUEST_PROFILES: RequestProfile[] = [
+  // 1. Modern Chrome Desktop (Primary - bypasses crawler-specific bot walls on profile endpoints)
+  {
+    name: 'Chrome-Desktop',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+      'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+      'Sec-Ch-Ua-Mobile': '?0',
+      'Sec-Ch-Ua-Platform': '"Windows"',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
+      'Upgrade-Insecure-Requests': '1',
+    },
+  },
+  // 2. WhatsApp Social Preview Crawler
+  {
+    name: 'WhatsApp-Bot',
+    headers: {
+      'User-Agent': 'WhatsApp/2.21.12.21 A',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
+    },
+  },
+  // 3. Facebook External Hit (Meta crawler)
+  {
+    name: 'Facebook-Bot',
+    headers: {
+      'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+      'Accept': '*/*',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
+  },
+  // 4. Twitterbot Social Preview
+  {
+    name: 'Twitterbot',
+    headers: {
+      'User-Agent': 'Twitterbot/1.0',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    },
+  },
 ];
 
 function decodeHtmlEntities(str: string): string {
@@ -68,16 +110,16 @@ export class DirectInstagramProfileProvider implements InstagramProfileProvider 
     let lastError: Error | null = null;
     let is404 = false;
 
-    // Strategy 1: Direct Instagram Open Graph / Schema / Inlined JSON
-    for (let i = 0; i < USER_AGENTS.length; i++) {
-      const ua = USER_AGENTS[i];
+    // Strategy 1: Direct Instagram with paired client headers
+    for (let i = 0; i < REQUEST_PROFILES.length; i++) {
+      const profile = REQUEST_PROFILES[i];
       try {
-        const result = await this.fetchAndExtract(cleanUsername, profileUrl, ua);
+        const result = await this.fetchAndExtract(cleanUsername, profileUrl, profile.headers);
         if (result && result.profileImageUrl && !isStaticPlaceholder(result.profileImageUrl)) {
-          console.log(`[INSTAGRAM_DIRECT] Successfully resolved photo for @${cleanUsername} directly on attempt ${i + 1}`);
+          console.log(`[INSTAGRAM_DIRECT] Successfully resolved photo for @${cleanUsername} directly via ${profile.name}`);
           return result;
         } else if (result && result.displayName && result.displayName !== cleanUsername) {
-          // If we found profile info (name, bio) but no photo, check Threads for the photo
+          // If profile info exists but no image, check Threads for the image
           const threadsFallback = await this.fetchViaThreads(cleanUsername, profileUrl);
           if (threadsFallback?.profileImageUrl) {
             return {
@@ -98,12 +140,12 @@ export class DirectInstagramProfileProvider implements InstagramProfileProvider 
           break; // Profile does not exist on Instagram
         }
         if (error.message.includes('429')) {
-          console.warn(`[INSTAGRAM_DIRECT] Direct attempt hit 429 rate limit. Switching immediately to Meta Threads fallback...`);
+          console.warn(`[INSTAGRAM_DIRECT] Direct attempt ${profile.name} hit 429 rate limit.`);
           lastError = error;
-          break; // Break early to avoid waiting through all UAs on an IP-level rate limit
+          continue;
         }
         lastError = error;
-        console.warn(`[INSTAGRAM_DIRECT] Direct attempt ${i + 1} for @${cleanUsername} failed: ${lastError.message}`);
+        console.warn(`[INSTAGRAM_DIRECT] Direct attempt ${profile.name} for @${cleanUsername} failed: ${lastError.message}`);
       }
     }
 
@@ -112,8 +154,8 @@ export class DirectInstagramProfileProvider implements InstagramProfileProvider 
     }
 
     // Strategy 2: Meta Threads.net Open Graph fallback
-    // Ordinary/common Instagram profiles are often blocked on direct instagram.com from datacenter/cloud IPs (HTTP 429),
-    // but Meta serves their exact Instagram CDN avatar publicly via Threads.net Open Graph without rate limiting.
+    // Common Instagram profiles may be blocked on direct instagram.com,
+    // but Meta serves their exact Instagram CDN avatar publicly via Threads.net Open Graph.
     console.log(`[INSTAGRAM_DIRECT] Attempting Meta Threads Open Graph fallback for @${cleanUsername}...`);
     try {
       const threadsResult = await this.fetchViaThreads(cleanUsername, profileUrl);
@@ -227,24 +269,14 @@ export class DirectInstagramProfileProvider implements InstagramProfileProvider 
   private async fetchAndExtract(
     username: string,
     profileUrl: string,
-    userAgent: string
+    requestHeaders: Record<string, string>
   ): Promise<InstagramProfileData | null> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
       const response = await fetch(profileUrl, {
-        headers: {
-          'User-Agent': userAgent,
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-          'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-          'Cache-Control': 'no-cache',
-          Pragma: 'no-cache',
-          'Sec-Fetch-Dest': 'document',
-          'Sec-Fetch-Mode': 'navigate',
-          'Sec-Fetch-Site': 'none',
-          'Sec-Fetch-User': '?1',
-        },
+        headers: requestHeaders,
         redirect: 'follow',
         signal: controller.signal,
       });
