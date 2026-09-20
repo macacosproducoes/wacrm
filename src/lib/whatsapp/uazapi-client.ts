@@ -379,6 +379,7 @@ export async function sendUazApiMedia(
     delete body.caption;
   } else if (opts.caption) {
     body.caption = opts.caption;
+    body.text = opts.caption;
   }
 
   console.log(`[sendUazApiMedia] Sending ${opts.type} to ${formattedNumber} via ${endpoint}`);
