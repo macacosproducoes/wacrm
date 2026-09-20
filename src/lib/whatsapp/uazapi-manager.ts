@@ -350,16 +350,20 @@ export async function startUazApiListener(accountId: string): Promise<boolean> {
       }
     }
 
-    // Run first batch immediately, then every 5000ms.
-    // Previous 1000ms interval caused excessive DB queries and duplicate
-    // AI triggers when the same messages were re-detected across ticks.
+    // Run first batch immediately.
+    // On Vercel serverless, do NOT register an infinite setInterval as it continuously consumes Fluid CPU.
     void pollBatch();
-    listener.pollInterval = setInterval(pollBatch, 5000);
+    if (process.env.VERCEL !== '1') {
+      listener.pollInterval = setInterval(pollBatch, 5000);
+    }
   }
 
   // 2. Start Persistent Upstream SSE Connection
   function connect() {
     if (listener.isDestroyed) return;
+    // On Vercel serverless, long-lived upstream HTTP streams keep lambda CPU active.
+    // Webhooks (/api/whatsapp/uazapi/webhook) provide real-time delivery with zero idle compute.
+    if (process.env.VERCEL === '1') return;
 
     try {
       const sseUrl = `${baseUrl}/sse?token=${encodeURIComponent(token)}`;
