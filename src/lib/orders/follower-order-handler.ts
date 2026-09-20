@@ -193,7 +193,7 @@ export async function handleFollowerOrder(
   let profileImageUrl: string | null = null;
   let instagramResolveError: string | null = null;
   try {
-    const resolved = await InstagramProfileResolver.resolveContact(accountId, contactId, { forceRefresh: false });
+    const resolved = await InstagramProfileResolver.resolveContact(accountId, contactId, { forceRefresh: true });
     profileImageUrl = resolved.profileImageUrl || null;
     instagramResolveError = resolved.error || null;
     console.log(`[FOLLOWER_ORDER] Profile photo resolved: ${profileImageUrl ? 'FOUND' : 'NOT_FOUND'}`);

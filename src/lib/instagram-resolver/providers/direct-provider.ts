@@ -20,29 +20,38 @@ interface RequestProfile {
   headers: Record<string, string>;
 }
 
-// Cohesive request profiles prioritizing social preview crawlers that receive Open Graph meta tags
+// Cohesive request profiles prioritizing social preview crawlers and natural mobile clients
 const REQUEST_PROFILES: RequestProfile[] = [
-  // 1. Googlebot Crawler (High trust - Meta lookaside server responds immediately with full og:image CDN avatars)
+  // 1. Mobile Safari (High delivery, non-bot footprint, natural lookaside preview)
   {
-    name: 'Googlebot',
+    name: 'Mobile-Safari',
     headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
       'Cache-Control': 'no-cache',
     },
   },
-  // 2. Bingbot Crawler
+  // 2. Mobile Chrome (Android Samsung Galaxy)
   {
-    name: 'Bingbot',
+    name: 'Mobile-Chrome',
     headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)',
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.200 Mobile Safari/537.36',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
       'Cache-Control': 'no-cache',
     },
   },
-  // 3. WhatsApp Social Preview Crawler (Primary - Meta serves full Open Graph CDN avatars)
+  // 3. Applebot (iMessage link preview)
+  {
+    name: 'Applebot',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15 (Applebot/0.1)',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
+    },
+  },
+  // 4. WhatsApp Social Preview Crawler
   {
     name: 'WhatsApp-Bot',
     headers: {
@@ -52,7 +61,7 @@ const REQUEST_PROFILES: RequestProfile[] = [
       'Cache-Control': 'no-cache',
     },
   },
-  // 4. Facebook External Hit (Meta's native crawler)
+  // 5. Facebook External Hit (Meta native crawler)
   {
     name: 'Facebook-Bot',
     headers: {
