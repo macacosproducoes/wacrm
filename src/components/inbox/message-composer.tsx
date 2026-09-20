@@ -806,7 +806,7 @@ export function MessageComposer({
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
           const { kind, name } = detectMediaKindAndName(file);
-          const audioType = file.name.toLowerCase().endsWith(".mp3") ? "audio/mpeg" : "audio/ogg; codecs=opus";
+          const audioType = file.name.toLowerCase().endsWith(".mp3") ? "audio/mpeg" : "audio/ogg";
           const namedFile = new File([file], name, {
             type:
               file.type ||
@@ -887,7 +887,7 @@ export function MessageComposer({
       if (files && files.length > 0) {
         const file = files[0];
         const { kind, name } = detectMediaKindAndName(file);
-        const audioType = file.name.toLowerCase().endsWith(".mp3") ? "audio/mpeg" : "audio/ogg; codecs=opus";
+        const audioType = file.name.toLowerCase().endsWith(".mp3") ? "audio/mpeg" : "audio/ogg";
         const namedFile = new File([file], name, {
           type:
             file.type ||

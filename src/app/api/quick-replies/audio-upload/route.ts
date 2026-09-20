@@ -202,18 +202,30 @@ export async function POST(request: Request) {
 
     const storagePath = `account-${accountId}/audio-${Date.now()}-${safeBase}.${extension}`;
 
-    // 5. Upload normalized audio buffer to Supabase Storage
+    // 5. Sanitize MIME type for Supabase Storage allowed_mime_types policy
+    let cleanMime = (detectedMime || "").split(";")[0].trim().toLowerCase();
+    if (!cleanMime || cleanMime === "application/octet-stream" || cleanMime.includes("enc") || cleanMime === "audio/opus") {
+      cleanMime = extension === "mp3" ? "audio/mpeg" : "audio/ogg";
+    }
+    if (cleanMime === "audio/mp3") {
+      cleanMime = "audio/mpeg";
+    }
+
+    // Upload normalized audio buffer to Supabase Storage
     const { error: uploadErr } = await admin.storage
       .from("chat-media")
       .upload(storagePath, fileBuffer, {
-        contentType: detectedMime,
+        contentType: cleanMime,
         cacheControl: "31536000",
         upsert: true,
       });
 
     if (uploadErr) {
       console.error("[audio-upload] Storage upload failed:", uploadErr);
-      return NextResponse.json({ error: "Falha ao gravar arquivo no storage." }, { status: 500 });
+      return NextResponse.json(
+        { error: `Falha ao gravar arquivo no storage: ${uploadErr.message || "erro desconhecido"}` },
+        { status: 500 }
+      );
     }
 
     const {
@@ -236,7 +248,7 @@ export async function POST(request: Request) {
         color: "purple",
         content_text: `🎙️ ${title}`,
         media_url: publicUrl,
-        media_type: detectedMime,
+        media_type: cleanMime,
         media_duration: durationSeconds,
         scope: "team",
       })

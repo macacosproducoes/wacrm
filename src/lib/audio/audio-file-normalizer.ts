@@ -62,7 +62,7 @@ export function inspectAudioBytes(bytes: Uint8Array): {
       }
     }
     return {
-      mime: "audio/ogg; codecs=opus",
+      mime: "audio/ogg",
       extension: "ogg",
       duration,
     };
@@ -97,7 +97,7 @@ export function inspectAudioBytes(bytes: Uint8Array): {
 
   // Fallback default for unknown/enc files
   return {
-    mime: "audio/ogg; codecs=opus",
+    mime: "audio/ogg",
     extension: "ogg",
   };
 }

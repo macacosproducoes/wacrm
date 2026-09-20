@@ -125,10 +125,15 @@ export async function uploadAccountMedia(
   if (!contentType || contentType === "application/octet-stream") {
     const lowerName = file.name.toLowerCase();
     if (lowerName.endsWith(".enc") || lowerName.endsWith(".ogg") || lowerName.endsWith(".opus")) {
-      contentType = "audio/ogg; codecs=opus";
+      contentType = "audio/ogg";
     } else if (lowerName.endsWith(".mp3")) {
       contentType = "audio/mpeg";
     }
+  }
+
+  if (contentType) {
+    contentType = contentType.split(";")[0].trim().toLowerCase();
+    if (contentType === "audio/opus") contentType = "audio/ogg";
   }
 
   const { error: upErr } = await supabase.storage.from(bucket).upload(path, file, {
