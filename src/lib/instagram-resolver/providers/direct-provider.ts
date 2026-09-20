@@ -22,7 +22,27 @@ interface RequestProfile {
 
 // Cohesive request profiles prioritizing social preview crawlers that receive Open Graph meta tags
 const REQUEST_PROFILES: RequestProfile[] = [
-  // 1. WhatsApp Social Preview Crawler (Primary - Meta serves full Open Graph CDN avatars)
+  // 1. Googlebot Crawler (High trust - Meta lookaside server responds immediately with full og:image CDN avatars)
+  {
+    name: 'Googlebot',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
+      'Cache-Control': 'no-cache',
+    },
+  },
+  // 2. Bingbot Crawler
+  {
+    name: 'Bingbot',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
+      'Cache-Control': 'no-cache',
+    },
+  },
+  // 3. WhatsApp Social Preview Crawler (Primary - Meta serves full Open Graph CDN avatars)
   {
     name: 'WhatsApp-Bot',
     headers: {
@@ -32,7 +52,7 @@ const REQUEST_PROFILES: RequestProfile[] = [
       'Cache-Control': 'no-cache',
     },
   },
-  // 2. Facebook External Hit (Meta's native crawler)
+  // 4. Facebook External Hit (Meta's native crawler)
   {
     name: 'Facebook-Bot',
     headers: {
@@ -41,7 +61,7 @@ const REQUEST_PROFILES: RequestProfile[] = [
       'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
     },
   },
-  // 3. Twitterbot Social Preview
+  // 5. Twitterbot Social Preview
   {
     name: 'Twitterbot',
     headers: {
@@ -50,7 +70,7 @@ const REQUEST_PROFILES: RequestProfile[] = [
       'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
     },
   },
-  // 4. TelegramBot
+  // 6. TelegramBot
   {
     name: 'TelegramBot',
     headers: {
@@ -59,7 +79,7 @@ const REQUEST_PROFILES: RequestProfile[] = [
       'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
     },
   },
-  // 5. Applebot (iMessage link preview)
+  // 7. Applebot (iMessage link preview)
   {
     name: 'Applebot',
     headers: {
@@ -67,7 +87,7 @@ const REQUEST_PROFILES: RequestProfile[] = [
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     },
   },
-  // 6. Modern Chrome Desktop (Fallback for text metadata and title)
+  // 8. Modern Chrome Desktop (Fallback for text metadata and title)
   {
     name: 'Chrome-Desktop',
     headers: {
@@ -130,47 +150,53 @@ export class DirectInstagramProfileProvider implements InstagramProfileProvider 
     }
 
     const profileUrl = buildInstagramProfileUrl(cleanUsername);
-    console.log(`[INSTAGRAM_DIRECT] Resolving @${cleanUsername} directly via ${profileUrl}`);
+    const lookasideUrl = `${profileUrl}?from_lookaside=1`;
+    console.log(`[INSTAGRAM_DIRECT] Resolving @${cleanUsername} directly via ${lookasideUrl}`);
 
     let lastError: Error | null = null;
     let is404 = false;
     let bestMetadata: InstagramProfileData | null = null;
 
-    // Strategy 1: Direct Instagram with paired social preview crawlers
-    for (let i = 0; i < REQUEST_PROFILES.length; i++) {
-      const profile = REQUEST_PROFILES[i];
-      try {
-        const result = await this.fetchAndExtract(cleanUsername, profileUrl, profile.headers);
-        if (result) {
-          // If we found a real profile picture, return immediately!
-          if (result.profileImageUrl && !isStaticPlaceholder(result.profileImageUrl)) {
-            console.log(`[INSTAGRAM_DIRECT] Successfully resolved official photo for @${cleanUsername} directly via ${profile.name}`);
-            return result;
-          }
+    // Strategy 1: Direct Instagram with Meta lookaside crawler parameter & paired social preview crawlers
+    const urlsToTry = [lookasideUrl, profileUrl];
 
-          // Retain best metadata (displayName, bio) if encountered, but CONTINUE searching for the photo!
-          if (!bestMetadata || (result.displayName && result.displayName !== cleanUsername)) {
-            bestMetadata = result;
+    for (const targetUrl of urlsToTry) {
+      for (let i = 0; i < REQUEST_PROFILES.length; i++) {
+        const profile = REQUEST_PROFILES[i];
+        try {
+          const result = await this.fetchAndExtract(cleanUsername, targetUrl, profile.headers);
+          if (result) {
+            // If we found a real profile picture, return immediately!
+            if (result.profileImageUrl && !isStaticPlaceholder(result.profileImageUrl)) {
+              console.log(`[INSTAGRAM_DIRECT] Successfully resolved official photo for @${cleanUsername} directly via ${profile.name} (${targetUrl})`);
+              return result;
+            }
+
+            // Retain best metadata (displayName, bio) if encountered, but CONTINUE searching for the photo!
+            if (!bestMetadata || (result.displayName && result.displayName !== cleanUsername)) {
+              bestMetadata = result;
+            }
           }
-        }
-      } catch (err: unknown) {
-        const error = err instanceof Error ? err : new Error(String(err));
-        if (error.message.includes('Unexpected redirect domain')) {
-          throw error;
-        }
-        if (error.message.includes('404')) {
-          is404 = true;
+        } catch (err: unknown) {
+          const error = err instanceof Error ? err : new Error(String(err));
+          if (error.message.includes('Unexpected redirect domain')) {
+            throw error;
+          }
+          if (error.message.includes('404')) {
+            is404 = true;
+            lastError = error;
+            break; // Profile does not exist on Instagram
+          }
+          if (error.message.includes('429')) {
+            console.warn(`[INSTAGRAM_DIRECT] Direct attempt ${profile.name} hit 429 rate limit.`);
+            lastError = error;
+            continue;
+          }
           lastError = error;
-          break; // Profile does not exist on Instagram
+          console.warn(`[INSTAGRAM_DIRECT] Direct attempt ${profile.name} for @${cleanUsername} failed: ${lastError.message}`);
         }
-        if (error.message.includes('429')) {
-          console.warn(`[INSTAGRAM_DIRECT] Direct attempt ${profile.name} hit 429 rate limit.`);
-          lastError = error;
-          continue;
-        }
-        lastError = error;
-        console.warn(`[INSTAGRAM_DIRECT] Direct attempt ${profile.name} for @${cleanUsername} failed: ${lastError.message}`);
       }
+      if (is404) break;
     }
 
     if (is404 && lastError) {
@@ -399,7 +425,7 @@ export class DirectInstagramProfileProvider implements InstagramProfileProvider 
 
       return {
         username,
-        profileUrl,
+        profileUrl: buildInstagramProfileUrl(username),
         profileImageUrl: profileImageUrl || null,
         displayName,
         biography,
