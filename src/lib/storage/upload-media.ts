@@ -63,7 +63,10 @@ export function buildMediaPath(
   // one — a bare name like "README" has no extension and falls back to
   // "bin" rather than becoming "readme".
   const hasExt = /\.[^.]+$/.test(fileName);
-  const ext = hasExt ? fileName.split(".").pop()!.toLowerCase() : "bin";
+  let ext = hasExt ? fileName.split(".").pop()!.toLowerCase() : "bin";
+  if (ext === "enc") {
+    ext = "ogg";
+  }
   const safeBase =
     fileName
       .replace(/\.[^.]+$/, "")
@@ -118,10 +121,20 @@ export async function uploadAccountMedia(
   }
 
   const path = buildMediaPath(profile.account_id as string, file.name);
+  let contentType = file.type;
+  if (!contentType || contentType === "application/octet-stream") {
+    const lowerName = file.name.toLowerCase();
+    if (lowerName.endsWith(".enc") || lowerName.endsWith(".ogg") || lowerName.endsWith(".opus")) {
+      contentType = "audio/ogg; codecs=opus";
+    } else if (lowerName.endsWith(".mp3")) {
+      contentType = "audio/mpeg";
+    }
+  }
+
   const { error: upErr } = await supabase.storage.from(bucket).upload(path, file, {
     cacheControl: "3600",
     upsert: false,
-    contentType: file.type,
+    contentType: contentType || undefined,
   });
   if (upErr) throw new Error(upErr.message);
 

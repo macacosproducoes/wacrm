@@ -17,8 +17,12 @@ import { mediaFilename } from "./filename";
  * fallback below.
  */
 export async function downloadMediaMessage(message: Message): Promise<void> {
-  const url = message.media_url;
+  let url = message.media_url;
   if (!url) throw new Error("This message has no attachment.");
+
+  if (url.includes("mmg.whatsapp.net") || url.includes(".enc")) {
+    url = `/api/whatsapp/uazapi/media?messageId=${encodeURIComponent(message.message_id || message.id)}`;
+  }
 
   let blob: Blob;
   try {

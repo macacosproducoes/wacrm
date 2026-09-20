@@ -37,6 +37,12 @@ import { QuickReplyAudioPlayer } from "./quick-reply-audio-player";
 import { replaceQuickReplyVariables, type VariableContext } from "@/lib/inbox/quick-reply-variables";
 import { uploadAccountMedia, deleteAccountMedia } from "@/lib/storage/upload-media";
 import { CHAT_MEDIA_BUCKET } from "./message-composer";
+import {
+  isAudioOrEncFile,
+  cleanAudioTitle,
+  computeAudioDuration,
+  uploadAudioQuickReply,
+} from "@/lib/audio/audio-file-normalizer";
 
 interface QuickReplyPickerProps {
   open: boolean;
@@ -77,6 +83,8 @@ export function QuickReplyPicker({
   // In-picker recording state
   const [isRecording, setIsRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isDropping, setIsDropping] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -213,21 +221,62 @@ export function QuickReplyPicker({
     setIsRecording(false);
   };
 
-  const handleFileUpload = (file: File) => {
+  const handleFileUpload = async (file: File) => {
     if (!file) return;
     setRecordedAudioBlob(file);
     const url = URL.createObjectURL(file);
     setRecordedAudioUrl(url);
     if (!newAudioTitle) {
-      setNewAudioTitle(file.name.replace(/\.[^.]+$/, ""));
+      setNewAudioTitle(cleanAudioTitle(file.name));
     }
 
-    const tempAudio = new Audio(url);
-    tempAudio.onloadedmetadata = () => {
-      if (tempAudio.duration && isFinite(tempAudio.duration)) {
-        setRecordedAudioDuration(Math.round(tempAudio.duration));
+    const dur = await computeAudioDuration(file);
+    setRecordedAudioDuration(dur);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isDragging) setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setIsDragging(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = Array.from(e.dataTransfer.files).filter(isAudioOrEncFile);
+    if (files.length === 0) {
+      toast.error("Por favor arraste um arquivo de áudio ou .enc válido.");
+      return;
+    }
+
+    setIsDropping(true);
+    const toastId = toast.loading(`Salvando ${files.length} áudio(s) no ZapPlus...`);
+    try {
+      for (const file of files) {
+        const title = cleanAudioTitle(file.name);
+        await uploadAudioQuickReply(file, {
+          title,
+          category: selectedCategory !== "all" ? selectedCategory : "Áudios",
+        });
+        toast.success(`🎙️ Áudio "${title}" salvo com sucesso no ZapPlus!`, { id: toastId });
       }
-    };
+      setCurrentTab("audio");
+      await fetchQuickReplies();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Erro ao salvar áudio arrastado.";
+      toast.error(msg, { id: toastId });
+    } finally {
+      setIsDropping(false);
+    }
   };
 
   const resetAudioForm = () => {
@@ -259,34 +308,18 @@ export function QuickReplyPicker({
 
     setUploadingAudio(true);
     try {
-      const ext = recordedAudioBlob.type.includes("mp3") ? "mp3" : "ogg";
-      const file = new File(
-        [recordedAudioBlob],
-        `audio-reply-${Date.now()}.${ext}`,
-        { type: recordedAudioBlob.type || "audio/ogg" }
-      );
+      const file =
+        recordedAudioBlob instanceof File
+          ? recordedAudioBlob
+          : new File([recordedAudioBlob], `audio-reply-${Date.now()}.ogg`, {
+              type: recordedAudioBlob.type || "audio/ogg",
+            });
 
-      const { publicUrl } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
-
-      const res = await fetch("/api/quick-replies", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: newAudioTitle.trim(),
-          kind: "audio",
-          shortcut: newAudioShortcut.trim() || null,
-          category: newAudioCategory.trim() || "Áudios",
-          media_url: publicUrl,
-          media_type: file.type,
-          media_duration: recordedAudioDuration || recordSeconds || 5,
-          content_text: `🎙️ ${newAudioTitle.trim()}`,
-        }),
+      await uploadAudioQuickReply(file, {
+        title: newAudioTitle.trim(),
+        shortcut: newAudioShortcut.trim() || undefined,
+        category: newAudioCategory.trim() || "Áudios",
       });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Erro ao salvar áudio.");
-      }
 
       toast.success("Áudio gravado e armazenado com sucesso no ZapPlus!");
       resetAudioForm();
@@ -301,7 +334,26 @@ export function QuickReplyPicker({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[88vh] flex flex-col p-0 gap-0 overflow-hidden bg-card border-border shadow-2xl">
+      <DialogContent
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className="sm:max-w-2xl max-h-[88vh] flex flex-col p-0 gap-0 overflow-hidden bg-card border-border shadow-2xl relative"
+      >
+        {/* Drag & Drop Visual Overlay */}
+        {(isDragging || isDropping) && (
+          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-background/95 backdrop-blur-sm border-2 border-dashed border-emerald-500 rounded-lg p-6 text-center animate-in fade-in zoom-in-95 duration-150">
+            <div className="h-16 w-16 rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-3 animate-bounce">
+              {isDropping ? <Loader2 className="h-8 w-8 animate-spin" /> : <Upload className="h-8 w-8" />}
+            </div>
+            <h3 className="text-base font-bold text-foreground">
+              {isDropping ? "Processando e Salvando Áudio..." : "Solte o Áudio para Salvar no ZapPlus"}
+            </h3>
+            <p className="text-xs text-muted-foreground mt-1 max-w-sm">
+              Reconhece áudios <b>.enc</b>, <b>.ogg</b>, <b>.mp3</b> e salva automaticamente na sua conta!
+            </p>
+          </div>
+        )}
         {/* Header with ZapPlus Branding */}
         <DialogHeader className="p-4 pb-3 border-b border-border bg-muted/40">
           <div className="flex items-center justify-between">
@@ -340,6 +392,17 @@ export function QuickReplyPicker({
                 </>
               )}
             </Button>
+          </div>
+
+          {/* Drag & Drop Hint Banner */}
+          <div className="mt-2.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between text-[11px] text-emerald-700 dark:text-emerald-300">
+            <span className="flex items-center gap-1.5">
+              <Sparkles className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+              <span><b>Dica ZapPlus:</b> Arraste arquivos <b>.enc</b>, <b>.ogg</b> ou <b>.mp3</b> para dentro para salvar</span>
+            </span>
+            <Badge variant="outline" className="text-[10px] bg-emerald-500/15 border-emerald-500/30 text-emerald-700 dark:text-emerald-300">
+              Auto-Save
+            </Badge>
           </div>
 
           {/* Search bar & Tabs */}
@@ -536,11 +599,11 @@ export function QuickReplyPicker({
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="audio/*"
+                  accept="audio/*,.ogg,.mp3,.wav,.m4a,.enc,.opus"
                   className="hidden"
                   onChange={(e) => {
                     const f = e.target.files?.[0];
-                    if (f) handleFileUpload(f);
+                    if (f) void handleFileUpload(f);
                   }}
                 />
                 <Button
@@ -550,7 +613,7 @@ export function QuickReplyPicker({
                   className="h-8 text-xs text-muted-foreground hover:text-foreground"
                 >
                   <Upload className="mr-1.5 h-3.5 w-3.5" />
-                  Subir Arquivo (.mp3/.ogg)
+                  Subir (.enc / .mp3 / .ogg)
                 </Button>
               </div>
 

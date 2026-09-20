@@ -659,11 +659,11 @@ export function MessageComposer({
       }
       if (
         type.startsWith("audio/") ||
-        ["mp3", "ogg", "wav", "m4a", "opus", "aac"].includes(ext)
+        ["mp3", "ogg", "wav", "m4a", "opus", "aac", "enc"].includes(ext)
       ) {
         return {
           kind: "audio",
-          name: name || `audio-${Date.now()}.${ext || "ogg"}`,
+          name: name ? name.replace(/\.enc$/i, ".ogg") : `audio-${Date.now()}.${ext === "enc" ? "ogg" : ext || "ogg"}`,
         };
       }
       return {
@@ -806,10 +806,11 @@ export function MessageComposer({
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
           const { kind, name } = detectMediaKindAndName(file);
+          const audioType = file.name.toLowerCase().endsWith(".mp3") ? "audio/mpeg" : "audio/ogg; codecs=opus";
           const namedFile = new File([file], name, {
             type:
               file.type ||
-              (kind === "image" ? "image/png" : "application/octet-stream"),
+              (kind === "image" ? "image/png" : kind === "audio" ? audioType : "application/octet-stream"),
           });
           stageUpload(kind, namedFile);
           return true;
@@ -885,18 +886,17 @@ export function MessageComposer({
       const files = e.dataTransfer?.files;
       if (files && files.length > 0) {
         const file = files[0];
-        if (file.type.startsWith("image/")) {
-          void stageUpload("image", file);
-        } else if (file.type.startsWith("video/")) {
-          void stageUpload("video", file);
-        } else if (file.type.startsWith("audio/")) {
-          void stageUpload("audio", file);
-        } else {
-          void stageUpload("document", file);
-        }
+        const { kind, name } = detectMediaKindAndName(file);
+        const audioType = file.name.toLowerCase().endsWith(".mp3") ? "audio/mpeg" : "audio/ogg; codecs=opus";
+        const namedFile = new File([file], name, {
+          type:
+            file.type ||
+            (kind === "image" ? "image/png" : kind === "audio" ? audioType : "application/octet-stream"),
+        });
+        void stageUpload(kind, namedFile);
       }
     },
-    [inputsDisabled, busy, stageUpload]
+    [inputsDisabled, busy, detectMediaKindAndName, stageUpload]
   );
 
   // In-composer live mic recording

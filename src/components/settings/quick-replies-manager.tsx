@@ -49,6 +49,11 @@ import { QuickReplyAudioPlayer } from "@/components/inbox/quick-reply-audio-play
 import { uploadAccountMedia } from "@/lib/storage/upload-media";
 import { CHAT_MEDIA_BUCKET } from "@/components/inbox/message-composer";
 import { getDefaultColorForKind } from "@/lib/inbox/quick-reply-colors";
+import {
+  isAudioOrEncFile,
+  cleanAudioTitle,
+  uploadAudioQuickReply,
+} from "@/lib/audio/audio-file-normalizer";
 
 interface DraftState {
   id?: string;
@@ -115,6 +120,8 @@ export function QuickRepliesManager() {
   const [tabFilter, setTabFilter] = useState<
     "all" | "favorite" | "text" | "audio" | "sequence" | "media" | "interactive"
   >("all");
+  const [isDragging, setIsDragging] = useState(false);
+  const [isDropping, setIsDropping] = useState(false);
 
   // Mic recorder state for audio quick reply editing
   const [isRecording, setIsRecording] = useState(false);
@@ -256,9 +263,74 @@ export function QuickRepliesManager() {
     setIsRecording(false);
   };
 
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isDragging) setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setIsDragging(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = Array.from(e.dataTransfer.files).filter(isAudioOrEncFile);
+    if (files.length === 0) {
+      toast.error("Por favor arraste um arquivo de áudio ou .enc válido.");
+      return;
+    }
+
+    setIsDropping(true);
+    const toastId = toast.loading(`Salvando ${files.length} áudio(s) no ZapPlus...`);
+    try {
+      for (const file of files) {
+        const title = cleanAudioTitle(file.name);
+        await uploadAudioQuickReply(file, {
+          title,
+          category: "Áudios",
+        });
+        toast.success(`🎙️ Áudio "${title}" salvo com sucesso!`, { id: toastId });
+      }
+      setTabFilter("audio");
+      await load();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Erro ao salvar áudio arrastado.";
+      toast.error(msg, { id: toastId });
+    } finally {
+      setIsDropping(false);
+    }
+  };
+
   const handleFileUpload = async (file: File) => {
     if (!file) return;
     try {
+      if (draft?.kind === "audio" || isAudioOrEncFile(file)) {
+        const qr = await uploadAudioQuickReply(file, {
+          title: draft?.title || cleanAudioTitle(file.name),
+          category: draft?.category || "Áudios",
+        });
+        setDraft((d) =>
+          d
+            ? {
+                ...d,
+                title: d.title || qr.title,
+                media_url: qr.media_url ?? undefined,
+                media_type: qr.media_type ?? undefined,
+                media_duration: qr.media_duration ?? undefined,
+              }
+            : d
+        );
+        toast.success("Áudio processado e armazenado com sucesso!");
+        await load();
+        return;
+      }
       const { publicUrl } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
       setDraft((d) =>
         d
@@ -383,10 +455,30 @@ export function QuickRepliesManager() {
   }, [items, tabFilter]);
 
   return (
-    <div className="space-y-6">
+    <div
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className="space-y-6 relative"
+    >
+      {/* Drag & Drop Visual Overlay */}
+      {(isDragging || isDropping) && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-background/95 backdrop-blur-sm border-2 border-dashed border-purple-500 rounded-xl p-8 text-center animate-in fade-in zoom-in-95 duration-150">
+          <div className="h-16 w-16 rounded-full bg-purple-500/20 text-purple-600 dark:text-purple-400 flex items-center justify-center mb-3 animate-bounce">
+            {isDropping ? <Loader2 className="h-8 w-8 animate-spin" /> : <Upload className="h-8 w-8" />}
+          </div>
+          <h3 className="text-base font-bold text-foreground">
+            {isDropping ? "Processando e Salvando Áudio..." : "Solte o Áudio para Salvar no ZapPlus"}
+          </h3>
+          <p className="text-xs text-muted-foreground mt-1 max-w-sm">
+            Reconhece arquivos <b>.enc</b>, <b>.ogg</b>, <b>.mp3</b> e salva automaticamente com duração calculada!
+          </p>
+        </div>
+      )}
+
       <SettingsPanelHead
         title="Central de Respostas Rápidas & Atalhos (ZapPlus)"
-        description="Gerencie atalhos de textos, áudios com simulação de gravação, mídias e sequências automáticas com delays para a equipe do Inbox."
+        description="Gerencie atalhos de textos, áudios com simulação de gravação, mídias e sequências automáticas com delays para a equipe do Inbox. Arraste áudios (.enc / .ogg) diretamente para esta tela para salvar instantaneamente."
         action={
           <Button onClick={openCreate} className="bg-primary text-primary-foreground gap-1.5 shadow-xs">
             <Plus className="h-4 w-4" />
@@ -772,7 +864,7 @@ export function QuickRepliesManager() {
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept="audio/*,.ogg,.mp3,.wav"
+                      accept="audio/*,.ogg,.mp3,.wav,.m4a,.enc,.opus"
                       onChange={(e) => {
                         const file = e.target.files?.[0];
                         if (file) void handleFileUpload(file);
@@ -788,7 +880,7 @@ export function QuickRepliesManager() {
                       className="h-8 text-xs gap-1.5"
                     >
                       <Upload className="h-3.5 w-3.5" />
-                      Upload Arquivo
+                      Upload (.enc / .ogg / .mp3)
                     </Button>
 
                     {draft.media_url && (

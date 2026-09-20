@@ -254,11 +254,17 @@ export function MediaAudioBubble({
   message: Message;
   t: Translator;
 }) {
-  const { downloading, download } = useMediaDownload(message, t);
+  const targetUrl =
+    message.media_url?.includes("mmg.whatsapp.net") || message.media_url?.includes(".enc")
+      ? `/api/whatsapp/uazapi/media?messageId=${encodeURIComponent(message.message_id || message.id)}`
+      : message.media_url;
+
+  const resolvedMessage = targetUrl !== message.media_url ? { ...message, media_url: targetUrl } : message;
+  const { downloading, download } = useMediaDownload(resolvedMessage, t);
 
   return (
     <div className="flex items-center gap-2">
-      <audio src={message.media_url} controls className="max-w-60" />
+      <audio src={targetUrl} controls preload="metadata" className="max-w-60" />
       <MediaActionButton
         icon={Download}
         label={t("download")}

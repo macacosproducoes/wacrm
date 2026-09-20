@@ -31,6 +31,12 @@ import type { QuickReply } from "@/types";
 import { QuickReplyAudioPlayer } from "./quick-reply-audio-player";
 import { uploadAccountMedia } from "@/lib/storage/upload-media";
 import { CHAT_MEDIA_BUCKET } from "./message-composer";
+import {
+  isAudioOrEncFile,
+  cleanAudioTitle,
+  computeAudioDuration,
+  uploadAudioQuickReply,
+} from "@/lib/audio/audio-file-normalizer";
 
 interface AudioLibraryModalProps {
   open: boolean;
@@ -59,6 +65,8 @@ export function AudioLibraryModal({
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioDuration, setAudioDuration] = useState<number>(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isDropping, setIsDropping] = useState(false);
 
   // In-modal microphone recording
   const [isRecording, setIsRecording] = useState(false);
@@ -138,7 +146,7 @@ export function AudioLibraryModal({
         const tempAudio = new Audio(localUrl);
         tempAudio.onloadedmetadata = () => {
           const dur = isFinite(tempAudio.duration) ? Math.round(tempAudio.duration) : recordSeconds;
-          setAudioDuration(dur);
+          setAudioDuration(dur || recordSeconds || 5);
         };
 
         stream.getTracks().forEach((track) => track.stop());
@@ -151,7 +159,7 @@ export function AudioLibraryModal({
       recordTimerRef.current = setInterval(() => {
         setRecordSeconds((s) => s + 1);
       }, 1000);
-    } catch (err) {
+    } catch {
       toast.error("Permissão de microfone negada.");
     }
   };
@@ -167,7 +175,7 @@ export function AudioLibraryModal({
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -175,13 +183,55 @@ export function AudioLibraryModal({
     setAudioBlob(file);
     setAudioUrl(localUrl);
     if (!newTitle) {
-      setNewTitle(file.name.replace(/\.[^/.]+$/, ""));
+      setNewTitle(cleanAudioTitle(file.name));
     }
 
-    const tempAudio = new Audio(localUrl);
-    tempAudio.onloadedmetadata = () => {
-      setAudioDuration(isFinite(tempAudio.duration) ? Math.round(tempAudio.duration) : 0);
-    };
+    const dur = await computeAudioDuration(file);
+    setAudioDuration(dur);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isDragging) setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setIsDragging(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = Array.from(e.dataTransfer.files).filter(isAudioOrEncFile);
+    if (files.length === 0) {
+      toast.error("Por favor arraste um arquivo de áudio ou .enc válido.");
+      return;
+    }
+
+    setIsDropping(true);
+    const toastId = toast.loading(`Salvando ${files.length} áudio(s) no ZapPlus...`);
+    try {
+      for (const file of files) {
+        const title = cleanAudioTitle(file.name);
+        await uploadAudioQuickReply(file, {
+          title,
+          category: selectedCategory !== "all" ? selectedCategory : "Áudios",
+        });
+        toast.success(`🎙️ Áudio "${title}" salvo com sucesso!`, { id: toastId });
+      }
+      onRefreshReplies?.();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Erro ao salvar áudio arrastado.";
+      toast.error(msg, { id: toastId });
+    } finally {
+      setIsDropping(false);
+    }
   };
 
   const handleSaveNewAudio = async () => {
@@ -201,27 +251,11 @@ export function AudioLibraryModal({
           ? audioBlob
           : new File([audioBlob], `voice-audio-${Date.now()}.ogg`, { type: "audio/ogg" });
 
-      const { publicUrl } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
-
-      const res = await fetch("/api/quick-replies", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: newTitle.trim(),
-          kind: "audio",
-          shortcut: newShortcut ? newShortcut.replace(/^\//, "").trim() : null,
-          category: newCategory.trim() || "Vendas",
-          content_text: `🎙️ ${newTitle.trim()}`,
-          media_url: publicUrl,
-          media_type: file.type || "audio/ogg",
-          media_duration: audioDuration || recordSeconds || 5,
-        }),
+      await uploadAudioQuickReply(file, {
+        title: newTitle.trim(),
+        shortcut: newShortcut ? newShortcut.replace(/^\//, "").trim() : undefined,
+        category: newCategory.trim() || "Vendas",
       });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Erro ao salvar áudio.");
-      }
 
       toast.success("Áudio gravado e adicionado à biblioteca com sucesso!");
       setShowAddForm(false);
@@ -252,7 +286,27 @@ export function AudioLibraryModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col p-0 gap-0 overflow-hidden border-border bg-card">
+      <DialogContent
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className="max-w-2xl max-h-[85vh] flex flex-col p-0 gap-0 overflow-hidden border-border bg-card relative"
+      >
+        {/* Drag & Drop Visual Overlay */}
+        {(isDragging || isDropping) && (
+          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-background/95 backdrop-blur-sm border-2 border-dashed border-purple-500 rounded-lg p-6 text-center animate-in fade-in zoom-in-95 duration-150">
+            <div className="h-16 w-16 rounded-full bg-purple-500/20 text-purple-600 dark:text-purple-400 flex items-center justify-center mb-3 animate-bounce">
+              {isDropping ? <Loader2 className="h-8 w-8 animate-spin" /> : <Upload className="h-8 w-8" />}
+            </div>
+            <h3 className="text-base font-bold text-foreground">
+              {isDropping ? "Processando e Salvando Áudio..." : "Solte o Áudio para Salvar no ZapPlus"}
+            </h3>
+            <p className="text-xs text-muted-foreground mt-1 max-w-sm">
+              Reconhece áudios <b>.enc</b>, <b>.ogg</b>, <b>.mp3</b> e salva automaticamente com duração calculada!
+            </p>
+          </div>
+        )}
+
         {/* Header */}
         <DialogHeader className="px-5 py-3.5 border-b border-border/70 flex flex-row items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
@@ -291,6 +345,17 @@ export function AudioLibraryModal({
             )}
           </Button>
         </DialogHeader>
+
+        {/* Drag Drop Hint Bar */}
+        <div className="px-5 py-1.5 bg-purple-500/10 border-b border-purple-500/20 flex items-center justify-between text-[11px] text-purple-700 dark:text-purple-300 shrink-0">
+          <span className="flex items-center gap-1.5">
+            <Sparkles className="h-3.5 w-3.5 text-purple-500 shrink-0" />
+            <span><b>Dica ZapPlus:</b> Arraste arquivos <b>.enc</b>, <b>.ogg</b> ou <b>.mp3</b> para salvar imediatamente</span>
+          </span>
+          <Badge variant="outline" className="text-[10px] bg-purple-500/15 border-purple-500/30 text-purple-700 dark:text-purple-300">
+            Arrastar e Soltar
+          </Badge>
+        </div>
 
         {/* Add Audio Form Drawer */}
         {showAddForm && (
@@ -348,7 +413,7 @@ export function AudioLibraryModal({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="audio/*,.ogg,.mp3,.wav,.m4a"
+                accept="audio/*,.ogg,.mp3,.wav,.m4a,.enc,.opus"
                 onChange={handleFileUpload}
                 className="hidden"
               />
@@ -361,7 +426,7 @@ export function AudioLibraryModal({
                 className="h-8 gap-1.5 text-xs"
               >
                 <Upload className="h-3.5 w-3.5" />
-                Upload Arquivo (.ogg / .mp3)
+                Upload (.enc / .ogg / .mp3)
               </Button>
 
               {audioUrl && (
