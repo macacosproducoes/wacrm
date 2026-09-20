@@ -204,11 +204,37 @@ export async function DELETE(
     return toErrorResponse(err)
   }
 
-  const { error } = await supabaseAdmin()
+  const admin = supabaseAdmin()
+
+  // Find existing row to clean up any associated storage files
+  const { data: existingRow } = await admin
+    .from('quick_replies')
+    .select('id, media_url, interactive_payload')
+    .eq('id', id)
+    .eq('account_id', ctx.accountId)
+    .maybeSingle()
+
+  const { error } = await admin
     .from('quick_replies')
     .delete()
     .eq('id', id)
     .eq('account_id', ctx.accountId)
+
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // Clean up media file from storage if present in chat-media
+  const mediaUrl = existingRow?.media_url || (existingRow?.interactive_payload as Record<string, unknown> | null)?.media_url
+  if (typeof mediaUrl === 'string' && mediaUrl.includes('chat-media/')) {
+    try {
+      const parts = mediaUrl.split('chat-media/')
+      if (parts[1]) {
+        const cleanPath = decodeURIComponent(parts[1].split('?')[0])
+        await admin.storage.from('chat-media').remove([cleanPath])
+      }
+    } catch (cleanErr) {
+      console.warn('[quick-replies] storage cleanup notice:', cleanErr)
+    }
+  }
+
   return NextResponse.json({ ok: true })
 }

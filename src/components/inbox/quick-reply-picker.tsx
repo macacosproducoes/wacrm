@@ -22,6 +22,7 @@ import {
   Pencil,
   ChevronUp,
   ChevronDown,
+  Trash2,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
@@ -165,6 +166,29 @@ export function QuickReplyPicker({
       toast.error(err instanceof Error ? err.message : "Falha ao renomear.");
     } finally {
       setSavingRename(false);
+    }
+  };
+
+  // Audio/item deletion state
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const handleConfirmDelete = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDeletingId(id);
+    try {
+      const res = await fetch(`/api/quick-replies/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Falha ao excluir áudio da base.");
+      }
+      setItems((prev) => prev.filter((a) => a.id !== id));
+      setConfirmDeleteId(null);
+      toast.success("Áudio excluído da base com sucesso!");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Erro ao excluir áudio.");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -929,35 +953,86 @@ export function QuickReplyPicker({
                     {/* Action buttons */}
                     <div className="flex items-center gap-1.5 shrink-0">
                       {isAudio ? (
-                        <>
-                          {/* Send with recording presence simulation */}
-                          <Button
-                            size="sm"
-                            onClick={() => {
-                              onOpenChange(false);
-                              onSendAudio?.(qr, true);
-                            }}
-                            className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-2.5 shadow-xs"
-                            title="Simula 'Gravando áudio...' no WhatsApp do cliente antes de enviar como nota de voz"
+                        confirmDeleteId === qr.id ? (
+                          <div
+                            className="flex items-center gap-1.5 shrink-0 bg-red-500/10 border border-red-500/30 rounded-md px-2 py-1 animate-in fade-in"
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            <Mic className="mr-1.5 h-3.5 w-3.5 animate-pulse" />
-                            🎙️ Gravar & Enviar
-                          </Button>
+                            <span className="text-[11px] font-medium text-red-600 dark:text-red-400">
+                              Excluir da base?
+                            </span>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="destructive"
+                              disabled={deletingId === qr.id}
+                              onClick={(e) => void handleConfirmDelete(qr.id, e)}
+                              className="h-6 px-2 text-[11px] font-medium gap-1 bg-red-600 hover:bg-red-700 text-white shadow-none"
+                            >
+                              {deletingId === qr.id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3 w-3" />
+                              )}
+                              Sim
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConfirmDeleteId(null);
+                              }}
+                              className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                            >
+                              <X className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <>
+                            {/* Send with recording presence simulation */}
+                            <Button
+                              size="sm"
+                              onClick={() => {
+                                onOpenChange(false);
+                                onSendAudio?.(qr, true);
+                              }}
+                              className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-2.5 shadow-xs"
+                              title="Simula 'Gravando áudio...' no WhatsApp do cliente antes de enviar como nota de voz"
+                            >
+                              <Mic className="mr-1.5 h-3.5 w-3.5 animate-pulse" />
+                              🎙️ Gravar & Enviar
+                            </Button>
 
-                          {/* Send immediately */}
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              onOpenChange(false);
-                              onSendAudio?.(qr, false);
-                            }}
-                            className="h-8 text-xs px-2 border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400"
-                            title="Envia como nota de voz sem esperar tempo de gravação"
-                          >
-                            <Send className="h-3.5 w-3.5" />
-                          </Button>
-                        </>
+                            {/* Send immediately */}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                onOpenChange(false);
+                                onSendAudio?.(qr, false);
+                              }}
+                              className="h-8 text-xs px-2 border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400"
+                              title="Envia como nota de voz sem esperar tempo de gravação"
+                            >
+                              <Send className="h-3.5 w-3.5" />
+                            </Button>
+
+                            {/* Delete audio from database button */}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConfirmDeleteId(qr.id);
+                              }}
+                              title="Excluir este áudio da base"
+                              className="p-1.5 rounded-md text-muted-foreground hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        )
                       ) : (
                         <>
                           {/* Pick / Insert in textarea */}
