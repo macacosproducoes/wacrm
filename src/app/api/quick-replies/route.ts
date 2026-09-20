@@ -65,7 +65,7 @@ export async function GET() {
       return new Date(b.created_at as string).getTime() - new Date(a.created_at as string).getTime();
     });
 
-    return NextResponse.json({ quick_replies: normalized });
+    return NextResponse.json({ quick_replies: normalized, data: normalized });
   } catch (err) {
     return toErrorResponse(err);
   }

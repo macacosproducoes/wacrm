@@ -309,7 +309,67 @@ export async function processDueFollowUps(): Promise<{ processed: number; sent: 
       const kind = String(quickReply?.kind || 'text');
       let uazapiMessageId = `followup_${Date.now()}`;
 
-      if (kind === 'audio' && quickReply?.media_url) {
+      if (kind === 'sequence') {
+        const meta = ((quickReply?.interactive_payload as Record<string, unknown>) || {}) as Record<string, unknown>;
+        const sequenceSteps = ((Array.isArray(quickReply?.sequence_items) ? quickReply.sequence_items : meta.sequence_items) || []) as Array<{
+          order: number;
+          type: string;
+          content?: string;
+          media_url?: string;
+          delay_seconds?: number;
+        }>;
+        const sortedSteps = [...sequenceSteps].sort((a, b) => (a.order || 0) - (b.order || 0));
+
+        for (let i = 0; i < sortedSteps.length; i++) {
+          const step = sortedSteps[i];
+          if (i > 0 && step.delay_seconds) {
+            await new Promise((resolve) => setTimeout(resolve, Math.min((step.delay_seconds || 0) * 1000, 30000)));
+          }
+          const stepText = replaceQuickReplyVariables(step.content || '', {
+            name: contact.name,
+            phone: contact.phone,
+            company: contact.company,
+            date: new Date(),
+          });
+          let stepMsgId = `followup_seq_${Date.now()}_${i}`;
+          if (step.type === 'audio' && step.media_url) {
+            const res = await sendUazApiMedia(baseUrl, plainToken, {
+              number: formattedPhone,
+              url: step.media_url,
+              type: 'audio',
+              caption: stepText || undefined,
+              ptt: true,
+            });
+            if (res?.messageId) stepMsgId = res.messageId;
+          } else if (['image', 'video', 'document'].includes(step.type) && step.media_url) {
+            const res = await sendUazApiMedia(baseUrl, plainToken, {
+              number: formattedPhone,
+              url: step.media_url,
+              type: step.type as any,
+              caption: stepText || undefined,
+            });
+            if (res?.messageId) stepMsgId = res.messageId;
+          } else if (stepText) {
+            const res = await sendUazApiText(baseUrl, plainToken, {
+              number: formattedPhone,
+              text: stepText,
+            });
+            if (res?.messageId) stepMsgId = res.messageId;
+          }
+
+          await admin.from('messages').insert({
+            conversation_id: row.conversation_id,
+            sender_type: 'bot',
+            content_type: step.type === 'audio' ? 'audio' : step.type === 'image' ? 'image' : 'text',
+            content_text: stepText,
+            media_url: step.media_url || null,
+            message_id: stepMsgId,
+            status: 'delivered',
+            created_at: new Date().toISOString(),
+          });
+        }
+        uazapiMessageId = `followup_seq_${Date.now()}`;
+      } else if (kind === 'audio' && quickReply?.media_url) {
         const res = await sendUazApiMedia(baseUrl, plainToken, {
           number: formattedPhone,
           url: String(quickReply.media_url),

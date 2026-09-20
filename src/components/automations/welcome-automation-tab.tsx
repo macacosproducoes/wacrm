@@ -17,6 +17,11 @@ import {
   ArrowDown,
   Info,
   Layers,
+  Mic,
+  Image as ImageIcon,
+  Video,
+  FileText,
+  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -79,7 +84,12 @@ export function WelcomeAutomationTab() {
 
         if (qrRes.ok) {
           const qrData = await qrRes.json();
-          setQuickReplies(Array.isArray(qrData.data) ? qrData.data : []);
+          const list = Array.isArray(qrData.quick_replies)
+            ? qrData.quick_replies
+            : Array.isArray(qrData.data)
+            ? qrData.data
+            : [];
+          setQuickReplies(list);
         }
       } catch (err) {
         console.error("Failed to load welcome automation data", err);
@@ -144,6 +154,66 @@ export function WelcomeAutomationTab() {
   }
 
   const selectedMainReply = quickReplies.find((qr) => qr.id === config.response_id);
+
+  // Group quick replies by kind
+  const audios = quickReplies.filter((r) => r.kind === "audio");
+  const images = quickReplies.filter((r) => r.kind === "image");
+  const sequences = quickReplies.filter((r) => r.kind === "sequence");
+  const texts = quickReplies.filter((r) => r.kind === "text");
+  const otherMedia = quickReplies.filter(
+    (r) => r.kind === "video" || r.kind === "document" || r.kind === "media"
+  );
+
+  const renderSelectOptions = (placeholder: string) => (
+    <>
+      <option value="">{placeholder}</option>
+      {audios.length > 0 && (
+        <optgroup label="🎙️ Áudios Cadastrados">
+          {audios.map((a) => (
+            <option key={a.id} value={a.id}>
+              🎙️ {a.title} {a.media_duration ? `(${a.media_duration}s)` : ""}
+            </option>
+          ))}
+        </optgroup>
+      )}
+      {images.length > 0 && (
+        <optgroup label="🖼️ Imagens Cadastradas">
+          {images.map((img) => (
+            <option key={img.id} value={img.id}>
+              🖼️ {img.title}
+            </option>
+          ))}
+        </optgroup>
+      )}
+      {sequences.length > 0 && (
+        <optgroup label="🟧 Sequências Cadastradas">
+          {sequences.map((s) => (
+            <option key={s.id} value={s.id}>
+              🟧 {s.title} ({s.sequence_items?.length || 0} passos)
+            </option>
+          ))}
+        </optgroup>
+      )}
+      {texts.length > 0 && (
+        <optgroup label="💬 Mensagens de Texto Cadastradas">
+          {texts.map((t) => (
+            <option key={t.id} value={t.id}>
+              💬 {t.title}
+            </option>
+          ))}
+        </optgroup>
+      )}
+      {otherMedia.length > 0 && (
+        <optgroup label="📁 Outras Mídias Cadastradas">
+          {otherMedia.map((m) => (
+            <option key={m.id} value={m.id}>
+              📁 {m.title} ({m.kind})
+            </option>
+          ))}
+        </optgroup>
+      )}
+    </>
+  );
 
   if (loading) {
     return (
@@ -302,36 +372,94 @@ export function WelcomeAutomationTab() {
                 onChange={(e) => setConfig((p) => ({ ...p, response_id: e.target.value || null }))}
                 className="w-full h-10 px-3 py-2 text-xs rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
               >
-                <option value="">-- Selecione uma resposta salva --</option>
-                {quickReplies.map((qr) => (
-                  <option key={qr.id} value={qr.id}>
-                    [{qr.category || "Geral"}] {qr.title} ({qr.kind})
-                  </option>
-                ))}
+                {renderSelectOptions("-- Selecione uma resposta salva da biblioteca --")}
               </select>
             </div>
 
             {selectedMainReply ? (
-              <div className="rounded-lg border border-border/80 bg-muted/30 p-3 text-xs space-y-1.5">
-                <div className="flex items-center justify-between text-muted-foreground">
-                  <span className="font-semibold text-foreground">{selectedMainReply.title}</span>
-                  <Badge variant="secondary" className="text-[10px]">
-                    {selectedMainReply.kind.toUpperCase()}
-                  </Badge>
+              <div className="rounded-lg border border-border/80 bg-muted/30 p-3.5 text-xs space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    {selectedMainReply.kind === "audio" ? (
+                      <div className="h-7 w-7 rounded-full bg-purple-500/20 text-purple-600 flex items-center justify-center shrink-0">
+                        <Mic className="h-4 w-4" />
+                      </div>
+                    ) : selectedMainReply.kind === "image" ? (
+                      <div className="h-7 w-7 rounded-md bg-blue-500/20 text-blue-600 flex items-center justify-center shrink-0">
+                        <ImageIcon className="h-4 w-4" />
+                      </div>
+                    ) : selectedMainReply.kind === "sequence" ? (
+                      <div className="h-7 w-7 rounded-md bg-orange-500/20 text-orange-600 flex items-center justify-center shrink-0">
+                        <Layers className="h-4 w-4" />
+                      </div>
+                    ) : (
+                      <div className="h-7 w-7 rounded-md bg-amber-500/20 text-amber-600 flex items-center justify-center shrink-0">
+                        <MessageSquare className="h-4 w-4" />
+                      </div>
+                    )}
+                    <span className="font-semibold text-foreground text-sm">{selectedMainReply.title}</span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    {selectedMainReply.media_duration && (
+                      <Badge variant="outline" className="text-[10px] font-mono">
+                        {selectedMainReply.media_duration}s
+                      </Badge>
+                    )}
+                    <Badge
+                      variant="outline"
+                      className={`text-[10px] uppercase font-bold ${
+                        selectedMainReply.kind === "audio"
+                          ? "bg-purple-500/15 text-purple-700 dark:text-purple-300 border-purple-500/40"
+                          : selectedMainReply.kind === "image"
+                          ? "bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/40"
+                          : selectedMainReply.kind === "sequence"
+                          ? "bg-orange-500/15 text-orange-700 dark:text-orange-300 border-orange-500/40"
+                          : "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/40"
+                      }`}
+                    >
+                      {selectedMainReply.kind}
+                    </Badge>
+                  </div>
                 </div>
-                <p className="text-foreground/90 whitespace-pre-line leading-relaxed font-sans">
-                  {selectedMainReply.content_text || (selectedMainReply.media_url ? "Mídia anexada: " + selectedMainReply.media_url : "Sem conteúdo")}
-                </p>
+
+                {selectedMainReply.content_text && (
+                  <p className="text-foreground/90 whitespace-pre-line leading-relaxed font-sans bg-background/60 p-2.5 rounded border border-border/50">
+                    {selectedMainReply.content_text}
+                  </p>
+                )}
+
+                {selectedMainReply.media_url && (
+                  <div className="text-[11px] text-muted-foreground flex items-center gap-1 font-mono truncate">
+                    <span>Mídia:</span>
+                    <span className="truncate text-foreground/80">{selectedMainReply.media_url}</span>
+                  </div>
+                )}
+
                 {selectedMainReply.kind === "sequence" && (
-                  <div className="text-[11px] text-primary flex items-center gap-1 mt-1">
-                    <Layers className="h-3 w-3" />
-                    Sequência com {selectedMainReply.sequence_items?.length || 0} passos
+                  <div className="pt-1.5 border-t border-border/60">
+                    <div className="text-[11px] font-semibold text-orange-700 dark:text-orange-300 flex items-center gap-1 mb-1">
+                      <Layers className="h-3.5 w-3.5" />
+                      Fluxo de Disparo da Sequência ({selectedMainReply.sequence_items?.length || 0} passos):
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                      {((selectedMainReply.sequence_items as any[]) || []).map((step, sIdx, arr) => (
+                        <div key={sIdx} className="flex items-center gap-1">
+                          <span className="bg-orange-500/10 text-orange-800 dark:text-orange-200 border border-orange-500/30 px-2 py-0.5 rounded font-medium">
+                            {sIdx + 1}º {step.type} {step.delay_seconds ? `(${step.delay_seconds}s)` : ""}
+                          </span>
+                          {sIdx < arr.length - 1 && (
+                            <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
             ) : (
               <div className="rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
-                Nenhuma resposta selecionada. Selecione uma resposta acima ou crie uma na Biblioteca Central.
+                Nenhuma resposta selecionada. Selecione uma resposta acima para enviar aos novos leads.
               </div>
             )}
           </div>
@@ -440,19 +568,35 @@ export function WelcomeAutomationTab() {
                             }
                             className="w-full h-8 px-2 text-xs rounded-md border border-border bg-card text-foreground"
                           >
-                            <option value="">-- Selecione uma resposta --</option>
-                            {quickReplies.map((qr) => (
-                              <option key={qr.id} value={qr.id}>
-                                [{qr.category || "Geral"}] {qr.title}
-                              </option>
-                            ))}
+                            {renderSelectOptions("-- Selecione uma resposta salva --")}
                           </select>
                         </div>
                       </div>
 
                       {reply && (
-                        <div className="p-2 rounded bg-muted/40 border border-border/60 text-[11px] text-muted-foreground truncate">
-                          Preview: &ldquo;{reply.content_text || reply.title}&rdquo;
+                        <div className="p-2.5 rounded-lg bg-muted/40 border border-border/60 text-xs space-y-1">
+                          <div className="flex items-center justify-between gap-1">
+                            <div className="flex items-center gap-1.5 font-semibold text-foreground">
+                              {reply.kind === "audio" && <Mic className="h-3.5 w-3.5 text-purple-600" />}
+                              {reply.kind === "image" && <ImageIcon className="h-3.5 w-3.5 text-blue-600" />}
+                              {reply.kind === "sequence" && <Layers className="h-3.5 w-3.5 text-orange-600" />}
+                              {reply.kind === "text" && <MessageSquare className="h-3.5 w-3.5 text-amber-600" />}
+                              <span>{reply.title}</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              {reply.media_duration && (
+                                <Badge variant="outline" className="text-[9px] font-mono">
+                                  {reply.media_duration}s
+                                </Badge>
+                              )}
+                              <Badge variant="outline" className="text-[9px] uppercase font-bold">
+                                {reply.kind}
+                              </Badge>
+                            </div>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground truncate">
+                            {reply.content_text || (reply.media_url ? "Mídia: " + reply.media_url : "Sem conteúdo")}
+                          </p>
                         </div>
                       )}
 

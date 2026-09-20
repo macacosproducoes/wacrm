@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Clock, Calendar, Check, Loader2, Sparkles } from "lucide-react";
+import { Clock, Calendar, Check, Loader2, Sparkles, Mic, Image as ImageIcon, Layers, MessageSquare } from "lucide-react";
 import { toast } from "sonner";
 import type { QuickReply } from "@/types";
 
@@ -116,6 +116,15 @@ export function ManualFollowUpModal({
   };
 
   const availableReplies = quickReplies.filter((q) => q.is_active !== false);
+  const audios = availableReplies.filter((r) => r.kind === "audio");
+  const images = availableReplies.filter((r) => r.kind === "image");
+  const sequences = availableReplies.filter((r) => r.kind === "sequence");
+  const texts = availableReplies.filter((r) => r.kind === "text");
+  const otherMedia = availableReplies.filter(
+    (r) => r.kind === "video" || r.kind === "document" || r.kind === "media"
+  );
+
+  const selectedReply = availableReplies.find((r) => r.id === selectedReplyId);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -142,12 +151,63 @@ export function ManualFollowUpModal({
               className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary"
             >
               <option value="">-- Selecione uma resposta salva --</option>
-              {availableReplies.map((r) => (
-                <option key={r.id} value={r.id}>
-                  [{r.category || "Geral"}] {r.title} ({r.kind})
-                </option>
-              ))}
+              {audios.length > 0 && (
+                <optgroup label="🎙️ Áudios Cadastrados">
+                  {audios.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      🎙️ {a.title} {a.media_duration ? `(${a.media_duration}s)` : ""}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {images.length > 0 && (
+                <optgroup label="🖼️ Imagens Cadastradas">
+                  {images.map((img) => (
+                    <option key={img.id} value={img.id}>
+                      🖼️ {img.title}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {sequences.length > 0 && (
+                <optgroup label="🟧 Sequências Cadastradas">
+                  {sequences.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      🟧 {s.title} ({s.sequence_items?.length || 0} passos)
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {texts.length > 0 && (
+                <optgroup label="💬 Mensagens de Texto Cadastradas">
+                  {texts.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      💬 {t.title}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {otherMedia.length > 0 && (
+                <optgroup label="📁 Outras Mídias Cadastradas">
+                  {otherMedia.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      📁 {m.title} ({m.kind})
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
+
+            {selectedReply && (
+              <div className="mt-2 p-2 rounded-md bg-muted/40 border border-border/60 text-xs flex items-center justify-between gap-2">
+                <span className="truncate text-muted-foreground">
+                  {selectedReply.content_text || selectedReply.title}
+                </span>
+                <Badge variant="outline" className="text-[10px] uppercase font-bold shrink-0">
+                  {selectedReply.kind}
+                </Badge>
+              </div>
+            )}
           </div>
 
           {/* Schedule Presets */}

@@ -237,7 +237,67 @@ export async function checkAndDispatchWelcomeMessage(
   const kind = replyRow.kind || 'text';
 
   try {
-    if (kind === 'audio' && (replyRow.media_url || uazConfig.media_url)) {
+    if (kind === 'sequence') {
+      const meta = ((replyRow.interactive_payload as Record<string, unknown>) || {}) as Record<string, unknown>;
+      const sequenceSteps = ((Array.isArray(replyRow.sequence_items) ? replyRow.sequence_items : meta.sequence_items) || []) as Array<{
+        order: number;
+        type: string;
+        content?: string;
+        media_url?: string;
+        delay_seconds?: number;
+      }>;
+      const sortedSteps = [...sequenceSteps].sort((a, b) => (a.order || 0) - (b.order || 0));
+
+      for (let i = 0; i < sortedSteps.length; i++) {
+        const step = sortedSteps[i];
+        if (i > 0 && step.delay_seconds) {
+          await new Promise((resolve) => setTimeout(resolve, Math.min((step.delay_seconds || 0) * 1000, 30000)));
+        }
+        const stepText = replaceQuickReplyVariables(step.content || '', {
+          name: contactName,
+          phone: contactRow?.phone || '',
+          company: contactRow?.company || '',
+          date: new Date(),
+        });
+        let stepMsgId = `welcome_seq_${Date.now()}_${i}`;
+        if (step.type === 'audio' && step.media_url) {
+          const res = await sendUazApiMedia(baseUrl, plainToken, {
+            number: phone,
+            url: step.media_url,
+            type: 'audio',
+            caption: stepText || undefined,
+            ptt: true,
+          });
+          if (res?.messageId) stepMsgId = res.messageId;
+        } else if (['image', 'video', 'document'].includes(step.type) && step.media_url) {
+          const res = await sendUazApiMedia(baseUrl, plainToken, {
+            number: phone,
+            url: step.media_url,
+            type: step.type as any,
+            caption: stepText || undefined,
+          });
+          if (res?.messageId) stepMsgId = res.messageId;
+        } else if (stepText) {
+          const res = await sendUazApiText(baseUrl, plainToken, {
+            number: phone,
+            text: stepText,
+          });
+          if (res?.messageId) stepMsgId = res.messageId;
+        }
+
+        await admin.from('messages').insert({
+          conversation_id: conversationId,
+          sender_type: 'bot',
+          content_type: step.type === 'audio' ? 'audio' : step.type === 'image' ? 'image' : 'text',
+          content_text: stepText,
+          media_url: step.media_url || null,
+          message_id: stepMsgId,
+          status: 'delivered',
+          created_at: new Date().toISOString(),
+        });
+      }
+      uazapiMessageId = `welcome_seq_${Date.now()}`;
+    } else if (kind === 'audio' && (replyRow.media_url || uazConfig.media_url)) {
       const audioUrl = replyRow.media_url || '';
       const sendRes = await sendUazApiMedia(baseUrl, plainToken, {
         number: phone,
