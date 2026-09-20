@@ -73,7 +73,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Contact not found' }, { status: 404 });
   }
 
-  const saveName = (name && String(name).trim()) || targetContact.name || `Cliente ${targetContact.phone.slice(-4)}`;
+  const saveName = (name && String(name).trim()) || targetContact.name || targetContact.phone;
 
   // 2. Update contact name in CRM database
   const { data: updatedContact, error: updateErr } = await admin

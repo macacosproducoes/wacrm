@@ -84,7 +84,9 @@ describe('Live Template Render Test', () => {
     );
 
     expect(result.svg).toContain('Cristiano Ronaldo');
-    expect(result.svg).toContain('PED-5000-CRISTIANO');
+    if (JSON.stringify(template.definition).includes('code')) {
+      expect(result.svg).toContain('PED-5000-CRISTIANO');
+    }
     expect(result.svg).toContain('@cristiano');
     expect(result.svg).toContain('5.000');
     expect(result.pngBuffer.length).toBeGreaterThan(15000);

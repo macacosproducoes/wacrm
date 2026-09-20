@@ -238,7 +238,7 @@ export function MessageComposer({
   // Variable context for template substitution
   const variableContext: VariableContext = useMemo(
     () => ({
-      name: contactName || "Cliente",
+      name: contactName || contactPhone || "",
       phone: contactPhone || "",
     }),
     [contactName, contactPhone]

@@ -13,8 +13,11 @@ describe('formatContactDisplayName', () => {
     expect(formatContactDisplayName('5511971121710')).toBe('+55 (11) 97112-1710');
   });
 
-  it('cleans Contato prefix and formats number', () => {
+  it('cleans Contato and Cliente prefixes and formats number', () => {
     expect(formatContactDisplayName('Contato 11971121710')).toBe('+55 (11) 97112-1710');
+    expect(formatContactDisplayName('Cliente 1710', '+5511971121710')).toBe('+55 (11) 97112-1710');
+    expect(formatContactDisplayName('', '5511971121710')).toBe('+55 (11) 97112-1710');
+    expect(formatContactDisplayName(null, '5511971121710')).toBe('+55 (11) 97112-1710');
   });
 });
 

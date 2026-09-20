@@ -925,7 +925,7 @@ export function MessageThread({
   }, [loadQuickReplies]);
 
   const contactVariableContext = useMemo(() => ({
-    name: contact?.name || "Cliente",
+    name: contact?.name || contact?.phone || "",
     phone: contact?.phone || "",
     agentName: user?.user_metadata?.full_name || user?.email || "Atendente",
   }), [contact?.name, contact?.phone, user]);

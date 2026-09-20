@@ -617,7 +617,7 @@ export async function processUazApiEvent(
     }
   }
 
-  const pushName = bestInboundName || `Cliente ${formattedPhone.slice(-4)}`;
+  const pushName = bestInboundName || formattedPhone;
   const rawExternalId = String(
     msgData.messageid ||
     key.id ||
@@ -761,9 +761,9 @@ export async function processUazApiEvent(
         plainToken = decrypt(plainToken);
       } catch {}
       const baseUrl = typeof uazConfig.base_url === 'string' ? uazConfig.base_url : 'https://free.uazapi.com';
-      const contactSaveName = pushName && /[a-zA-ZÀ-ÿ]/.test(pushName)
+      const contactSaveName = pushName && /[a-zA-ZÀ-ÿ]/.test(pushName) && !isGenericContactName(pushName, formattedPhone)
         ? pushName
-        : `Cliente ${formattedPhone.slice(-4)}`;
+        : formattedPhone;
 
       void addUazApiContact(baseUrl, plainToken, {
         number: formattedPhone,

@@ -128,7 +128,7 @@ export async function findOrCreateContact(
     const providedName = params.name?.trim();
     const displayName = (providedName && !isGenericContactName(providedName, normPhone, params.instanceName))
       ? providedName
-      : `Cliente ${normPhone.slice(-4)}`;
+      : normPhone;
 
     const { data: created, error: insertErr } = await admin
       .from('contacts')

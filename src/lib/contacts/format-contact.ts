@@ -12,18 +12,26 @@ export function formatContactDisplayName(
   const cleanName = (name || '').trim();
 
   // If there is an actual alphabetical name, use it directly (e.g. "Larissa - Engajamento Real")
-  if (cleanName && /[a-zA-ZÀ-ÿ]/.test(cleanName) && !cleanName.startsWith('Contato ')) {
+  if (
+    cleanName &&
+    /[a-zA-ZÀ-ÿ]/.test(cleanName) &&
+    !cleanName.startsWith('Contato ') &&
+    !cleanName.startsWith('Cliente ') &&
+    !/^cliente\s*\d*$/i.test(cleanName)
+  ) {
     return cleanName;
   }
 
   // Format phone number
   const rawNumber = cleanName.startsWith('Contato ')
     ? cleanName.replace(/^Contato\s+/, '')
+    : cleanName.startsWith('Cliente ') || /^cliente\s*\d*$/i.test(cleanName)
+    ? (phone || cleanName.replace(/^Cliente\s+/i, ''))
     : cleanName || phone || '';
 
   const digits = rawNumber.replace(/\D/g, '');
   if (!digits) {
-    return cleanName || 'Contato';
+    return phone || cleanName || '';
   }
 
   // Brazilian mobile phone: 55 + 2-digit DDD + 9 digits (e.g. 5511971121710)

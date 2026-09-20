@@ -288,7 +288,7 @@ export async function POST(request: Request) {
           accountId,
           userId: ownerUserId,
           phone: formattedPhone,
-          name: bestContactName || `Cliente ${formattedPhone.slice(-4)}`,
+          name: bestContactName || formattedPhone,
           instanceName: conn.display_name,
         });
         if (!createdContactId) return;
