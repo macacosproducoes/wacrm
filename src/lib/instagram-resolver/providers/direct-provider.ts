@@ -13,40 +13,38 @@ import type { InstagramProfileProvider } from './provider';
 import type { InstagramProfileData } from '../types';
 import { parseInstagramUsername, buildInstagramProfileUrl } from '../parser';
 
-const REQUEST_TIMEOUT_MS = 8000;
+const REQUEST_TIMEOUT_MS = 4000;
 
 interface RequestProfile {
   name: string;
   headers: Record<string, string>;
 }
 
-// Cohesive request profiles prioritizing social preview crawlers and natural mobile clients
+// Cohesive request profiles prioritizing social preview crawlers that reliably bypass datacenter restrictions
 const REQUEST_PROFILES: RequestProfile[] = [
-  // 1. Mobile Safari (High delivery, non-bot footprint, natural lookaside preview)
+  // 1. TelegramBot (Proven to receive 952KB SSR Open Graph HTML on datacenter IPs)
   {
-    name: 'Mobile-Safari',
+    name: 'TelegramBot',
     headers: {
-      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+      'User-Agent': 'TelegramBot (like TwitterBot)',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
-      'Cache-Control': 'no-cache',
     },
   },
-  // 2. Mobile Chrome (Android Samsung Galaxy)
+  // 2. Twitterbot (Proven to receive 952KB SSR Open Graph HTML on datacenter IPs)
   {
-    name: 'Mobile-Chrome',
+    name: 'Twitterbot',
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.200 Mobile Safari/537.36',
+      'User-Agent': 'Twitterbot/1.0',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
-      'Cache-Control': 'no-cache',
     },
   },
-  // 3. Applebot (iMessage link preview)
+  // 3. Discordbot (High delivery on Meta endpoints)
   {
-    name: 'Applebot',
+    name: 'Discordbot',
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15 (Applebot/0.1)',
+      'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
     },
@@ -61,56 +59,23 @@ const REQUEST_PROFILES: RequestProfile[] = [
       'Cache-Control': 'no-cache',
     },
   },
-  // 5. Facebook External Hit (Meta native crawler)
+  // 5. Mobile Safari (High delivery, non-bot footprint)
+  {
+    name: 'Mobile-Safari',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
+      'Cache-Control': 'no-cache',
+    },
+  },
+  // 6. Facebook External Hit (Meta native crawler)
   {
     name: 'Facebook-Bot',
     headers: {
       'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
       'Accept': '*/*',
       'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
-    },
-  },
-  // 5. Twitterbot Social Preview
-  {
-    name: 'Twitterbot',
-    headers: {
-      'User-Agent': 'Twitterbot/1.0',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
-    },
-  },
-  // 6. TelegramBot
-  {
-    name: 'TelegramBot',
-    headers: {
-      'User-Agent': 'TelegramBot (like TwitterBot)',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
-    },
-  },
-  // 7. Applebot (iMessage link preview)
-  {
-    name: 'Applebot',
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15 (Applebot/0.1)',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    },
-  },
-  // 8. Modern Chrome Desktop (Fallback for text metadata and title)
-  {
-    name: 'Chrome-Desktop',
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-      'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-      'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-      'Sec-Ch-Ua-Mobile': '?0',
-      'Sec-Ch-Ua-Platform': '"Windows"',
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'none',
-      'Sec-Fetch-User': '?1',
-      'Upgrade-Insecure-Requests': '1',
     },
   },
 ];
@@ -160,73 +125,68 @@ export class DirectInstagramProfileProvider implements InstagramProfileProvider 
 
     const profileUrl = buildInstagramProfileUrl(cleanUsername);
     const lookasideUrl = `${profileUrl}?from_lookaside=1`;
-    console.log(`[INSTAGRAM_DIRECT] Resolving @${cleanUsername} directly via ${lookasideUrl}`);
+    console.log(`[INSTAGRAM_DIRECT] Resolving @${cleanUsername}...`);
 
-    let lastError: Error | null = null;
-    let is404 = false;
     let bestMetadata: InstagramProfileData | null = null;
 
-    // Strategy 1: Direct Instagram with Meta lookaside crawler parameter & paired social preview crawlers
-    const urlsToTry = [lookasideUrl, profileUrl];
-
-    for (const targetUrl of urlsToTry) {
-      for (let i = 0; i < REQUEST_PROFILES.length; i++) {
-        const profile = REQUEST_PROFILES[i];
-        try {
-          const result = await this.fetchAndExtract(cleanUsername, targetUrl, profile.headers);
-          if (result) {
-            // If we found a real profile picture, return immediately!
-            if (result.profileImageUrl && !isStaticPlaceholder(result.profileImageUrl)) {
-              console.log(`[INSTAGRAM_DIRECT] Successfully resolved official photo for @${cleanUsername} directly via ${profile.name} (${targetUrl})`);
-              return result;
-            }
-
-            // Retain best metadata (displayName, bio) if encountered, but CONTINUE searching for the photo!
-            if (!bestMetadata || (result.displayName && result.displayName !== cleanUsername)) {
-              bestMetadata = result;
-            }
-          }
-        } catch (err: unknown) {
-          const error = err instanceof Error ? err : new Error(String(err));
-          if (error.message.includes('Unexpected redirect domain')) {
-            throw error;
-          }
-          if (error.message.includes('404')) {
-            is404 = true;
-            lastError = error;
-            break; // Profile does not exist on Instagram
-          }
-          if (error.message.includes('429')) {
-            console.warn(`[INSTAGRAM_DIRECT] Direct attempt ${profile.name} hit 429 rate limit.`);
-            lastError = error;
-            continue;
-          }
-          lastError = error;
-          console.warn(`[INSTAGRAM_DIRECT] Direct attempt ${profile.name} for @${cleanUsername} failed: ${lastError.message}`);
-        }
-      }
-      if (is404) break;
-    }
-
-    if (is404 && lastError) {
-      throw lastError;
-    }
-
-    // Strategy 2: Meta Threads.net Open Graph fallback
-    // Common Instagram profiles that share CDN avatars with Threads
-    console.log(`[INSTAGRAM_DIRECT] Attempting Meta Threads Open Graph fallback for @${cleanUsername}...`);
+    // Strategy 1: Meta Threads.net Open Graph (Instant, ultra-reliable for accounts with Threads active)
     try {
       const threadsResult = await this.fetchViaThreads(cleanUsername, profileUrl);
       if (threadsResult && threadsResult.profileImageUrl && !isStaticPlaceholder(threadsResult.profileImageUrl)) {
         console.log(`[INSTAGRAM_DIRECT] Successfully resolved official photo for @${cleanUsername} via Threads Open Graph!`);
-        return {
-          ...threadsResult,
-          displayName: bestMetadata?.displayName || threadsResult.displayName,
-          biography: bestMetadata?.biography || threadsResult.biography,
-        };
+        return threadsResult;
+      }
+      if (threadsResult && threadsResult.displayName && threadsResult.displayName !== cleanUsername) {
+        bestMetadata = threadsResult;
       }
     } catch (threadsErr: unknown) {
-      console.warn(`[INSTAGRAM_DIRECT] Threads fallback failed for @${cleanUsername}:`, threadsErr);
+      console.warn(`[INSTAGRAM_DIRECT] Threads attempt for @${cleanUsername} completed with no match:`, threadsErr);
+    }
+
+    // Strategy 2: Instagram Lookaside with proven social preview bots (TelegramBot, Twitterbot, Discordbot)
+    let is404 = false;
+    let consecutive429s = 0;
+
+    for (let i = 0; i < REQUEST_PROFILES.length; i++) {
+      const profile = REQUEST_PROFILES[i];
+      try {
+        const result = await this.fetchAndExtract(cleanUsername, lookasideUrl, profile.headers);
+        if (result) {
+          if (result.profileImageUrl && !isStaticPlaceholder(result.profileImageUrl)) {
+            console.log(`[INSTAGRAM_DIRECT] Successfully resolved official photo for @${cleanUsername} via ${profile.name}!`);
+            return {
+              ...result,
+              displayName: result.displayName !== cleanUsername ? result.displayName : (bestMetadata?.displayName || result.displayName),
+              biography: result.biography || bestMetadata?.biography,
+            };
+          }
+
+          if (!bestMetadata || (result.displayName && result.displayName !== cleanUsername)) {
+            bestMetadata = result;
+          }
+        }
+      } catch (err: unknown) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        if (error.message.includes('Unexpected redirect domain')) {
+          throw error;
+        }
+        if (error.message.includes('404')) {
+          is404 = true;
+          break;
+        }
+        if (error.message.includes('429')) {
+          consecutive429s++;
+          if (consecutive429s >= 3) {
+            console.warn(`[INSTAGRAM_DIRECT] Multiple 429s encountered, stopping direct attempts for @${cleanUsername}`);
+            break;
+          }
+          continue;
+        }
+      }
+    }
+
+    if (is404) {
+      throw new Error(`Instagram profile not found: @${cleanUsername} (HTTP 404)`);
     }
 
     // If we have text metadata but no image could be extracted, return best metadata
