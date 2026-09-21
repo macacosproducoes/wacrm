@@ -2,70 +2,50 @@ import { NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
 
+const CRAWLERS = [
+  { name: 'facebookexternalhit', ua: 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)' },
+  { name: 'whatsapp', ua: 'WhatsApp/2.21.12.21 A' },
+  { name: 'twitterbot', ua: 'Twitterbot/1.0' },
+  { name: 'telegrambot', ua: 'TelegramBot (like TwitterBot)' },
+  { name: 'applebot', ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15 (Applebot/0.1)' },
+  { name: 'slackbot', ua: 'Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)' },
+  { name: 'discordbot', ua: 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
+  { name: 'googlebot', ua: 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' },
+  { name: 'bingbot', ua: 'Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)' },
+  { name: 'duckduckbot', ua: 'DuckDuckBot/1.0; (+http://duckduckgo.com/duckduckbot.html)' },
+];
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const username = searchParams.get('username') || 'vinijr';
 
   const results: Record<string, unknown> = {};
 
-  // Test 1: Yahoo search
-  try {
-    const res = await fetch(`https://search.yahoo.com/search?p=${encodeURIComponent(`site:instagram.com/${username}`)}`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      },
-      signal: AbortSignal.timeout(6000),
-    });
-    const html = await res.text();
-    const imgs = [...html.matchAll(/https?:\/\/[^\s"'<>]+\.(?:jpg|png|webp|jpeg)[^\s"'<>]*/gi)].map(m => m[0]);
-    results['yahoo'] = { status: res.status, htmlLen: html.length, sampleImgs: imgs.slice(0, 5) };
-  } catch (e: unknown) {
-    results['yahoo'] = { error: e instanceof Error ? e.message : String(e) };
-  }
-
-  // Test 2: DuckDuckGo HTML
-  try {
-    const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(`site:instagram.com/${username}`)}`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      },
-      signal: AbortSignal.timeout(6000),
-    });
-    const html = await res.text();
-    const imgs = [...html.matchAll(/https?:\/\/[^\s"'<>]+\.(?:jpg|png|webp|jpeg)[^\s"'<>]*/gi)].map(m => m[0]);
-    results['duckduckgo'] = { status: res.status, htmlLen: html.length, sampleImgs: imgs.slice(0, 5) };
-  } catch (e: unknown) {
-    results['duckduckgo'] = { error: e instanceof Error ? e.message : String(e) };
-  }
-
-  // Test 3: Instagram embed page (which returned 200 earlier!)
-  try {
-    const res = await fetch(`https://www.instagram.com/${username}/embed/`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15',
-        'Accept': 'text/html,*/*',
-      },
-      signal: AbortSignal.timeout(6000),
-    });
-    const html = await res.text();
-    const og = html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]+content=["']([^"']+)["']/i);
-    const cdnImgs = [...html.matchAll(/https?:\/\/[^\s"'<>]*(?:cdninstagram|fbcdn)[^\s"'<>]*/gi)].map(m => m[0]);
-    results['ig_embed'] = { status: res.status, htmlLen: html.length, ogImage: og ? og[1] : null, cdnImgs: cdnImgs.slice(0, 5) };
-  } catch (e: unknown) {
-    results['ig_embed'] = { error: e instanceof Error ? e.message : String(e) };
-  }
-
-  // Test 4: Instagram Reels / p embed
-  try {
-    const res = await fetch(`https://www.instagram.com/${username}/feed/`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15',
-      },
-      signal: AbortSignal.timeout(6000),
-    });
-    results['ig_feed'] = { status: res.status };
-  } catch (e: unknown) {
-    results['ig_feed'] = { error: e instanceof Error ? e.message : String(e) };
+  for (const c of CRAWLERS) {
+    try {
+      const url = `https://www.instagram.com/${username}/?from_lookaside=1`;
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': c.ua,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
+        },
+        signal: AbortSignal.timeout(4000),
+      });
+      const html = await res.text();
+      const og = html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]+content=["']([^"']+)["']/i);
+      const isPlaceholder = og && (og[1].includes('rsrc.php') || og[1].includes('kHwIMM5b8PW'));
+      results[c.name] = {
+        status: res.status,
+        htmlLen: html.length,
+        ogImage: og ? (isPlaceholder ? 'PLACEHOLDER' : og[1].slice(0, 100)) : null,
+      };
+      if (og && !isPlaceholder) {
+        break; // Found working crawler!
+      }
+    } catch(e: unknown) {
+      results[c.name] = { error: e instanceof Error ? e.message : String(e) };
+    }
   }
 
   return NextResponse.json({ username, results });
