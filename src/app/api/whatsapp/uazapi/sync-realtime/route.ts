@@ -420,7 +420,7 @@ async function handleSync(request: Request) {
                       contactId,
                       configOwnerUserId: user.id,
                       messageId: toInsert[toInsert.length - 1]?.message_id,
-                      immediate: true,
+                      immediate: false,
                     });
                   } catch (err) {
                     console.error('[sync-realtime] AI auto-reply dispatch error:', err);

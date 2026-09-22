@@ -505,7 +505,7 @@ export async function POST(request: Request) {
                       contactId: resolvedContactId,
                       configOwnerUserId: ownerUserId,
                       messageId: toInsert[toInsert.length - 1]?.message_id,
-                      immediate: true,
+                      immediate: false,
                     });
                   } catch (err) {
                     console.error('[sync-chats] AI auto-reply dispatch error:', err);

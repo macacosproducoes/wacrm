@@ -13,7 +13,7 @@ import { sendUazApiText, sendUazApiMedia, normalizeBaseUrl } from '@/lib/whatsap
 import { sendWhatsAppPresence } from '@/lib/whatsapp/unified-presence'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus'
-import { autoReplyDebouncer, AutoReplyDebounceArgs } from './auto-reply-debouncer'
+import { autoReplyDebouncer, AutoReplyDebounceArgs, getDebounceMs, getMaxWaitMs } from './auto-reply-debouncer'
 import { updateConversationWithMessage } from '@/lib/whatsapp/conversation-helpers'
 import { recordAiDecision } from './trace'
 
@@ -233,6 +233,15 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
         console.log(`[ai auto-reply] SKIP: latest customer message already processed at ${latestCustomerMsg.ai_processed_at} for conv ${conversationId}`)
         return
       }
+
+      // Pre-claim all unprocessed customer messages in this turn immediately so concurrent pollers
+      // or workers never race or produce duplicate replies during LLM generation and network calls
+      await db
+        .from('messages')
+        .update({ ai_processed_at: new Date().toISOString() })
+        .eq('conversation_id', conversationId)
+        .eq('sender_type', 'customer')
+        .is('ai_processed_at', null)
     }
 
     // For order follow-up, append an instructional user turn so chat models have a valid
@@ -705,23 +714,90 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
 autoReplyDebouncer.setDefaultProcessor(executeAiReplyProcess);
 
 /**
+ * Execute debounced AI reply for a conversation.
+ * Buffers consecutive customer messages (e.g. 12-15 seconds) so that when a customer
+ * sends multiple rapid thoughts, questions, or follow-ups, the AI responds to everything
+ * at once in a single consolidated message instead of fragmenting into duplicate replies.
+ */
+async function executeDebouncedAiReply(args: DispatchArgs): Promise<void> {
+  const { conversationId, messageId } = args;
+  const db = supabaseAdmin();
+  const startTime = Date.now();
+  const debounceMs = args.debounceMs ?? getDebounceMs();
+  const maxWaitMs = getMaxWaitMs();
+
+  console.log(
+    `[ai-debouncer] Buffering inbound message for conv ${conversationId} (debounce: ${debounceMs}ms, maxWait: ${maxWaitMs}ms)`
+  );
+
+  // 1. Notify in-memory coordinator (manages client typing presence & batch sizing)
+  autoReplyDebouncer.enqueue(args, {
+    debounceMs,
+    maxWaitMs,
+  });
+
+  // 2. Wait the initial debounce window
+  await new Promise((resolve) => setTimeout(resolve, debounceMs));
+
+  // 3. If client is actively typing or recording, extend wait briefly (up to maxWait limit)
+  while (autoReplyDebouncer.isClientTyping(conversationId) && Date.now() - startTime < maxWaitMs) {
+    console.log(`[ai-debouncer] Client is currently typing in conv ${conversationId}. Extending buffer...`);
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+
+  // 4. Multi-instance & serverless check: see if a subsequent customer message arrived in DB
+  try {
+    const { data: latestInConv } = await db
+      .from('messages')
+      .select('id, message_id, created_at, ai_processed_at')
+      .eq('conversation_id', conversationId)
+      .eq('sender_type', 'customer')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (latestInConv) {
+      // If the latest message was already answered or claimed by another worker, stand down
+      if (latestInConv.ai_processed_at) {
+        console.log(`[ai-debouncer] Latest customer message already processed/claimed for conv ${conversationId}. Bailing out.`);
+        return;
+      }
+
+      // If a newer customer message was received and we haven't reached the max wait limit,
+      // yield execution to the newer message's debounce cycle to consolidate both into a single answer
+      if (messageId && latestInConv.message_id && latestInConv.message_id !== messageId) {
+        const elapsed = Date.now() - startTime;
+        if (elapsed < maxWaitMs) {
+          console.log(
+            `[ai-debouncer] Newer customer message (${latestInConv.message_id}) arrived for conv ${conversationId}. Yielding to consolidate.`
+          );
+          return;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[ai-debouncer] Error checking latest message for debounce consolidation:', err);
+  }
+
+  // 5. This worker is the designated executor for this conversation batch!
+  console.log(
+    `[ai-debouncer] Debounce window elapsed for conv ${conversationId}. Generating single consolidated AI response.`
+  );
+  await executeAiReplyProcess(args);
+}
+
+/**
  * AI auto-reply for an incoming customer message.
- * Routes through `autoReplyDebouncer` to buffer rapid messages and group them
+ * Routes through debouncing to buffer rapid messages and group them
  * into a single unified intention before querying the AI.
  */
 export async function dispatchInboundToAiReply(
   args: DispatchArgs,
 ): Promise<void> {
   const isTest = process.env.NODE_ENV === 'test' && !process.env.ENABLE_TEST_DEBOUNCE;
-  // In serverless deployment (Vercel / API routes), execute pipeline immediately
-  // so background timers aren't frozen after the HTTP webhook response returns.
-  const isServerless = process.env.VERCEL === '1' || process.env.NEXT_RUNTIME === 'nodejs' || process.env.NODE_ENV === 'production';
-  if (args.immediate || isTest || isServerless) {
+  if (args.immediate || isTest || args.isOrderFollowup) {
     return executeAiReplyProcess(args);
   }
 
-  autoReplyDebouncer.enqueue(args, {
-    debounceMs: args.debounceMs,
-    processor: executeAiReplyProcess,
-  });
+  return executeDebouncedAiReply(args);
 }

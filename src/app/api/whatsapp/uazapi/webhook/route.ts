@@ -173,7 +173,7 @@ export async function POST(request: Request) {
               contactId: processResult.contactId!,
               configOwnerUserId: processResult.userId!,
               messageId: processResult.messageId,
-              immediate: true,
+              immediate: followerOrderHandled,
               isOrderFollowup: followerOrderHandled,
             });
             console.log(`[TRACE ${traceId}] AI auto-reply completed in after() execution context.`);

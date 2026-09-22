@@ -993,7 +993,7 @@ export async function processUazApiEvent(
         contactId,
         configOwnerUserId: userId,
         messageId: externalMessageId,
-        immediate: true,
+        immediate: false,
       });
     } catch (err) {
       console.error('[UazAPI Event Processor] AI auto-reply dispatch error:', err);

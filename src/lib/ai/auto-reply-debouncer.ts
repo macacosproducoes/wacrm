@@ -243,6 +243,14 @@ export class AutoReplyDebouncer {
   }
 
   /**
+   * Check if client is actively typing in a conversation.
+   */
+  public isClientTyping(conversationId: string): boolean {
+    const state = this.states.get(conversationId);
+    return state?.isClientTyping ?? false;
+  }
+
+  /**
    * Check if a conversation has an active debounce timer or is currently processing.
    */
   public isPending(conversationId: string): boolean {

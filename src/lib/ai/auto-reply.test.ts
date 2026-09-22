@@ -53,8 +53,8 @@ vi.mock('./admin-client', () => ({
           eq: () => chain,
           is: () => chain,
           order: () => chain,
-          limit: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: null }) }),
-          maybeSingle: () => Promise.resolve({ data: null, error: null }),
+          limit: () => ({ maybeSingle: () => Promise.resolve({ data: h.state.latestCustomerMsg ?? null, error: null }) }),
+          maybeSingle: () => Promise.resolve({ data: h.state.latestCustomerMsg ?? null, error: null }),
         }
         return chain
       }
@@ -122,6 +122,7 @@ beforeEach(() => {
   h.state.claim = true
   h.state.updatePayload = null
   h.state.rpcCalls = []
+  h.state.latestCustomerMsg = null
   h.loadAiConfig.mockResolvedValue(aiConfig())
   h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
   h.retrieveKnowledge.mockResolvedValue([])
@@ -279,5 +280,15 @@ describe('dispatchInboundToAiReply — handoff', () => {
     }
     await dispatchInboundToAiReply(ARGS)
     expect(h.generateReply).toHaveBeenCalled()
+  })
+
+  it('skips AI reply when the latest customer message was already processed (prevents duplicate replies)', async () => {
+    h.state.latestCustomerMsg = {
+      id: 'm-prev',
+      ai_processed_at: new Date().toISOString(),
+    }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
   })
 })
