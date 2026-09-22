@@ -31,14 +31,15 @@ async function getCachedUazApiConfig(accountId: string): Promise<{ baseUrl: stri
   }
 
   const db = supabaseAdmin()
-  const { data: conn } = await db
+  const { data: conns } = await db
     .from('whatsapp_connections')
     .select('provider_config')
     .eq('account_id', accountId)
     .eq('provider', 'uazapi')
     .eq('is_active', true)
-    .maybeSingle()
+    .order('updated_at', { ascending: false })
 
+  const conn = conns?.[0]
   if (!conn) return null
 
   const config = (conn.provider_config || {}) as Record<string, string>

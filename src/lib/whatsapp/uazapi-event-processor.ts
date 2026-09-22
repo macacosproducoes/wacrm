@@ -460,6 +460,7 @@ export async function processUazApiEvent(
       candidates.find((c) => !c.includes('@lid') && !c.includes('@g.us') && !c.includes('@broadcast') && !c.includes('@newsletter')) ||
       candidates[0] ||
       '';
+  }
   const rawNumber = targetJid.split('@')[0].replace(/\D/g, '');
   const formattedPhone = formatUazApiNumber(rawNumber);
 

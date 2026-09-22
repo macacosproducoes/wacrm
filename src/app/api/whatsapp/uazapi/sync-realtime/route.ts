@@ -80,13 +80,15 @@ async function handleSync(request: Request) {
     const admin = supabaseAdmin();
 
     // 2. Fetch active UazAPI connection
-    const { data: conn } = await admin
+    const { data: conns } = await admin
       .from('whatsapp_connections')
       .select('*')
       .eq('account_id', accountId)
       .eq('provider', 'uazapi')
       .eq('is_active', true)
-      .maybeSingle();
+      .order('updated_at', { ascending: false });
+
+    const conn = conns?.find((c) => c.status === 'connected') || conns?.[0] || null;
 
     if (!conn || conn.status === 'disconnected') {
       return NextResponse.json({ success: true, reason: 'uazapi_disconnected' });

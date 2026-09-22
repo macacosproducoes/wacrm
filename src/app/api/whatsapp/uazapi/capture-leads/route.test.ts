@@ -49,17 +49,20 @@ describe('/api/whatsapp/uazapi/capture-leads', () => {
         };
       }
       if (table === 'whatsapp_connections') {
-        return {
-          select: () => ({
-            eq: () => ({
-              eq: () => ({
-                maybeSingle: () =>
-                  Promise.resolve({
-                    data: { provider_config: { auto_lead_capture: true } },
-                  }),
-              }),
+        const builder: any = {
+          eq: () => builder,
+          order: () => builder,
+          maybeSingle: () =>
+            Promise.resolve({
+              data: { provider_config: { auto_lead_capture: true } },
             }),
-          }),
+          then: (resolve: any) =>
+            Promise.resolve({
+              data: [{ provider_config: { auto_lead_capture: true } }],
+            }).then(resolve),
+        };
+        return {
+          select: () => builder,
         };
       }
       return {};
@@ -84,20 +87,28 @@ describe('/api/whatsapp/uazapi/capture-leads', () => {
         };
       }
       if (table === 'whatsapp_connections') {
-        return {
-          select: () => ({
-            eq: () => ({
-              eq: () => ({
-                maybeSingle: () =>
-                  Promise.resolve({
-                    data: {
-                      id: 'conn-1',
-                      provider_config: { base_url: 'https://free.uazapi.com' },
-                    },
-                  }),
-              }),
+        const builder: any = {
+          eq: () => builder,
+          order: () => builder,
+          maybeSingle: () =>
+            Promise.resolve({
+              data: {
+                id: 'conn-1',
+                provider_config: { base_url: 'https://free.uazapi.com', auto_lead_capture: true },
+              },
             }),
-          }),
+          then: (resolve: any) =>
+            Promise.resolve({
+              data: [
+                {
+                  id: 'conn-1',
+                  provider_config: { base_url: 'https://free.uazapi.com', auto_lead_capture: true },
+                },
+              ],
+            }).then(resolve),
+        };
+        return {
+          select: () => builder,
           update: (payload: { provider_config: unknown }) => {
             updatedConfig = payload.provider_config;
             return {

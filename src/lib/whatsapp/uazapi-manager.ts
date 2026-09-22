@@ -54,14 +54,15 @@ export async function startUazApiListener(accountId: string): Promise<boolean> {
   }
 
   const admin = supabaseAdmin();
-  const { data: conn } = await admin
+  const { data: conns } = await admin
     .from('whatsapp_connections')
     .select('*')
     .eq('account_id', accountId)
     .eq('provider', 'uazapi')
     .eq('is_active', true)
-    .maybeSingle();
+    .order('updated_at', { ascending: false });
 
+  const conn = conns?.[0] || null;
   if (!conn) return false;
 
   const config = (conn.provider_config || {}) as Record<string, string>;

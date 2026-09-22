@@ -596,14 +596,15 @@ export async function connectBaileys(accountId: string): Promise<BaileysSessionI
       const ownerUserId = acc?.owner_user_id;
       if (!ownerUserId) return;
 
-      const { data: conn } = await adminClient
+      const { data: conns } = await adminClient
         .from('whatsapp_connections')
         .select('id')
         .eq('account_id', accountId)
         .filter('provider_config->>driver', 'eq', 'baileys')
-        .maybeSingle();
+        .order('updated_at', { ascending: false })
+        .limit(1);
 
-      const connectionId = conn?.id || `baileys-${accountId}`;
+      const connectionId = conns?.[0]?.id || `baileys-${accountId}`;
       await syncBaileysChatsList(newChats as Array<Record<string, unknown>>, ownerUserId, connectionId);
     });
 

@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
     rpcCalls: [] as { name: string; args: unknown }[],
+    latestCustomerMsg: null as Record<string, unknown> | null,
+    oldMessages: undefined as Record<string, unknown>[] | undefined,
   },
 }))
 

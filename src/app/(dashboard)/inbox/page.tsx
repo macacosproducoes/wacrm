@@ -285,19 +285,34 @@ function InboxPageInner() {
 
       if (event.eventType === "INSERT") {
         // Add to messages if it belongs to active conversation
-        if (
+        const isForActiveThread = Boolean(
           activeConversation &&
-          newMsg.conversation_id === activeConversation.id
-        ) {
+          (newMsg.conversation_id === activeConversation.id ||
+            (activeContact?.id && (newMsg as unknown as Record<string, unknown>).contact_id === activeContact.id))
+        );
+
+        if (isForActiveThread) {
           setMessages((prev) => {
             // Avoid duplicates
-            if (prev.some((m) => m.id === newMsg.id)) return prev;
-            // Replace optimistic message if it exists
+            if (prev.some((m) => m.id === newMsg.id || (newMsg.message_id && m.message_id === newMsg.message_id))) return prev;
+            // Replace optimistic/preview message if it exists
             const withoutOptimistic = prev.filter(
-              (m) => !m.id.startsWith("temp-")
+              (m) => !m.id.startsWith("temp-") && !m.id.startsWith("preview-")
             );
             return [...withoutOptimistic, newMsg];
           });
+        }
+
+        // Always update in-memory cache for this conversation
+        if (newMsg.conversation_id) {
+          const currentCached = messagesCacheRef.current.get(newMsg.conversation_id) || [];
+          if (!currentCached.some((m) => m.id === newMsg.id || (newMsg.message_id && m.message_id === newMsg.message_id))) {
+            const nextCached = [
+              ...currentCached.filter((m) => !m.id.startsWith("temp-") && !m.id.startsWith("preview-")),
+              newMsg,
+            ];
+            messagesCacheRef.current.set(newMsg.conversation_id, nextCached);
+          }
         }
 
         // Update conversation list preview. We need to know *synchronously*
@@ -513,6 +528,19 @@ function InboxPageInner() {
           const cached = messagesCacheRef.current.get(match.id);
           if (cached && cached.length > 0) {
             setMessages(cached);
+          } else if (match.last_message_text) {
+            const isAgent = match.last_message_sender === "agent" || match.last_message_sender === "bot";
+            setMessages([
+              {
+                id: `preview-${match.id}`,
+                conversation_id: match.id,
+                sender_type: isAgent ? "agent" : "customer",
+                content_type: "text",
+                content_text: match.last_message_text,
+                status: "delivered",
+                created_at: match.last_message_at || new Date().toISOString(),
+              },
+            ]);
           } else {
             setMessages([]);
           }
@@ -536,10 +564,23 @@ function InboxPageInner() {
       setActiveConversation(conv);
       setActiveContact(conv.contact ?? null);
       
-      // Instant switch using memory cache to eliminate delay
+      // Instant switch using memory cache or optimistic preview to eliminate delay
       const cached = messagesCacheRef.current.get(conv.id);
       if (cached && cached.length > 0) {
         setMessages(cached);
+      } else if (conv.last_message_text) {
+        const isAgent = conv.last_message_sender === "agent" || conv.last_message_sender === "bot";
+        setMessages([
+          {
+            id: `preview-${conv.id}`,
+            conversation_id: conv.id,
+            sender_type: isAgent ? "agent" : "customer",
+            content_type: "text",
+            content_text: conv.last_message_text,
+            status: "delivered",
+            created_at: conv.last_message_at || new Date().toISOString(),
+          },
+        ]);
       } else {
         setMessages([]);
       }

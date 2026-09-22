@@ -584,13 +584,15 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
 
     // 2. Active UazAPI connection
     try {
-      const { data: uazConn } = await db
+      const { data: uazConns } = await db
         .from('whatsapp_connections')
         .select('*')
         .eq('account_id', accountId)
         .eq('provider', 'uazapi')
         .eq('is_active', true)
-        .maybeSingle()
+        .order('updated_at', { ascending: false })
+
+      const uazConn = uazConns?.find((c) => c.status === 'connected') || uazConns?.[0] || null
 
       if (uazConn) {
         const uazProviderConfig = (uazConn.provider_config || {}) as Record<string, string>

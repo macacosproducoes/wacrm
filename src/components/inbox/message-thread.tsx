@@ -432,48 +432,47 @@ export function MessageThread({
     let cancelled = false;
 
     (async () => {
-      // Only show full loading spinner if we don't have messages for this conversation yet
+      // If we don't have messages for this specific conversation yet, activate loading
       if (!messages || messages.length === 0 || messages[0]?.conversation_id !== conversationId) {
         setLoading(true);
       }
 
-      const { data, error } = await supabase
-        .from("messages")
-        .select("*")
-        .eq("conversation_id", conversationId)
-        .order("created_at", { ascending: true });
+      try {
+        const { data, error } = await supabase
+          .from("messages")
+          .select("*")
+          .eq("conversation_id", conversationId)
+          .order("created_at", { ascending: true });
 
-      if (cancelled) return;
+        if (cancelled) return;
 
-      if (!error && data && data.length > 0) {
-        onMessagesLoadedRef.current(data);
-        setLoading(false);
-      }
-
-      // If DB has 0 messages, sync live messages from WhatsApp via /api/inbox/messages
-      if (error || !data || data.length === 0) {
-        try {
-          const apiRes = await fetch(
-            `/api/inbox/messages?conversation_id=${encodeURIComponent(conversationId)}`
-          ).then((r) => r.json());
-          if (!cancelled && apiRes?.messages) {
-            onMessagesLoadedRef.current(apiRes.messages);
-          }
-        } catch {
-          // Keep existing state
-        } finally {
-          if (!cancelled) setLoading(false);
+        if (!error && data && data.length > 0) {
+          onMessagesLoadedRef.current(data);
+          setLoading(false);
+          // Background sync to ensure we didn't miss recent WhatsApp messages
+          fetch(`/api/inbox/messages?conversation_id=${encodeURIComponent(conversationId)}`)
+            .then((r) => r.json())
+            .then((apiRes) => {
+              if (!cancelled && apiRes?.messages && apiRes.messages.length > data.length) {
+                onMessagesLoadedRef.current(apiRes.messages);
+              }
+            })
+            .catch(() => {});
+          return;
         }
-      } else {
-        // Background sync to ensure we didn't miss recent WhatsApp messages
-        fetch(`/api/inbox/messages?conversation_id=${encodeURIComponent(conversationId)}`)
-          .then((r) => r.json())
-          .then((apiRes) => {
-            if (!cancelled && apiRes?.messages && apiRes.messages.length > data.length) {
-              onMessagesLoadedRef.current(apiRes.messages);
-            }
-          })
-          .catch(() => {});
+
+        // If DB has 0 messages or errored, sync live messages from WhatsApp via /api/inbox/messages
+        const apiRes = await fetch(
+          `/api/inbox/messages?conversation_id=${encodeURIComponent(conversationId)}`
+        ).then((r) => r.json());
+
+        if (!cancelled && apiRes?.messages && apiRes.messages.length > 0) {
+          onMessagesLoadedRef.current(apiRes.messages);
+        }
+      } catch (err) {
+        console.error("Error loading messages:", err);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     })();
 
@@ -1130,8 +1129,33 @@ export function MessageThread({
     updated_at: conversation.updated_at,
   };
 
+  const effectiveMessages = useMemo(() => {
+    if (messages && messages.length > 0 && messages[0]?.conversation_id === conversation.id) {
+      return messages;
+    }
+    if (messages && messages.length > 0 && messages.some((m) => m.conversation_id === conversation.id)) {
+      return messages.filter((m) => m.conversation_id === conversation.id);
+    }
+    // If messages are not in state yet, but conversation summary has last_message_text, provide instant preview
+    if (conversation.last_message_text) {
+      const isAgent = conversation.last_message_sender === "agent" || conversation.last_message_sender === "bot";
+      return [
+        {
+          id: `preview-${conversation.id}`,
+          conversation_id: conversation.id,
+          sender_type: isAgent ? "agent" : "customer",
+          content_type: "text",
+          content_text: conversation.last_message_text,
+          status: "delivered",
+          created_at: conversation.last_message_at || new Date().toISOString(),
+        } as Message,
+      ];
+    }
+    return [];
+  }, [messages, conversation.id, conversation.last_message_text, conversation.last_message_at]);
+
   const displayName = formatContactDisplayName(effectiveContact.name, effectiveContact.phone);
-  const messageGroups = groupMessagesByDate(messages);
+  const messageGroups = groupMessagesByDate(effectiveMessages);
   const currentStatus = STATUS_OPTIONS.find(
     (s) => s.value === conversation.status
   );
@@ -1420,17 +1444,20 @@ export function MessageThread({
 
       {/* Messages Area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
-        {loading && messages.length === 0 ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-          </div>
-        ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12">
-            <p className="text-sm text-muted-foreground">{t("noMessagesYet")}</p>
-            <p className="text-xs text-muted-foreground">
-              {t("sendTemplateHint")}
-            </p>
-          </div>
+        {effectiveMessages.length === 0 ? (
+          loading || conversation?.last_message_text || conversation?.last_message_at ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-3">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              <p className="text-xs text-muted-foreground animate-pulse">Carregando mensagens...</p>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-12">
+              <p className="text-sm text-muted-foreground">{t("noMessagesYet")}</p>
+              <p className="text-xs text-muted-foreground">
+                {t("sendTemplateHint")}
+              </p>
+            </div>
+          )
         ) : (
           <div className="space-y-4">
             {messageGroups.map((group) => (

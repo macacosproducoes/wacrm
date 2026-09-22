@@ -51,13 +51,15 @@ export async function POST(request: Request) {
     }
 
     const admin = supabaseAdmin();
-    const { data: conn } = await admin
+    const { data: conns } = await admin
       .from('whatsapp_connections')
       .select('*')
       .eq('account_id', accountId)
       .eq('provider', 'uazapi')
       .eq('is_active', true)
-      .maybeSingle();
+      .order('updated_at', { ascending: false });
+
+    const conn = conns?.find((c) => c.status === 'connected') || conns?.[0] || null;
 
     if (!conn) {
       return NextResponse.json({ error: 'No active UazAPI connection found' }, { status: 404 });

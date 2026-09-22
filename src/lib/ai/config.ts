@@ -125,11 +125,12 @@ export async function loadAiConfig(
   // Load only_new_conversations preference (stored in whatsapp_connections provider_config or ai_configs)
   let onlyNewConversations = false
   try {
-    const { data: conn } = await db
+    const { data: conns } = await db
       .from('whatsapp_connections')
       .select('provider_config')
       .eq('account_id', accountId)
-      .maybeSingle()
+      .order('updated_at', { ascending: false })
+    const conn = conns?.[0]
     if (conn?.provider_config && typeof conn.provider_config === 'object') {
       onlyNewConversations = Boolean((conn.provider_config as any).only_new_conversations)
     }

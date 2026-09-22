@@ -46,12 +46,14 @@ export async function POST(request: Request) {
     const admin = supabaseAdmin();
 
     // Check active connection
-    const { data: activeConn } = await admin
+    const { data: activeConns } = await admin
       .from('whatsapp_connections')
       .select('*')
       .eq('account_id', accountId)
       .eq('is_active', true)
-      .maybeSingle();
+      .order('updated_at', { ascending: false });
+
+    const activeConn = activeConns?.[0] || null;
 
     const provider = activeConn?.provider || (activeConn?.provider_config as Record<string, unknown> | undefined)?.driver || 'baileys';
 

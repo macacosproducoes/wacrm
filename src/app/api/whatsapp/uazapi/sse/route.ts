@@ -92,12 +92,13 @@ export async function GET(request: Request) {
   void startUazApiListener(accountId).catch(() => {});
 
   const admin = supabaseAdmin();
-  const { data: conn } = await admin
+  const { data: conns } = await admin
     .from('whatsapp_connections')
     .select('*')
     .eq('account_id', accountId)
     .eq('is_active', true)
-    .maybeSingle();
+    .order('updated_at', { ascending: false });
+  const conn = conns?.find((c) => c.status === 'connected') || conns?.[0] || null;
 
   const config = conn?.provider_config || {};
   let token = '';
