@@ -54,11 +54,25 @@ export async function GET() {
       ? safe.model.replace(/^gemini(::|\/)/, '')
       : safe.model
 
+    // Check only_new_conversations from whatsapp_connections
+    let onlyNewConversations = false
+    try {
+      const { data: conn } = await supabase
+        .from('whatsapp_connections')
+        .select('provider_config')
+        .eq('account_id', accountId)
+        .maybeSingle()
+      if (conn?.provider_config && typeof conn.provider_config === 'object') {
+        onlyNewConversations = Boolean((conn.provider_config as any).only_new_conversations)
+      }
+    } catch {}
+
     return NextResponse.json({
       configured: true,
       has_key: !!api_key,
       has_embeddings_key: !!embeddings_api_key,
       ...safe,
+      only_new_conversations: onlyNewConversations,
       provider: resolvedProvider,
       model: resolvedModel,
     })
@@ -296,6 +310,28 @@ export async function POST(request: Request) {
           { error: 'Failed to save AI configuration' },
           { status: 500 },
         )
+      }
+    }
+
+    if (typeof body.only_new_conversations === 'boolean') {
+      try {
+        const { data: conn } = await supabase
+          .from('whatsapp_connections')
+          .select('id, provider_config')
+          .eq('account_id', accountId)
+          .maybeSingle()
+        if (conn) {
+          const updated = {
+            ...(conn.provider_config || {}),
+            only_new_conversations: body.only_new_conversations,
+          }
+          await supabase
+            .from('whatsapp_connections')
+            .update({ provider_config: updated })
+            .eq('id', conn.id)
+        }
+      } catch (connErr) {
+        console.warn('[ai/config POST] failed to update only_new_conversations:', connErr)
       }
     }
 

@@ -29,6 +29,8 @@ export interface AiConfig {
    *  knowledge base is embedded and semantic retrieval turns on; when
    *  null, retrieval falls back to lexical full-text search. */
   embeddingsApiKey: string | null
+  /** When true, AI auto-replies only to new contacts without older conversation history. */
+  onlyNewConversations?: boolean
 }
 
 /** A single conversation turn in the shape both providers accept. */

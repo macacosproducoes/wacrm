@@ -122,6 +122,19 @@ export async function loadAiConfig(
     ? row.model.replace(/^gemini(::|\/)/, '')
     : row.model
 
+  // Load only_new_conversations preference (stored in whatsapp_connections provider_config or ai_configs)
+  let onlyNewConversations = false
+  try {
+    const { data: conn } = await db
+      .from('whatsapp_connections')
+      .select('provider_config')
+      .eq('account_id', accountId)
+      .maybeSingle()
+    if (conn?.provider_config && typeof conn.provider_config === 'object') {
+      onlyNewConversations = Boolean((conn.provider_config as any).only_new_conversations)
+    }
+  } catch {}
+
   return {
     provider,
     model,
@@ -132,6 +145,7 @@ export async function loadAiConfig(
     autoReplyMaxPerConversation: row.auto_reply_max_per_conversation,
     handoffAgentId: row.handoff_agent_id,
     embeddingsApiKey,
+    onlyNewConversations,
   }
 }
 

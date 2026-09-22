@@ -144,6 +144,45 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
         return
       }
 
+      // Mode: IA APENAS EM CONVERSAS NOVAS (only_new_conversations = true)
+      // When enabled, AI responds only to new customer contacts who have no prior conversation history.
+      // If there are previous conversations or old messages (> 24 hours ago, or human agent messages),
+      // the thread remains for human atendimento.
+      if (config.onlyNewConversations) {
+        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+        const { data: oldMsgs } = await db
+          .from('messages')
+          .select('id, sender_type, created_at')
+          .eq('conversation_id', conversationId)
+          .or(`created_at.lt.${oneDayAgo},sender_type.eq.agent`)
+          .limit(1)
+
+        if (oldMsgs && oldMsgs.length > 0) {
+          console.log(`[ai auto-reply] SKIP: conversa antiga detectada para conv ${conversationId} — direcionando para atendimento humanizado (only_new_conversations=true)`)
+          await recordAiDecision(db, {
+            conversationId,
+            accountId,
+            status: 'skipped',
+            reason: 'Conversa antiga com histórico prévio — direcionado para atendimento humanizado',
+            steps: [
+              {
+                name: '1. Recebimento da Mensagem',
+                status: 'success',
+                detail: 'Mensagem recebida e analisada',
+                timestamp: new Date().toISOString(),
+              },
+              {
+                name: '2. Filtro de Conversas Novas',
+                status: 'skipped',
+                detail: 'Esta conversa possui mensagens antigas ou histórico prévio com atendente. Conforme configuração da conta, contatos com histórico são direcionados exclusivamente para atendimento humanizado.',
+                timestamp: new Date().toISOString(),
+              },
+            ],
+          })
+          return
+        }
+      }
+
       const { data: autoResponders } = await db
         .from('automations')
         .select('id')

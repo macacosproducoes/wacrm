@@ -51,9 +51,14 @@ vi.mock('./admin-client', () => ({
           insert: () => ({ select: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: null }) }) }),
           update: () => ({ eq: () => ({ eq: () => ({ is: () => Promise.resolve({ error: null }) }) }) }),
           eq: () => chain,
+          or: () => chain,
           is: () => chain,
           order: () => chain,
-          limit: () => ({ maybeSingle: () => Promise.resolve({ data: h.state.latestCustomerMsg ?? null, error: null }) }),
+          limit: () => {
+            const res: any = Promise.resolve({ data: h.state.oldMessages ?? [], error: null })
+            res.maybeSingle = () => Promise.resolve({ data: h.state.latestCustomerMsg ?? null, error: null })
+            return res
+          },
           maybeSingle: () => Promise.resolve({ data: h.state.latestCustomerMsg ?? null, error: null }),
         }
         return chain
@@ -123,6 +128,7 @@ beforeEach(() => {
   h.state.updatePayload = null
   h.state.rpcCalls = []
   h.state.latestCustomerMsg = null
+  h.state.oldMessages = undefined
   h.loadAiConfig.mockResolvedValue(aiConfig())
   h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
   h.retrieveKnowledge.mockResolvedValue([])
@@ -290,5 +296,21 @@ describe('dispatchInboundToAiReply — handoff', () => {
     await dispatchInboundToAiReply(ARGS)
     expect(h.generateReply).not.toHaveBeenCalled()
     expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('skips AI reply when onlyNewConversations is enabled and old messages exist', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ onlyNewConversations: true }))
+    h.state.oldMessages = [{ id: 'old-1', sender_type: 'customer', created_at: '2025-01-01T00:00:00Z' }]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('allows AI reply when onlyNewConversations is enabled and no old messages exist (new conversation)', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ onlyNewConversations: true }))
+    h.state.oldMessages = []
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).toHaveBeenCalled()
+    expect(h.engineSendText).toHaveBeenCalled()
   })
 })

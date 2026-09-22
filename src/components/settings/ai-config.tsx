@@ -52,7 +52,7 @@ const KEY_PLACEHOLDER: Record<AiProvider, string> = {
 };
 
 const SUGGESTED_MODELS: Record<AiProvider, string[]> = {
-  gemini: ['gemini-3-5-flash-openai', 'gemini-2.5-flash', 'gemini-1.5-flash'],
+  gemini: ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-3-5-flash-openai'],
   openai: ['gpt-5.4-mini', 'gpt-4o-mini', 'gpt-4o'],
   anthropic: ['claude-haiku-4-5-20251001', 'claude-3-5-sonnet-latest'],
 };
@@ -80,6 +80,7 @@ export function AiConfig() {
   const [systemPrompt, setSystemPrompt] = useState('');
   const [isActive, setIsActive] = useState(false);
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(false);
+  const [onlyNewConversations, setOnlyNewConversations] = useState(false);
   const [maxPerConversation, setMaxPerConversation] = useState(3);
   // Empty string = leave unassigned (shared queue).
   const [handoffAgentId, setHandoffAgentId] = useState('');
@@ -107,6 +108,7 @@ export function AiConfig() {
         setSystemPrompt(data.system_prompt ?? '');
         setIsActive(data.is_active);
         setAutoReplyEnabled(data.auto_reply_enabled);
+        setOnlyNewConversations(Boolean(data.only_new_conversations));
         setMaxPerConversation(data.auto_reply_max_per_conversation ?? 3);
         setHandoffAgentId(data.handoff_agent_id ?? '');
         setHasStoredKey(Boolean(data.has_key));
@@ -163,6 +165,7 @@ export function AiConfig() {
     system_prompt: systemPrompt.trim() || null,
     is_active: isActive,
     auto_reply_enabled: autoReplyEnabled,
+    only_new_conversations: onlyNewConversations,
     auto_reply_max_per_conversation: maxPerConversation,
     handoff_agent_id: handoffAgentId || null,
   });
@@ -231,6 +234,7 @@ export function AiConfig() {
         setKeyEdited(false);
         setIsActive(false);
         setAutoReplyEnabled(false);
+        setOnlyNewConversations(false);
         setSystemPrompt('');
         setHandoffAgentId('');
       } else {
@@ -506,6 +510,27 @@ export function AiConfig() {
               <Switch
                 checked={autoReplyEnabled}
                 onCheckedChange={setAutoReplyEnabled}
+                disabled={disabled || !isActive}
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-4 rounded-md border border-border p-3 bg-muted/20">
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-medium text-foreground">
+                    IA apenas em conversas novas
+                  </p>
+                  <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${onlyNewConversations ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30' : 'bg-muted text-muted-foreground border border-border'}`}>
+                    {onlyNewConversations ? 'SIM' : 'NÃO'}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Quando ativo, a IA responde apenas para clientes novos que não têm conversas antigas. Caso contrário, direciona para atendimento humanizado.
+                </p>
+              </div>
+              <Switch
+                checked={onlyNewConversations}
+                onCheckedChange={setOnlyNewConversations}
                 disabled={disabled || !isActive}
               />
             </div>
