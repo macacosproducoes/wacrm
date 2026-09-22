@@ -28,7 +28,7 @@ export async function buildConversationContext(
     .from('messages')
     .select('sender_type, content_type, content_text')
     .eq('conversation_id', conversationId)
-    .in('content_type', ['text', 'image'])
+    .in('content_type', ['text', 'image', 'audio', 'video', 'document'])
     .order('created_at', { ascending: false })
     .limit(limit)
 
@@ -38,16 +38,22 @@ export async function buildConversationContext(
   const rawList = rows
     .filter((m) => {
       const text = m.content_text?.trim()
-      if (!text) return false
-      if (text === '[Mensagem recebida]' || text === '[Reação]' || text.startsWith('[Undecryptable]')) {
+      if (!text && m.content_type !== 'audio' && m.content_type !== 'image') return false
+      if (text === '[Mensagem recebida]' || text === '[Reação]' || text?.startsWith('[Undecryptable]')) {
         return false
       }
       return true
     })
     .map((m) => {
-      let content = m.content_text!.trim()
+      let content = (m.content_text || '').trim()
       if (m.content_type === 'image') {
-        content = `[Confirmação de Pedido com Foto gerada]: ${content}`
+        content = content ? `[Foto/Imagem]: ${content}` : '[Foto/Imagem enviada]'
+      } else if (m.content_type === 'audio') {
+        content = `[Mensagem de áudio/voz enviada pelo ${m.sender_type === 'customer' ? 'cliente' : 'atendente'}]`
+      } else if (m.content_type === 'video') {
+        content = content ? `[Vídeo]: ${content}` : '[Vídeo enviado]'
+      } else if (m.content_type === 'document') {
+        content = content ? `[Documento]: ${content}` : '[Documento enviado]'
       }
       return {
         role: m.sender_type === 'customer' ? ('user' as const) : ('assistant' as const),

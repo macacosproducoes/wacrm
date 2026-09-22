@@ -180,9 +180,14 @@ export async function GET(request: Request) {
 
                     const text = m.text || m.content?.text || m.content?.caption || defaultText;
                     const isFromMe = Boolean(m.fromMe);
-                    const msgTs = m.messageTimestamp
-                      ? new Date(m.messageTimestamp).toISOString()
-                      : new Date().toISOString();
+                    let msgTs = new Date().toISOString();
+                    if (m.messageTimestamp) {
+                      const num = typeof m.messageTimestamp === 'number' ? m.messageTimestamp : Number(m.messageTimestamp);
+                      if (!isNaN(num) && num > 0) {
+                        const ms = num < 10000000000 ? num * 1000 : num;
+                        msgTs = new Date(ms).toISOString();
+                      }
+                    }
 
                     const resolvedMediaUrl =
                       m.fileURL ||

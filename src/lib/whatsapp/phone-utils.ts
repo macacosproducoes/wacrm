@@ -135,9 +135,17 @@ export function isRealWhatsAppContact(jidOrPhone: string): boolean {
     if (domain && domain !== 's.whatsapp.net') return false;
   }
 
-  const clean = str.replace(/\D/g, '');
-  if (clean.length < 9 || clean.length > 13) return false;
+  let clean = str.replace(/\D/g, '');
+  if (clean.length < 9 || clean.length > 15) return false;
   if (clean.startsWith('120363')) return false;
+
+  // Normalize Brazilian phone numbers without 55 prefix (e.g. 11988887777 or 21977776666)
+  if ((clean.length === 10 || clean.length === 11) && !clean.startsWith('55')) {
+    const localDdd = parseInt(clean.slice(0, 2), 10);
+    if (!isNaN(localDdd) && localDdd >= 11 && localDdd <= 99) {
+      clean = `55${clean}`;
+    }
+  }
 
   // Brazilian phone number validation
   if (clean.startsWith('55')) {
@@ -153,7 +161,7 @@ export function isRealWhatsAppContact(jidOrPhone: string): boolean {
   const hasValidCountry = VALID_ITU_COUNTRY_CODES.some((cc) => {
     if (clean.startsWith(cc)) {
       const restLen = clean.length - cc.length;
-      return restLen >= 7 && restLen <= 10;
+      return restLen >= 7 && restLen <= 11;
     }
     return false;
   });

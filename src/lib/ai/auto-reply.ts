@@ -356,6 +356,15 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
       `[ai auto-reply] Calling AI model ${config.model} for conversation ${conversationId}. Prompt turns: ${messages.length}.`
     )
 
+    if (contact?.phone) {
+      void sendWhatsAppPresence({
+        accountId,
+        phoneNumber: contact.phone,
+        presence: 'composing',
+        delayMs: 10000,
+      })
+    }
+
     let { text, handoff, usage } = await generateReply({
       config,
       systemPrompt,

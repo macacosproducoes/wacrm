@@ -460,14 +460,12 @@ export async function processUazApiEvent(
       candidates.find((c) => !c.includes('@lid') && !c.includes('@g.us') && !c.includes('@broadcast') && !c.includes('@newsletter')) ||
       candidates[0] ||
       '';
-  }
-
-  if (!isRealWhatsAppContact(targetJid)) {
-    return { success: false, reason: 'invalid_lid_or_group_sender' };
-  }
-
   const rawNumber = targetJid.split('@')[0].replace(/\D/g, '');
   const formattedPhone = formatUazApiNumber(rawNumber);
+
+  if (!isRealWhatsAppContact(formattedPhone) && !isRealWhatsAppContact(targetJid)) {
+    return { success: false, reason: 'invalid_lid_or_group_sender' };
+  }
 
   // Extract message content
   let messageText = '';

@@ -85,12 +85,33 @@ export async function findOrCreateContact(
   if (!normPhone || normPhone.length < 8) return null;
 
   try {
-    // 1. Look up existing contact by exact phone or phone_normalized
+    // 1. Generate plausible phone variations (with/without 55, with/without 9th digit)
+    const variants = new Set<string>();
+    variants.add(normPhone);
+    if ((normPhone.length === 10 || normPhone.length === 11) && !normPhone.startsWith('55')) {
+      variants.add(`55${normPhone}`);
+    }
+    if (normPhone.startsWith('55') && normPhone.length === 13) {
+      variants.add(`${normPhone.slice(0, 4)}${normPhone.slice(5)}`);
+      variants.add(normPhone.slice(2));
+      variants.add(`${normPhone.slice(2, 4)}${normPhone.slice(5)}`);
+    } else if (normPhone.startsWith('55') && normPhone.length === 12) {
+      variants.add(`${normPhone.slice(0, 4)}9${normPhone.slice(4)}`);
+      variants.add(normPhone.slice(2));
+      variants.add(`${normPhone.slice(2, 4)}9${normPhone.slice(4)}`);
+    }
+
+    const orClauses = Array.from(variants)
+      .flatMap((v) => [`phone.eq.${v}`, `phone_normalized.eq.${v}`])
+      .join(',');
+
+    // Look up existing contact by any plausible variation
     const { data: existing, error: findErr } = await admin
       .from('contacts')
       .select('id, name, avatar_url')
       .eq('account_id', params.accountId)
-      .or(`phone.eq.${normPhone},phone_normalized.eq.${normPhone}`)
+      .or(orClauses)
+      .limit(1)
       .maybeSingle();
 
     if (findErr) {

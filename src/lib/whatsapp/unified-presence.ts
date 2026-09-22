@@ -72,12 +72,6 @@ export async function sendWhatsAppPresence(
   const { accountId, phoneNumber, presence, delayMs = 5000, baseUrl: directBaseUrl, token: directToken } = opts
   if (!phoneNumber) return false
 
-  // ACABA COM O DIGITANDO: Never broadcast 'composing' or 'recording' to WhatsApp
-  // to prevent WhatsApp from getting stuck in "digitando..."
-  if (presence === 'composing' || presence === 'recording') {
-    return true
-  }
-
   try {
     // 1. Direct Baileys socket connection (highest responsiveness when enabled)
     if (process.env.ENABLE_BAILEYS === 'true') {

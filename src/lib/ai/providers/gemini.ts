@@ -84,18 +84,12 @@ async function generateKie(args: ProviderArgs): Promise<ProviderResult> {
     model.trim().replace(/^(kie::|models\/|gemini::|openai::|anthropic::)/i, '') || DEFAULT_KIE_MODEL
 
   const merged = mergeConsecutive(messages)
-  while (merged.length > 0 && merged[0].role === 'assistant') {
-    merged.shift()
-  }
-  while (merged.length > 0 && merged[merged.length - 1].role === 'assistant') {
-    merged.pop()
-  }
   if (merged.length === 0) {
     merged.push({ role: 'user', content: '(The customer has not sent a message yet.)' })
   }
 
-  // Keep last 8 turns max to prevent proxy timeouts and payload overload
-  const trimmed = merged.slice(-8)
+  // Keep last 16 turns max to preserve complete conversation history
+  const trimmed = merged.slice(-16)
 
   const formattedMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = []
   if (systemPrompt?.trim()) {
