@@ -536,16 +536,16 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
         .maybeSingle()
 
       if (uazConn) {
-        const config = (uazConn.provider_config || {}) as Record<string, string>
+        const uazProviderConfig = (uazConn.provider_config || {}) as Record<string, string>
         let token = ''
         try {
-          token = decrypt(config.token)
+          token = decrypt(uazProviderConfig.token)
         } catch {
-          token = config.token || ''
+          token = uazProviderConfig.token || ''
         }
 
         if (token && contact?.phone) {
-          const baseUrl = normalizeBaseUrl(config.base_url)
+          const baseUrl = normalizeBaseUrl(uazProviderConfig.base_url)
           const sendRes = await sendUazApiText(baseUrl, token, {
             number: contact.phone,
             text,

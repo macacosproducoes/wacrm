@@ -86,22 +86,52 @@ export class ImageProvider {
       return createSvgPlaceholder(200, 200, 'Origem Bloqueada');
     }
 
-    // 4. Fetch with timeout and size guards
+    // 4. Fetch with timeout, secure redirect follower, and size guards
     const controller = new AbortController();
     const timeoutTimer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const response = await fetch(cleanSource, {
-        signal: controller.signal,
-        redirect: 'manual', // Prevent SSRF via 3xx redirect to private targets
-        headers: {
-          'User-Agent': 'CreativeEngine/1.0',
-          'Accept': 'image/png,image/jpeg,image/webp,image/svg+xml,*/*',
-        },
-      });
+      let currentUrl = cleanSource;
+      let hops = 0;
+      let response: Response | null = null;
 
-      if (!response.ok) {
-        console.warn(`[Creative Engine:ImageProvider] Fetch failed with status ${response.status} for: ${cleanSource}`);
+      while (true) {
+        const isDeliverable = await isDeliverableUrl(currentUrl);
+        if (!isDeliverable) {
+          console.warn('[Creative Engine:ImageProvider] SSRF block: refusing non-public or internal URL:', currentUrl);
+          return createSvgPlaceholder(200, 200, 'Origem Bloqueada');
+        }
+
+        response = await fetch(currentUrl, {
+          signal: controller.signal,
+          redirect: 'manual',
+          headers: {
+            'User-Agent': 'CreativeEngine/1.0',
+            'Accept': 'image/png,image/jpeg,image/webp,image/svg+xml,*/*',
+          },
+        });
+
+        // Follow legitimate redirects (e.g. Supabase Storage / CDN edge hops)
+        if (response.status >= 300 && response.status < 400) {
+          hops++;
+          if (hops > 5) {
+            console.warn('[Creative Engine:ImageProvider] Too many redirects for:', cleanSource);
+            break;
+          }
+          const location = response.headers.get('location');
+          if (!location) {
+            console.warn('[Creative Engine:ImageProvider] Redirect missing location header');
+            break;
+          }
+          currentUrl = new URL(location, currentUrl).toString();
+          continue;
+        }
+
+        break;
+      }
+
+      if (!response || !response.ok) {
+        console.warn(`[Creative Engine:ImageProvider] Fetch failed with status ${response ? response.status : 'NO_RESPONSE'} for: ${cleanSource}`);
         if (options.fallbackUrl) {
           return this.resolveImageDataUri(options.fallbackUrl, {
             ...options,

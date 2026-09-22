@@ -53,25 +53,47 @@ export class InstagramImageStorage {
       const base64Data = sourceUrl.slice(commaIndex + 1);
       rawBuffer = Buffer.from(base64Data, 'base64');
     } else {
-      // 1. SSRF Protection on external URL
-      const isDeliverable = await isDeliverableUrl(sourceUrl);
-      if (!isDeliverable) {
-        throw new Error('SSRF Block: Refusing to download profile image from private or non-public address.');
+      // 1. Download with secure redirect follower & SSRF protection
+      let currentUrl = sourceUrl;
+      let hops = 0;
+      let res: Response | null = null;
+
+      while (true) {
+        const isDeliverable = await isDeliverableUrl(currentUrl);
+        if (!isDeliverable) {
+          throw new Error('SSRF Block: Refusing to download profile image from private or non-public address.');
+        }
+
+        res = await fetch(currentUrl, {
+          method: 'GET',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            'Referer': 'https://www.instagram.com/',
+          },
+          signal: AbortSignal.timeout(10000),
+          redirect: 'manual',
+        });
+
+        // Follow 3xx redirects securely validating each hop
+        if (res.status >= 300 && res.status < 400) {
+          hops++;
+          if (hops > 5) {
+            throw new Error('Too many redirects while downloading profile image');
+          }
+          const location = res.headers.get('location');
+          if (!location) {
+            throw new Error(`HTTP ${res.status} redirect without Location header`);
+          }
+          currentUrl = new URL(location, currentUrl).toString();
+          continue;
+        }
+
+        break;
       }
 
-      // 2. Download with timeout
-      const res = await fetch(sourceUrl, {
-        method: 'GET',
-        headers: {
-          'User-Agent': 'WACRM-InstagramResolver/1.0',
-          'Accept': 'image/jpeg,image/png,image/webp,image/*;q=0.8',
-        },
-        signal: AbortSignal.timeout(6000),
-        redirect: 'manual',
-      });
-
-      if (!res.ok) {
-        throw new Error(`Failed to download profile image: HTTP ${res.status}`);
+      if (!res || !res.ok) {
+        throw new Error(`Failed to download profile image: HTTP ${res ? res.status : 'NO_RESPONSE'}`);
       }
 
       const arrayBuffer = await res.arrayBuffer();
@@ -123,30 +145,53 @@ export class InstagramImageStorage {
     const shortHash = hash.slice(0, 16);
     const path = `account-${accountId}/contacts/${contactId}/instagram_avatar_${shortHash}.png`;
 
-    const { error: uploadErr } = await supabase.storage
-      .from(STORAGE_BUCKET)
-      .upload(path, buffer, {
-        contentType: 'image/png',
-        upsert: true,
-      });
+    try {
+      const { error: uploadErr } = await supabase.storage
+        .from(STORAGE_BUCKET)
+        .upload(path, buffer, {
+          contentType: 'image/png',
+          upsert: true,
+        });
 
-    if (uploadErr) {
-      throw new Error(`Failed to store profile image: ${uploadErr.message}`);
+      if (uploadErr) {
+        console.warn(`[INSTAGRAM_STORAGE] Storage upload warning: ${uploadErr.message}. Utilizing resilient data URI fallback.`);
+        const base64DataUri = `data:image/png;base64,${buffer.toString('base64')}`;
+        return {
+          publicUrl: base64DataUri,
+          path,
+          hash,
+          width: 300,
+          height: 300,
+        };
+      }
+
+      const { data: urlData } = supabase.storage
+        .from(STORAGE_BUCKET)
+        .getPublicUrl(path);
+
+      const sharpModule = (await import('sharp')).default;
+      const meta = await sharpModule(buffer).metadata();
+
+      // Append version query param to guarantee fresh rendering and bypass CDN cache
+      const finalUrl = `${urlData.publicUrl}?v=${shortHash}`;
+
+      return {
+        publicUrl: finalUrl,
+        path,
+        hash,
+        width: meta.width || 300,
+        height: meta.height || 300,
+      };
+    } catch (storageErr) {
+      console.warn(`[INSTAGRAM_STORAGE] Unexpected storage failure, using data URI fallback:`, storageErr);
+      const base64DataUri = `data:image/png;base64,${buffer.toString('base64')}`;
+      return {
+        publicUrl: base64DataUri,
+        path,
+        hash,
+        width: 300,
+        height: 300,
+      };
     }
-
-    const { data: urlData } = supabase.storage
-      .from(STORAGE_BUCKET)
-      .getPublicUrl(path);
-
-    const sharpModule = (await import('sharp')).default;
-    const meta = await sharpModule(buffer).metadata();
-
-    return {
-      publicUrl: urlData.publicUrl,
-      path,
-      hash,
-      width: meta.width || 300,
-      height: meta.height || 300,
-    };
   }
 }
