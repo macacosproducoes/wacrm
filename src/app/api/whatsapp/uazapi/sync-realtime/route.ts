@@ -5,7 +5,6 @@ import { decrypt } from '@/lib/whatsapp/encryption';
 import { normalizeBaseUrl, formatUazApiNumber } from '@/lib/whatsapp/uazapi-client';
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
 import { startUazApiListener } from '@/lib/whatsapp/uazapi-manager';
-import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
 import {
   findOrCreateContact,
   findOrCreateConversation,
@@ -411,21 +410,6 @@ async function handleSync(request: Request) {
                     }
                   } catch (err) {
                     console.error('[sync-realtime] Error handling follower order:', err);
-                  }
-                }
-
-                if (!orderHandled) {
-                  try {
-                    await dispatchInboundToAiReply({
-                      accountId,
-                      conversationId: convId,
-                      contactId,
-                      configOwnerUserId: user.id,
-                      messageId: toInsert[toInsert.length - 1]?.message_id,
-                      immediate: false,
-                    });
-                  } catch (err) {
-                    console.error('[sync-realtime] AI auto-reply dispatch error:', err);
                   }
                 }
 

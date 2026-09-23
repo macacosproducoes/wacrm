@@ -406,7 +406,7 @@ export async function startUazApiListener(accountId: string): Promise<boolean> {
                 if (jsonStr && jsonStr !== '[DONE]') {
                   try {
                     const eventData = JSON.parse(jsonStr);
-                    processUazApiEvent(eventData, conn).catch((err) => {
+                    processUazApiEvent(eventData, conn, { skipAiDispatch: true }).catch((err) => {
                       console.error('[UazAPI Background SSE] Event processing error:', err);
                     });
                   } catch {

@@ -555,6 +555,26 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
     }
     if (!isUncapped && claimed !== true) return
 
+    // FINAL SENTINEL: Anti-duplicate cooldown guard (5 seconds).
+    // If a bot reply was already sent in the last 5 seconds for this conversation, abort immediately.
+    try {
+      const { data: recentBotMsg } = await db
+        .from('messages')
+        .select('id, created_at')
+        .eq('conversation_id', conversationId)
+        .eq('sender_type', 'bot')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (recentBotMsg?.created_at && Date.now() - new Date(recentBotMsg.created_at).getTime() < 5000) {
+        console.warn(`[ai auto-reply] VETO: A bot reply was already recorded within the last 5s for conv ${conversationId}. Bailing out to prevent duplicate.`)
+        return
+      }
+    } catch {
+      // Swallowed in test/mock environments without breaking pipeline
+    }
+
     // 1. Direct Baileys socket connection (if explicitly enabled in environment)
     if (process.env.ENABLE_BAILEYS === 'true' && contact?.phone) {
       try {

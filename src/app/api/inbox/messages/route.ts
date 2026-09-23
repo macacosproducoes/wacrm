@@ -3,7 +3,6 @@ import { createClient } from '@/lib/supabase/server';
 import { createClient as createAdminClient } from '@supabase/supabase-js';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { normalizeBaseUrl, formatUazApiNumber } from '@/lib/whatsapp/uazapi-client';
-import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
 
 function supabaseAdmin() {
   return createAdminClient(
@@ -247,23 +246,6 @@ export async function GET(request: Request) {
                       if (inserted && inserted.length > 0) {
                         messages.push(...inserted);
                         messages.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-                      }
-
-                      const last = toInsert[toInsert.length - 1];
-                      const lastText = (last?.content_text || '').trim();
-                      const isEmojiOnly = /^(\p{Extended_Pictographic}|\p{Emoji_Presentation}|\s)+$/u.test(lastText);
-                      const isIgnored = lastText === '[Mensagem recebida]' || lastText === '[Reação]' || lastText.startsWith('[Undecryptable]');
-
-                      const hasCustomerInbound = toInsert.some((m) => m.sender_type === 'customer');
-                      if (hasCustomerInbound && conv?.contact_id && conv?.account_id && !isEmojiOnly && !isIgnored && lastText) {
-                        void dispatchInboundToAiReply({
-                          accountId: conv.account_id,
-                          conversationId,
-                          contactId: conv.contact_id,
-                          configOwnerUserId: user.id,
-                        }).catch((err) => {
-                          console.error('[Inbox Messages API] AI auto-reply dispatch error:', err);
-                        });
                       }
                     }
 

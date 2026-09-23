@@ -4,7 +4,6 @@ import { createClient as createAdminClient } from '@supabase/supabase-js';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { normalizeBaseUrl, formatUazApiNumber, getUazApiContacts } from '@/lib/whatsapp/uazapi-client';
 import { isRealWhatsAppContact } from '@/lib/whatsapp/phone-utils';
-import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
 import {
   findOrCreateContact,
   findOrCreateConversation,
@@ -494,25 +493,6 @@ export async function POST(request: Request) {
                   isInbound: !lastIsFromMe,
                   senderType: lastIsFromMe ? 'agent' : 'customer',
                 });
-
-                const isEmojiOnly = /^(\p{Extended_Pictographic}|\p{Emoji_Presentation}|\s)+$/u.test(lastTextMsg);
-                const isIgnored = lastTextMsg === '[Mensagem recebida]' || lastTextMsg === '[Reação]' || lastTextMsg.startsWith('[Undecryptable]');
-                const isRecent = (now - new Date(lastTs).getTime()) < 15 * 60 * 1000;
-
-                if (!lastIsFromMe && toInsert.some((m) => m.sender_type === 'customer') && !isEmojiOnly && !isIgnored && lastTextMsg && isRecent) {
-                  try {
-                    await dispatchInboundToAiReply({
-                      accountId,
-                      conversationId: resolvedConvId,
-                      contactId: resolvedContactId,
-                      configOwnerUserId: ownerUserId,
-                      messageId: toInsert[toInsert.length - 1]?.message_id,
-                      immediate: false,
-                    });
-                  } catch (err) {
-                    console.error('[sync-chats] AI auto-reply dispatch error:', err);
-                  }
-                }
               } else if (convMeta.last_message_at !== lastTs) {
                 await updateConversationWithMessage(admin, {
                   conversationId: resolvedConvId,
