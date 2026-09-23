@@ -15,7 +15,7 @@ import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus'
 import { autoReplyDebouncer, AutoReplyDebounceArgs, getDebounceMs, getMaxWaitMs } from './auto-reply-debouncer'
 import { updateConversationWithMessage } from '@/lib/whatsapp/conversation-helpers'
-import { recordAiDecision } from './trace'
+import { recordAiDecision, parseAiTrace } from './trace'
 
 export interface DispatchArgs extends AutoReplyDebounceArgs {
   /** If true, bypasses the debounce window and executes immediately. */
@@ -36,10 +36,24 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
 
     const { data: conv, error: convErr } = await db
       .from('conversations')
-      .select('contact_id, assigned_agent_id, ai_autoreply_disabled, ai_reply_count')
+      .select('contact_id, assigned_agent_id, ai_autoreply_disabled, ai_reply_count, ai_handoff_summary')
       .eq('id', conversationId)
       .maybeSingle()
     if (convErr || !conv) return
+
+    // 0. DISTRIBUTED CONCURRENCY LOCK (Postgres Mutex)
+    // If another serverless worker or instance is actively generating a reply for this conversation,
+    // do not spawn a concurrent LLM call.
+    if (conv.ai_handoff_summary) {
+      const trace = parseAiTrace(conv.ai_handoff_summary)
+      if (trace?.status === 'processing') {
+        const lockAgeMs = Date.now() - new Date(trace.updatedAt).getTime()
+        if (lockAgeMs < 45000) {
+          console.log(`[ai auto-reply] VETO: Conversation ${conversationId} is currently being processed by another AI worker (lock active for ${Math.round(lockAgeMs / 1000)}s). Bailing out to prevent duplicate.`)
+          return
+        }
+      }
+    }
 
     // If AI is explicitly turned OFF for this conversation, stand down
     if (conv.ai_autoreply_disabled === true) {
@@ -280,6 +294,28 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
         .eq('conversation_id', conversationId)
         .eq('sender_type', 'customer')
         .is('ai_processed_at', null)
+
+      // Set distributed processing lock in DB so no concurrent worker or subsequent message runs Gemini simultaneously
+      await recordAiDecision(db, {
+        conversationId,
+        accountId,
+        status: 'processing',
+        reason: 'IA está gerando uma resposta unificada...',
+        steps: [
+          {
+            name: '1. Recebimento da Mensagem',
+            status: 'success',
+            detail: 'Mensagem recebida e agrupada. Bloqueio de concorrência ativo.',
+            timestamp: new Date().toISOString(),
+          },
+          {
+            name: '2. Consulta ao Modelo de IA',
+            status: 'info',
+            detail: `Processando resposta com modelo ${config.model}...`,
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      })
     }
 
     // For order follow-up, append an instructional user turn so chat models have a valid
@@ -555,8 +591,8 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
     }
     if (!isUncapped && claimed !== true) return
 
-    // FINAL SENTINEL: Anti-duplicate cooldown guard (5 seconds).
-    // If a bot reply was already sent in the last 5 seconds for this conversation, abort immediately.
+    // FINAL SENTINEL: Anti-duplicate cooldown guard (15 seconds).
+    // If a bot reply was already sent in the last 15 seconds for this conversation, abort immediately.
     try {
       const { data: recentBotMsg } = await db
         .from('messages')
@@ -567,12 +603,38 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
         .limit(1)
         .maybeSingle()
 
-      if (recentBotMsg?.created_at && Date.now() - new Date(recentBotMsg.created_at).getTime() < 5000) {
-        console.warn(`[ai auto-reply] VETO: A bot reply was already recorded within the last 5s for conv ${conversationId}. Bailing out to prevent duplicate.`)
+      if (recentBotMsg?.created_at && Date.now() - new Date(recentBotMsg.created_at).getTime() < 15000) {
+        console.warn(`[ai auto-reply] VETO: A bot reply was already recorded within the last 15s (${recentBotMsg.created_at}) for conv ${conversationId}. Bailing out to prevent duplicate.`)
         return
       }
     } catch {
       // Swallowed in test/mock environments without breaking pipeline
+    }
+
+    // Pre-insert bot message reservation row so ANY concurrent query immediately sees it in DB
+    const tempMsgId = `res_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+    const reservationRow = {
+      conversation_id: conversationId,
+      sender_type: 'bot' as const,
+      content_type: (isAudioReply && audioUrlToSend ? 'audio' : 'text') as 'audio' | 'text',
+      content_text: textToSend,
+      media_url: audioUrlToSend || null,
+      message_id: tempMsgId,
+      status: 'sending' as const,
+      ai_generated: true,
+      created_at: new Date().toISOString(),
+    }
+
+    let reservationDbId: string | null = null
+    try {
+      const { data: insertedRes } = await db
+        .from('messages')
+        .insert(reservationRow)
+        .select('id')
+        .maybeSingle()
+      if (insertedRes?.id) reservationDbId = insertedRes.id
+    } catch {
+      // Non-blocking in mocks
     }
 
     // 1. Direct Baileys socket connection (if explicitly enabled in environment)
@@ -596,24 +658,22 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
             ? String(sendRes.messageId).split(':').pop()!
             : String(sendRes.messageId || `bot_${Date.now()}`)
 
-          const botMsgRow = {
-            conversation_id: conversationId,
-            sender_type: 'bot' as const,
-            content_type: (isAudioReply && audioUrlToSend ? 'audio' : 'text') as 'audio' | 'text',
-            content_text: textToSend,
-            media_url: audioUrlToSend || null,
-            message_id: cleanMsgId,
-            status: 'sent' as const,
-            ai_generated: true,
-            created_at: new Date().toISOString(),
+          if (reservationDbId) {
+            await db
+              .from('messages')
+              .update({
+                message_id: cleanMsgId,
+                status: 'sent',
+              })
+              .eq('id', reservationDbId)
+          } else {
+            await db.from('messages').insert({ ...reservationRow, message_id: cleanMsgId, status: 'sent' })
           }
-
-          const { data: insertedMsg } = await db.from('messages').insert(botMsgRow).select('id, created_at').maybeSingle()
 
           await updateConversationWithMessage(db, {
             conversationId,
             messageText: textToSend,
-            messageTimestamp: botMsgRow.created_at,
+            messageTimestamp: reservationRow.created_at,
             isInbound: false,
             senderType: 'bot',
           })
@@ -623,13 +683,15 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
             conversationId,
             eventType: 'INSERT',
             message: {
-              id: insertedMsg?.id || sendRes.messageId,
-              ...botMsgRow,
+              id: reservationDbId || cleanMsgId,
+              ...reservationRow,
+              message_id: cleanMsgId,
+              status: 'sent',
             },
             conversation: {
               id: conversationId,
               last_message_text: textToSend,
-              last_message_at: botMsgRow.created_at,
+              last_message_at: reservationRow.created_at,
               unread_count: 0,
             },
           })
@@ -701,24 +763,22 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
             ? String(sendRes.messageId).split(':').pop()!
             : String(sendRes.messageId || `bot_${Date.now()}`)
 
-          const botMsgRow = {
-            conversation_id: conversationId,
-            sender_type: 'bot' as const,
-            content_type: (isAudioReply && audioUrlToSend ? 'audio' : 'text') as 'audio' | 'text',
-            content_text: textToSend,
-            media_url: audioUrlToSend || null,
-            message_id: cleanMsgId,
-            status: 'sent' as const,
-            ai_generated: true,
-            created_at: new Date().toISOString(),
+          if (reservationDbId) {
+            await db
+              .from('messages')
+              .update({
+                message_id: cleanMsgId,
+                status: 'sent',
+              })
+              .eq('id', reservationDbId)
+          } else {
+            await db.from('messages').insert({ ...reservationRow, message_id: cleanMsgId, status: 'sent' })
           }
-
-          const { data: insertedMsg } = await db.from('messages').insert(botMsgRow).select('id, created_at').maybeSingle()
 
           await updateConversationWithMessage(db, {
             conversationId,
             messageText: textToSend,
-            messageTimestamp: botMsgRow.created_at,
+            messageTimestamp: reservationRow.created_at,
             isInbound: false,
             senderType: 'bot',
           })
@@ -728,13 +788,15 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
             conversationId,
             eventType: 'INSERT',
             message: {
-              id: insertedMsg?.id || sendRes.messageId,
-              ...botMsgRow,
+              id: reservationDbId || cleanMsgId,
+              ...reservationRow,
+              message_id: cleanMsgId,
+              status: 'sent',
             },
             conversation: {
               id: conversationId,
               last_message_text: textToSend,
-              last_message_at: botMsgRow.created_at,
+              last_message_at: reservationRow.created_at,
               unread_count: 0,
             },
           })
@@ -806,6 +868,15 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
     }
 
     // 3. Fallback to Meta Official Cloud API (if configured)
+    if (reservationDbId) {
+      try {
+        await db.from('messages').delete().eq('id', reservationDbId)
+      } catch {
+        // Swallowed
+      }
+      reservationDbId = null
+    }
+
     await engineSendText({
       accountId,
       userId: configOwnerUserId,
@@ -900,6 +971,24 @@ async function executeDebouncedAiReply(args: DispatchArgs): Promise<void> {
           console.log(
             `[ai-debouncer] Newer customer message (${latestInConv.message_id}) arrived for conv ${conversationId}. Yielding to consolidate.`
           );
+          return;
+        }
+      }
+    }
+
+    // Check if an AI worker is already actively processing this conversation
+    const { data: convCheck } = await db
+      .from('conversations')
+      .select('ai_handoff_summary')
+      .eq('id', conversationId)
+      .maybeSingle();
+
+    if (convCheck?.ai_handoff_summary) {
+      const trace = parseAiTrace(convCheck.ai_handoff_summary);
+      if (trace?.status === 'processing') {
+        const lockAgeMs = Date.now() - new Date(trace.updatedAt).getTime();
+        if (lockAgeMs < 45000) {
+          console.log(`[ai-debouncer] Active processing lock (${Math.round(lockAgeMs / 1000)}s old) detected for conv ${conversationId}. Bailing out.`);
           return;
         }
       }

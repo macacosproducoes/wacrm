@@ -300,6 +300,32 @@ describe('dispatchInboundToAiReply — handoff', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
+  it('skips AI reply when conversation is locked with status: processing to prevent duplicate LLM calls', async () => {
+    h.state.conv = {
+      assigned_agent_id: null,
+      ai_autoreply_disabled: false,
+      ai_reply_count: 0,
+      ai_handoff_summary: JSON.stringify({
+        status: 'processing',
+        reason: 'Generating...',
+        updatedAt: new Date().toISOString(),
+      }),
+    }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('skips AI reply when a bot reply was already recorded in the last 15s (anti-duplicate sentinel)', async () => {
+    h.state.latestCustomerMsg = {
+      id: 'bot-recent',
+      created_at: new Date().toISOString(),
+    }
+    await dispatchInboundToAiReply(ARGS)
+    // Cooldown prevents second send
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
   it('skips AI reply when onlyNewConversations is enabled and old messages exist', async () => {
     h.loadAiConfig.mockResolvedValue(aiConfig({ onlyNewConversations: true }))
     h.state.oldMessages = [{ id: 'old-1', sender_type: 'customer', created_at: '2025-01-01T00:00:00Z' }]
@@ -316,3 +342,4 @@ describe('dispatchInboundToAiReply — handoff', () => {
     expect(h.engineSendText).toHaveBeenCalled()
   })
 })
+

@@ -173,7 +173,7 @@ export async function POST(request: Request) {
               contactId: processResult.contactId!,
               configOwnerUserId: processResult.userId!,
               messageId: processResult.messageId,
-              debounceMs: 5000,
+              debounceMs: 8000,
               immediate: followerOrderHandled,
               isOrderFollowup: followerOrderHandled,
             });

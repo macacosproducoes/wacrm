@@ -680,13 +680,24 @@ export async function connectBaileys(accountId: string): Promise<BaileysSessionI
         if (!jid || !isRealWhatsAppContact(jid)) continue;
 
         try {
-          await processUazApiEvent(
+          const res = await processUazApiEvent(
             {
               event: 'messages',
               data: msg,
             },
             connRow
           );
+          if (res?.shouldTriggerAi && res?.conversationId && res?.accountId && res?.contactId && res?.userId) {
+            const { dispatchInboundToAiReply } = await import('@/lib/ai/auto-reply');
+            void dispatchInboundToAiReply({
+              accountId: res.accountId,
+              conversationId: res.conversationId,
+              contactId: res.contactId,
+              configOwnerUserId: res.userId,
+              messageId: res.messageId,
+              debounceMs: 8000,
+            });
+          }
         } catch (procErr) {
           console.error('[Baileys] Error processing message upsert:', procErr);
         }

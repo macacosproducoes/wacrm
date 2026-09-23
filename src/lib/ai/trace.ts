@@ -9,7 +9,7 @@ export interface AiExecutionStep {
 }
 
 export interface AiTraceData {
-  status: 'replied' | 'skipped' | 'handed_off' | 'error';
+  status: 'replied' | 'skipped' | 'handed_off' | 'error' | 'processing';
   reason: string;
   summaryText?: string;
   steps: AiExecutionStep[];
@@ -71,7 +71,7 @@ export async function recordAiDecision(
   args: {
     conversationId: string;
     accountId: string;
-    status: 'replied' | 'skipped' | 'handed_off' | 'error';
+    status: 'replied' | 'skipped' | 'handed_off' | 'error' | 'processing';
     reason: string;
     steps: AiExecutionStep[];
     model?: string;

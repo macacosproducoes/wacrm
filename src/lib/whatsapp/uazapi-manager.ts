@@ -4,7 +4,6 @@ import { createClient as createAdminClient } from '@supabase/supabase-js';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { normalizeBaseUrl, formatUazApiNumber } from '@/lib/whatsapp/uazapi-client';
 import { processUazApiEvent } from '@/lib/whatsapp/uazapi-event-processor';
-import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
 import { sendWhatsAppPresence } from '@/lib/whatsapp/unified-presence';
 import {

@@ -2,7 +2,6 @@ import { createClient as createAdminClient } from '@supabase/supabase-js';
 import { formatUazApiNumber, addUazApiContact, normalizeBaseUrl } from '@/lib/whatsapp/uazapi-client';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { isRealWhatsAppContact } from '@/lib/whatsapp/phone-utils';
-import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
 import { notifyClientPresence } from '@/lib/ai/auto-reply-debouncer';
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
 import { sendWhatsAppPresence } from '@/lib/whatsapp/unified-presence';
@@ -989,28 +988,9 @@ export async function processUazApiEvent(
     }
   }
 
-  // Trigger AI auto-reply for inbound customer messages
+  // Calculate shouldTriggerAi for inbound customer messages so caller (e.g. webhook after()) can dispatch
   const isOrder = Boolean(followerOrderParams);
   const shouldTriggerAi = Boolean(!fromMe && trimmed && !isEmojiOnly && !isIgnoredText && isFreshMessage);
-
-  if (shouldTriggerAi && !isOrder && !options?.skipAiDispatch) {
-    try {
-      if (traceId) {
-        TraceLogger.log(traceId, '04', 'AGENT TRIGGERED', { conversationId, text: trimmed });
-      }
-      console.log(`[UazAPI Event Processor] Dispatching AI auto-reply for conv ${conversationId}, account ${connection.account_id}, message: ${trimmed}`);
-      await dispatchInboundToAiReply({
-        accountId: connection.account_id,
-        conversationId,
-        contactId,
-        configOwnerUserId: userId,
-        messageId: externalMessageId,
-        immediate: false,
-      });
-    } catch (err) {
-      console.error('[UazAPI Event Processor] AI auto-reply dispatch error:', err);
-    }
-  }
 
   return {
     success: true,
