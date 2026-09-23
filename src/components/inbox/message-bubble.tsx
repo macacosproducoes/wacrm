@@ -78,12 +78,19 @@ function MessageContent({
     message.content_type === "image" ||
     Boolean(
       message.media_url &&
+        message.content_type !== "video" &&
+        message.content_type !== "audio" &&
+        message.content_type !== "document" &&
         (
           message.content_text === "[Imagem]" ||
           message.content_text === "[Figurinha]" ||
+          message.content_text === "[Mensagem]" ||
           message.media_type?.startsWith("image/") ||
           /\.(jpe?g|png|gif|webp|bmp|svg)(\?.*)?$/i.test(message.media_url) ||
-          /\.(jpe?g|png|gif|webp)(\?.*)?$/i.test(message.content_text || "")
+          /\.(jpe?g|png|gif|webp)(\?.*)?$/i.test(message.content_text || "") ||
+          message.media_url.includes("mmg.whatsapp.net") ||
+          message.media_url.includes("/api/whatsapp/uazapi/media") ||
+          message.media_url.includes("/files/")
         )
     );
 

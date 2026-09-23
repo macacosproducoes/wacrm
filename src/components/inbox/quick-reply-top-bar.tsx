@@ -22,7 +22,10 @@ import {
   Folder,
   Pencil,
   Trash2,
+  GripVertical,
+  Loader2,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { QuickReply, QuickReplyKind } from "@/types";
 import {
@@ -38,29 +41,37 @@ import {
   replaceQuickReplyVariables,
   type VariableContext,
 } from "@/lib/inbox/quick-reply-variables";
-import type { QuickReplyCategory } from "@/lib/inbox/categories";
 
 interface QuickReplyTopBarProps {
   quickReplies: QuickReply[];
   loading?: boolean;
-  contactContext: VariableContext;
+  contactContext?: VariableContext;
   onSelectText: (text: string) => void;
   onDirectSendText?: (text: string) => void;
   onSelectAudio: (qr: QuickReply, simulateRecording: boolean) => void;
   onSelectMedia: (qr: QuickReply) => void;
   onSelectSequence: (qr: QuickReply) => void;
   onOpenAudioLibrary: () => void;
-  onOpenCreateReply: (defaultKind?: QuickReplyKind, itemToEdit?: QuickReply) => void;
-  onToggleFavorite?: (id: string, currentFav: boolean) => void;
+  onOpenCreateReply: (defaultKind: QuickReplyKind, itemToEdit?: QuickReply) => void;
+  onToggleFavorite?: (qr: QuickReply) => void;
   onRefreshReplies?: () => void;
+}
+
+interface QuickReplyCategory {
+  id: string;
+  name: string;
+  count: number;
 }
 
 type FilterType = "all" | "favorite" | "text" | "audio" | "sequence" | "media";
 
-const KIND_COLORS: Record<string, { bg: string; text: string; border: string; label: string; icon: string; dot: string }> = {
+const KIND_COLORS: Record<
+  string,
+  { bg: string; text: string; border: string; label: string; icon: string; dot: string }
+> = {
   text: {
     bg: "bg-amber-500/10 hover:bg-amber-500/20",
-    text: "text-amber-600 dark:text-amber-400",
+    text: "text-amber-700 dark:text-amber-400",
     border: "border-amber-500/30",
     label: "Texto",
     icon: "🟨",
@@ -68,15 +79,15 @@ const KIND_COLORS: Record<string, { bg: string; text: string; border: string; la
   },
   audio: {
     bg: "bg-purple-500/10 hover:bg-purple-500/20",
-    text: "text-purple-600 dark:text-purple-400",
+    text: "text-purple-700 dark:text-purple-300",
     border: "border-purple-500/30",
     label: "Áudio",
-    icon: "🟪",
+    icon: "🎙️",
     dot: "bg-purple-500",
   },
   sequence: {
     bg: "bg-orange-500/10 hover:bg-orange-500/20",
-    text: "text-orange-600 dark:text-orange-400",
+    text: "text-orange-700 dark:text-orange-400",
     border: "border-orange-500/30",
     label: "Sequência",
     icon: "🟧",
@@ -91,12 +102,12 @@ const KIND_COLORS: Record<string, { bg: string; text: string; border: string; la
     dot: "bg-blue-500",
   },
   video: {
-    bg: "bg-cyan-500/10 hover:bg-cyan-500/20",
-    text: "text-cyan-600 dark:text-cyan-400",
-    border: "border-cyan-500/30",
+    bg: "bg-emerald-500/10 hover:bg-emerald-500/20",
+    text: "text-emerald-600 dark:text-emerald-400",
+    border: "border-emerald-500/30",
     label: "Vídeo",
     icon: "🟩",
-    dot: "bg-cyan-500",
+    dot: "bg-emerald-500",
   },
   document: {
     bg: "bg-red-500/10 hover:bg-red-500/20",
@@ -141,6 +152,19 @@ export function QuickReplyTopBar({
   const [categories, setCategories] = useState<QuickReplyCategory[]>([]);
   const [localItems, setLocalItems] = useState<QuickReply[]>(quickReplies);
 
+  // Drag and drop reordering state
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+
+  // Audio / Item rename state
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
+  const [savingRename, setSavingRename] = useState(false);
+
+  // Delete confirmation state
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
   // Active 3-second instant send countdown state
   const [pendingSend, setPendingSend] = useState<PendingSend | null>(null);
   const countdownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -171,20 +195,85 @@ export function QuickReplyTopBar({
     }
   };
 
-  const handleDeleteItem = async (e: React.MouseEvent, item: QuickReply) => {
+  const handleMoveItem = async (fromId: string, toId: string) => {
+    if (fromId === toId) return;
+    const currentList = [...localItems];
+    const fromIdx = currentList.findIndex((a) => a.id === fromId);
+    const toIdx = currentList.findIndex((a) => a.id === toId);
+    if (fromIdx === -1 || toIdx === -1) return;
+
+    const [moved] = currentList.splice(fromIdx, 1);
+    currentList.splice(toIdx, 0, moved);
+    setLocalItems(currentList);
+
+    try {
+      const orders = currentList.map((item, index) => ({ id: item.id, order_index: index }));
+      await fetch("/api/quick-replies", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orders }),
+      });
+      onRefreshReplies?.();
+      toast.success("Ordem dos áudios/respostas atualizada com sucesso!");
+    } catch {
+      toast.error("Erro ao salvar ordem.");
+    }
+  };
+
+  const handleStartRename = (item: QuickReply, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingId(item.id);
+    setEditingTitle(item.title);
+  };
+
+  const handleSaveRename = async (id: string) => {
+    const trimmed = editingTitle.trim();
+    if (!trimmed) {
+      toast.error("O título não pode ficar vazio.");
+      return;
+    }
+    setSavingRename(true);
+    try {
+      const res = await fetch(`/api/quick-replies/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: trimmed }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Falha ao renomear áudio.");
+      }
+      setLocalItems((prev) => prev.map((a) => (a.id === id ? { ...a, title: trimmed } : a)));
+      setEditingId(null);
+      onRefreshReplies?.();
+      toast.success(`Áudio renomeado para "${trimmed}"!`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Falha ao renomear.");
+    } finally {
+      setSavingRename(false);
+    }
+  };
+
+  const handleConfirmDelete = async (item: QuickReply, e: React.MouseEvent) => {
     e.stopPropagation();
     if (pendingSend?.qr.id === item.id) {
       cancelPendingSend();
     }
-    if (!window.confirm(`Deseja realmente excluir permanentemente "${item.title}"?`)) return;
+    setDeletingId(item.id);
     try {
       const res = await fetch(`/api/quick-replies/${item.id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Falha ao excluir");
-      toast.success(`"${item.title}" foi excluída com sucesso!`);
-      await loadItems();
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Falha ao excluir.");
+      }
+      setLocalItems((prev) => prev.filter((a) => a.id !== item.id));
+      setConfirmDeleteId(null);
+      toast.success(`"${item.title}" foi excluído com sucesso!`);
       onRefreshReplies?.();
-    } catch {
-      toast.error("Erro ao excluir resposta rápida.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Erro ao excluir áudio.");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -213,7 +302,7 @@ export function QuickReplyTopBar({
   }, []);
 
   const filteredItems = useMemo(() => {
-    return quickReplies.filter((item) => {
+    return localItems.filter((item) => {
       if (item.is_active === false) return false;
       if (selectedCategory !== "all") {
         if (item.category !== selectedCategory && item.category_id !== selectedCategory) {
@@ -227,13 +316,13 @@ export function QuickReplyTopBar({
       if (filter === "media") return ["image", "video", "document", "media"].includes(item.kind);
       return true;
     });
-  }, [quickReplies, filter, selectedCategory]);
+  }, [localItems, filter, selectedCategory]);
 
   const favoritesCount = useMemo(() => {
-    return quickReplies.filter((i) => i.is_favorite && i.is_active !== false).length;
-  }, [quickReplies]);
+    return localItems.filter((i) => i.is_favorite && i.is_active !== false).length;
+  }, [localItems]);
 
-  // Execute actual send after 3 seconds
+  // Execute actual send after 3 seconds - humanized audio simulation enabled by default!
   const executeDispatch = (qr: QuickReply, textToSend?: string) => {
     // Record usage count
     void fetch(`/api/quick-replies/${qr.id}/use`, { method: "POST" }).catch(() => {});
@@ -245,7 +334,8 @@ export function QuickReplyTopBar({
         onSelectText(textToSend);
       }
     } else if (qr.kind === "audio") {
-      onSelectAudio(qr, false);
+      // 🎙️ Humanized Audio sending: simulate "Gravando áudio..." before delivery
+      onSelectAudio(qr, true);
     } else if (qr.kind === "sequence") {
       onSelectSequence(qr);
     } else if (["image", "video", "document", "media"].includes(qr.kind)) {
@@ -261,14 +351,21 @@ export function QuickReplyTopBar({
   };
 
   const handleCardClick = (qr: QuickReply, isShiftPressed: boolean) => {
+    // Do not trigger send if user is renaming or confirming delete
+    if (editingId === qr.id || confirmDeleteId === qr.id) return;
+
     const rawText = qr.content_text || "";
-    const substituted = replaceQuickReplyVariables(rawText, contactContext);
+    const substituted = replaceQuickReplyVariables(rawText, contactContext || {});
 
     // If SHIFT is pressed: Place into composer for manual editing
     if (isShiftPressed) {
       if (qr.kind === "text") {
         onSelectText(substituted);
-        toast.info("Texto inserido no campo para edição antes de enviar.");
+        toast.info("Texto inserido no campo para edição.");
+      } else if (qr.kind === "audio") {
+        onSelectAudio(qr, false);
+      } else if (qr.kind === "sequence") {
+        onSelectSequence(qr);
       } else if (["image", "video", "document", "media"].includes(qr.kind)) {
         onSelectMedia(qr);
       } else {
@@ -466,7 +563,7 @@ export function QuickReplyTopBar({
             <Tooltip>
               <TooltipTrigger
                 type="button"
-                onClick={() => onOpenCreateReply()}
+                onClick={() => onOpenCreateReply("text")}
                 className="inline-flex items-center gap-1 rounded bg-primary/10 hover:bg-primary/20 text-primary px-2 py-0.5 text-[11px] font-medium border border-primary/20 cursor-pointer"
               >
                 <Plus className="h-3 w-3" />
@@ -494,30 +591,149 @@ export function QuickReplyTopBar({
             filteredItems.map((item) => {
               const kindCfg = KIND_COLORS[item.kind] || KIND_COLORS.text;
               const isFav = Boolean(item.is_favorite);
+              const isAudio = item.kind === "audio";
+              const isEditing = editingId === item.id;
+              const isConfirmingDelete = confirmDeleteId === item.id;
+
+              if (isEditing) {
+                return (
+                  <div
+                    key={item.id}
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex items-center gap-1 px-2 py-1 rounded-md border border-purple-500 bg-background shadow-xs shrink-0"
+                  >
+                    <Input
+                      value={editingTitle}
+                      onChange={(e) => setEditingTitle(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void handleSaveRename(item.id);
+                        if (e.key === "Escape") setEditingId(null);
+                      }}
+                      autoFocus
+                      className="h-6 w-36 px-1.5 text-xs bg-background"
+                      placeholder="Novo nome..."
+                    />
+                    <button
+                      type="button"
+                      disabled={savingRename || !editingTitle.trim()}
+                      onClick={() => void handleSaveRename(item.id)}
+                      className="p-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+                      title="Salvar novo nome"
+                    >
+                      {savingRename ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Check className="h-3 w-3" />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingId(null)}
+                      className="p-1 rounded hover:bg-muted text-muted-foreground"
+                      title="Cancelar"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                );
+              }
+
+              if (isConfirmingDelete) {
+                return (
+                  <div
+                    key={item.id}
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-md border border-red-500/40 bg-red-500/10 text-xs text-red-600 dark:text-red-400 shadow-xs shrink-0 animate-in fade-in"
+                  >
+                    <span className="text-[11px] font-medium">Excluir da base?</span>
+                    <button
+                      type="button"
+                      disabled={deletingId === item.id}
+                      onClick={(e) => void handleConfirmDelete(item, e)}
+                      className="px-1.5 py-0.5 rounded bg-red-600 hover:bg-red-700 text-white text-[10px] font-bold"
+                    >
+                      {deletingId === item.id ? (
+                        <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                      ) : (
+                        "Sim"
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirmDeleteId(null);
+                      }}
+                      className="px-1 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+                    >
+                      Não
+                    </button>
+                  </div>
+                );
+              }
 
               return (
                 <div
                   key={item.id}
+                  draggable={true}
+                  onDragStart={(e) => {
+                    setDraggedId(item.id);
+                    e.dataTransfer.setData("text/plain", item.id);
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (dragOverId !== item.id) setDragOverId(item.id);
+                  }}
+                  onDragLeave={(e) => {
+                    e.stopPropagation();
+                    if (dragOverId === item.id) setDragOverId(null);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (draggedId && draggedId !== item.id) {
+                      void handleMoveItem(draggedId, item.id);
+                    }
+                    setDraggedId(null);
+                    setDragOverId(null);
+                  }}
+                  onDragEnd={() => {
+                    setDraggedId(null);
+                    setDragOverId(null);
+                  }}
                   onClick={(e) => handleCardClick(item, e.shiftKey)}
                   className={cn(
-                    "group relative flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium cursor-pointer transition-all duration-150 shrink-0 select-none shadow-2xs",
+                    "group relative flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium cursor-pointer transition-all duration-150 shrink-0 select-none shadow-2xs",
                     kindCfg.bg,
                     kindCfg.border,
                     kindCfg.text,
-                    "hover:scale-[1.02] active:scale-[0.98]"
+                    dragOverId === item.id
+                      ? "border-purple-500 ring-2 ring-purple-500/50 bg-purple-500/20 scale-105"
+                      : "hover:scale-[1.02] active:scale-[0.98]"
                   )}
-                  title={`Clique: Envia em 3s | Shift+Clique: Insere no texto`}
+                  title={`Arraste para mudar de lugar | Clique: Envia em 3s (${isAudio ? "com 'Gravando áudio...'" : "direto"})`}
                 >
+                  {/* Drag Handle */}
+                  <div
+                    className="cursor-grab active:cursor-grabbing opacity-50 group-hover:opacity-100 hover:text-foreground transition-opacity"
+                    title="Arraste para mover de lugar"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <GripVertical className="h-3 w-3" />
+                  </div>
+
                   {/* Color dot indicator */}
                   <span className={cn("h-2 w-2 rounded-full shrink-0", kindCfg.dot)} />
 
-                  {/* Title & snippet */}
-                  <span className="truncate max-w-[150px] sm:max-w-[200px] font-semibold">
+                  {/* Title */}
+                  <span className="truncate max-w-[140px] sm:max-w-[180px] font-semibold">
                     {item.title}
                   </span>
 
                   {/* Audio duration tag if applicable */}
-                  {item.kind === "audio" && item.media_duration && (
+                  {isAudio && item.media_duration && (
                     <span className="text-[10px] opacity-75 font-mono">
                       {Math.floor(Number(item.media_duration))}s
                     </span>
@@ -528,23 +744,23 @@ export function QuickReplyTopBar({
                     <Star className="h-3 w-3 fill-amber-400 text-amber-400 shrink-0 ml-0.5" />
                   )}
 
-                  {/* Action buttons: Editar e Excluir */}
-                  <div className="flex items-center gap-0.5 ml-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {/* Action buttons: Renomear e Excluir */}
+                  <div className="flex items-center gap-0.5 ml-1 opacity-70 group-hover:opacity-100 transition-opacity">
                     <button
                       type="button"
-                      title="Ajustar / Editar resposta"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onOpenCreateReply(item.kind, item);
-                      }}
-                      className="p-1 rounded hover:bg-foreground/15 text-foreground/70 hover:text-foreground transition-colors"
+                      title="Renomear áudio/resposta"
+                      onClick={(e) => handleStartRename(item, e)}
+                      className="p-1 rounded hover:bg-foreground/15 text-foreground/75 hover:text-foreground transition-colors"
                     >
                       <Pencil className="h-3 w-3" />
                     </button>
                     <button
                       type="button"
-                      title="Excluir resposta"
-                      onClick={(e) => handleDeleteItem(e, item)}
+                      title="Excluir áudio/resposta"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirmDeleteId(item.id);
+                      }}
                       className="p-1 rounded hover:bg-red-500/20 text-muted-foreground hover:text-red-500 transition-colors"
                     >
                       <Trash2 className="h-3 w-3" />

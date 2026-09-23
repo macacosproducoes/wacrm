@@ -92,8 +92,47 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
       return
     }
 
+    // Mode: IA APENAS EM CONVERSAS NOVAS (only_new_conversations = true)
+    // When enabled, AI responds only to new customer contacts who have no prior conversation history.
+    // If there are previous conversations or old messages (> 24 hours ago, or human agent messages),
+    // the thread remains strictly for human atendimento.
+    if (config.onlyNewConversations) {
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      const { data: oldMsgs } = await db
+        .from('messages')
+        .select('id, sender_type, created_at')
+        .eq('conversation_id', conversationId)
+        .or(`created_at.lt.${oneDayAgo},sender_type.eq.agent`)
+        .limit(1)
+
+      if (oldMsgs && oldMsgs.length > 0) {
+        console.log(`[ai auto-reply] SKIP: conversa antiga detectada para conv ${conversationId} — direcionando para atendimento humanizado (only_new_conversations=true)`)
+        await recordAiDecision(db, {
+          conversationId,
+          accountId,
+          status: 'skipped',
+          reason: 'Conversa antiga com histórico prévio — direcionado para atendimento humanizado',
+          steps: [
+            {
+              name: '1. Recebimento da Mensagem',
+              status: 'success',
+              detail: 'Mensagem recebida e analisada',
+              timestamp: new Date().toISOString(),
+            },
+            {
+              name: '2. Filtro de Conversas Novas',
+              status: 'skipped',
+              detail: 'Esta conversa possui mensagens antigas ou histórico prévio com atendente. Conforme configuração da conta, contatos com histórico são direcionados exclusivamente para atendimento humanizado.',
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        })
+        return
+      }
+    }
+
     // When "IA Ativa nesta conversa" is turned ON (ai_autoreply_disabled === false),
-    // the AI MUST ALWAYS respond to incoming customer messages without fail!
+    // the AI responds to incoming customer messages even if an agent was previously assigned.
     const isExplicitlyEnabledOnThread = conv.ai_autoreply_disabled === false
 
     if (!isExplicitlyEnabledOnThread) {
@@ -142,45 +181,6 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
           ],
         })
         return
-      }
-
-      // Mode: IA APENAS EM CONVERSAS NOVAS (only_new_conversations = true)
-      // When enabled, AI responds only to new customer contacts who have no prior conversation history.
-      // If there are previous conversations or old messages (> 24 hours ago, or human agent messages),
-      // the thread remains for human atendimento.
-      if (config.onlyNewConversations) {
-        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-        const { data: oldMsgs } = await db
-          .from('messages')
-          .select('id, sender_type, created_at')
-          .eq('conversation_id', conversationId)
-          .or(`created_at.lt.${oneDayAgo},sender_type.eq.agent`)
-          .limit(1)
-
-        if (oldMsgs && oldMsgs.length > 0) {
-          console.log(`[ai auto-reply] SKIP: conversa antiga detectada para conv ${conversationId} — direcionando para atendimento humanizado (only_new_conversations=true)`)
-          await recordAiDecision(db, {
-            conversationId,
-            accountId,
-            status: 'skipped',
-            reason: 'Conversa antiga com histórico prévio — direcionado para atendimento humanizado',
-            steps: [
-              {
-                name: '1. Recebimento da Mensagem',
-                status: 'success',
-                detail: 'Mensagem recebida e analisada',
-                timestamp: new Date().toISOString(),
-              },
-              {
-                name: '2. Filtro de Conversas Novas',
-                status: 'skipped',
-                detail: 'Esta conversa possui mensagens antigas ou histórico prévio com atendente. Conforme configuração da conta, contatos com histórico são direcionados exclusivamente para atendimento humanizado.',
-                timestamp: new Date().toISOString(),
-              },
-            ],
-          })
-          return
-        }
       }
 
       const { data: autoResponders } = await db
@@ -363,6 +363,7 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
       kind: string
       content_text?: string | null
       media_url?: string | null
+      media_duration?: number | null
     }> = []
 
     try {
@@ -382,6 +383,7 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
             kind: String(meta.type || row.kind || 'text'),
             content_text: (row.content_text as string) || null,
             media_url: (row.media_url as string) || (meta.media_url as string) || null,
+            media_duration: (row.media_duration as number) || (meta.media_duration as number) || null,
           }
         })
       }
@@ -472,24 +474,68 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
       return
     }
 
-    // 🎙️ Humanization: send "gravando áudio..." only if the reply is an audio message
-    if (contact?.phone && text) {
-      const isAudio =
+    // 🎙️ / 💬 Humanization: Send live presence to WhatsApp BEFORE sending
+    let isAudioReply = false
+    let audioUrlToSend: string | null = null
+    let audioDurationSec = 5
+    let textToSend = text
+
+    // Check if the AI referenced a saved Quick Reply (e.g. [quick_reply: /audio_1] or ID)
+    const qrMatch = text.match(/\[quick_reply:\s*([^\]]+)\]/i)
+    if (qrMatch) {
+      const qTarget = qrMatch[1].trim().replace(/^\//, '').toLowerCase()
+      const foundQr = quickReplies.find((q) =>
+        q.id?.toLowerCase() === qTarget ||
+        (q.shortcut && q.shortcut.replace(/^\//, '').toLowerCase() === qTarget) ||
+        (q.title && q.title.toLowerCase() === qTarget)
+      )
+      if (foundQr) {
+        if (foundQr.kind === 'audio' || foundQr.media_url) {
+          isAudioReply = true
+          audioUrlToSend = foundQr.media_url || null
+          audioDurationSec = Math.max(2, Number(foundQr.media_duration) || 5)
+          textToSend = `[Áudio: ${foundQr.title}]`
+        } else if (foundQr.content_text) {
+          textToSend = text.replace(qrMatch[0], foundQr.content_text).trim()
+        }
+      }
+    }
+
+    if (!isAudioReply) {
+      isAudioReply =
         /^\[(áudio|audio|gravando|voz)\]/i.test(text.trim()) ||
         text.toLowerCase().includes('[áudio]') ||
         text.toLowerCase().includes('[audio]') ||
         text.trim().startsWith('🎙️')
+    }
 
-      if (isAudio) {
+    // 1. Live WhatsApp Presence:
+    // Audio: "Gravando áudio..." with realistic recording duration
+    // Text: "Digitando..." with realistic typing speed (~28 chars/sec)
+    if (contact?.phone) {
+      if (isAudioReply) {
+        const recordingMs = Math.min(Math.max(audioDurationSec * 1000, 3200), 7500)
         void sendWhatsAppPresence({
           accountId,
           phoneNumber: contact.phone,
           presence: 'recording',
-          delayMs: 5000,
+          delayMs: recordingMs + 2000,
         })
 
         if (process.env.NODE_ENV !== 'test') {
-          await new Promise((resolve) => setTimeout(resolve, 1200))
+          await new Promise((resolve) => setTimeout(resolve, recordingMs))
+        }
+      } else {
+        const typingMs = Math.min(5200, Math.max(2000, Math.round(textToSend.length * 28)))
+        void sendWhatsAppPresence({
+          accountId,
+          phoneNumber: contact.phone,
+          presence: 'composing',
+          delayMs: typingMs + 2000,
+        })
+
+        if (process.env.NODE_ENV !== 'test') {
+          await new Promise((resolve) => setTimeout(resolve, typingMs))
         }
       }
     }
@@ -515,67 +561,78 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
       try {
         const baileys = await import('@/lib/whatsapp/baileys/baileys-manager');
         if (baileys.isBaileysConnected(accountId)) {
-          const sendRes = await baileys.sendBaileysText(accountId, contact.phone, text)
+          let sendRes: { messageId: string }
+          if (isAudioReply && audioUrlToSend) {
+            sendRes = await baileys.sendBaileysMedia(
+              accountId,
+              contact.phone,
+              audioUrlToSend,
+              'audio',
+            )
+          } else {
+            sendRes = await baileys.sendBaileysText(accountId, contact.phone, textToSend)
+          }
 
-        const cleanMsgId = String(sendRes.messageId || '').includes(':')
-          ? String(sendRes.messageId).split(':').pop()!
-          : String(sendRes.messageId || `bot_${Date.now()}`)
+          const cleanMsgId = String(sendRes.messageId || '').includes(':')
+            ? String(sendRes.messageId).split(':').pop()!
+            : String(sendRes.messageId || `bot_${Date.now()}`)
 
-        const botMsgRow = {
-          conversation_id: conversationId,
-          sender_type: 'bot' as const,
-          content_type: 'text' as const,
-          content_text: text,
-          message_id: cleanMsgId,
-          status: 'sent' as const,
-          ai_generated: true,
-          created_at: new Date().toISOString(),
-        }
+          const botMsgRow = {
+            conversation_id: conversationId,
+            sender_type: 'bot' as const,
+            content_type: (isAudioReply && audioUrlToSend ? 'audio' : 'text') as 'audio' | 'text',
+            content_text: textToSend,
+            media_url: audioUrlToSend || null,
+            message_id: cleanMsgId,
+            status: 'sent' as const,
+            ai_generated: true,
+            created_at: new Date().toISOString(),
+          }
 
-        const { data: insertedMsg } = await db.from('messages').insert(botMsgRow).select('id, created_at').maybeSingle()
+          const { data: insertedMsg } = await db.from('messages').insert(botMsgRow).select('id, created_at').maybeSingle()
 
-        await updateConversationWithMessage(db, {
-          conversationId,
-          messageText: text,
-          messageTimestamp: botMsgRow.created_at,
-          isInbound: false,
-          senderType: 'bot',
-        })
+          await updateConversationWithMessage(db, {
+            conversationId,
+            messageText: textToSend,
+            messageTimestamp: botMsgRow.created_at,
+            isInbound: false,
+            senderType: 'bot',
+          })
 
-        whatsappBus.emitInboxEvent({
-          accountId,
-          conversationId,
-          eventType: 'INSERT',
-          message: {
-            id: insertedMsg?.id || sendRes.messageId,
-            ...botMsgRow,
-          },
-          conversation: {
-            id: conversationId,
-            last_message_text: text,
-            last_message_at: botMsgRow.created_at,
-            unread_count: 0,
-          },
-        })
+          whatsappBus.emitInboxEvent({
+            accountId,
+            conversationId,
+            eventType: 'INSERT',
+            message: {
+              id: insertedMsg?.id || sendRes.messageId,
+              ...botMsgRow,
+            },
+            conversation: {
+              id: conversationId,
+              last_message_text: textToSend,
+              last_message_at: botMsgRow.created_at,
+              unread_count: 0,
+            },
+          })
 
-        // Mark processed customer messages in this turn
-        try {
-          await db
-            .from('messages')
-            .update({ ai_processed_at: new Date().toISOString() })
-            .eq('conversation_id', conversationId)
-            .eq('sender_type', 'customer')
-            .is('ai_processed_at', null)
-        } catch {
-          // non-blocking
-        }
+          // Mark processed customer messages in this turn
+          try {
+            await db
+              .from('messages')
+              .update({ ai_processed_at: new Date().toISOString() })
+              .eq('conversation_id', conversationId)
+              .eq('sender_type', 'customer')
+              .is('ai_processed_at', null)
+          } catch {
+            // non-blocking
+          }
 
-        void sendWhatsAppPresence({
-          accountId,
-          phoneNumber: contact.phone,
-          presence: 'paused',
-        })
-        return
+          void sendWhatsAppPresence({
+            accountId,
+            phoneNumber: contact.phone,
+            presence: 'paused',
+          })
+          return
         }
       } catch (baileysErr) {
         console.warn('[ai auto-reply] Baileys send failed, trying other providers:', baileysErr)
@@ -605,10 +662,21 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
 
         if (token && contact?.phone) {
           const baseUrl = normalizeBaseUrl(uazProviderConfig.base_url)
-          const sendRes = await sendUazApiText(baseUrl, token, {
-            number: contact.phone,
-            text,
-          })
+          let sendRes: { messageId: string; status?: string }
+
+          if (isAudioReply && audioUrlToSend) {
+            sendRes = await sendUazApiMedia(baseUrl, token, {
+              number: contact.phone,
+              url: audioUrlToSend,
+              type: 'ptt',
+              ptt: true,
+            })
+          } else {
+            sendRes = await sendUazApiText(baseUrl, token, {
+              number: contact.phone,
+              text: textToSend,
+            })
+          }
 
           const cleanMsgId = String(sendRes.messageId || '').includes(':')
             ? String(sendRes.messageId).split(':').pop()!
@@ -617,8 +685,9 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
           const botMsgRow = {
             conversation_id: conversationId,
             sender_type: 'bot' as const,
-            content_type: 'text' as const,
-            content_text: text,
+            content_type: (isAudioReply && audioUrlToSend ? 'audio' : 'text') as 'audio' | 'text',
+            content_text: textToSend,
+            media_url: audioUrlToSend || null,
             message_id: cleanMsgId,
             status: 'sent' as const,
             ai_generated: true,
@@ -629,7 +698,7 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
 
           await updateConversationWithMessage(db, {
             conversationId,
-            messageText: text,
+            messageText: textToSend,
             messageTimestamp: botMsgRow.created_at,
             isInbound: false,
             senderType: 'bot',
@@ -645,7 +714,7 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
             },
             conversation: {
               id: conversationId,
-              last_message_text: text,
+              last_message_text: textToSend,
               last_message_at: botMsgRow.created_at,
               unread_count: 0,
             },
@@ -723,7 +792,7 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
       userId: configOwnerUserId,
       conversationId,
       contactId: targetContactId,
-      text,
+      text: textToSend,
       aiGenerated: true,
     })
 

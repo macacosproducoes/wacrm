@@ -299,7 +299,20 @@ export async function GET(request: Request) {
       }
     }
 
-    return NextResponse.json({ messages });
+    const sanitizedMessages = messages.map((m) => {
+      if (
+        m.media_url &&
+        (m.media_url.includes('mmg.whatsapp.net') || m.media_url.includes('.enc'))
+      ) {
+        return {
+          ...m,
+          media_url: `/api/whatsapp/uazapi/media?messageId=${encodeURIComponent(m.message_id || m.id)}`,
+        };
+      }
+      return m;
+    });
+
+    return NextResponse.json({ messages: sanitizedMessages });
   } catch (err) {
     console.error('Internal error in messages API:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

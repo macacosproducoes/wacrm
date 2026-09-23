@@ -70,6 +70,44 @@ export function UazApiConfigPanel() {
   const [capturingLeads, setCapturingLeads] = useState(false);
   const [syncingHistory, setSyncingHistory] = useState(false);
 
+  // IA apenas em conversas novas (sincronizado com /api/ai/config)
+  const [onlyNewConversations, setOnlyNewConversations] = useState(false);
+  const [updatingOnlyNew, setUpdatingOnlyNew] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/ai/config')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d && typeof d.only_new_conversations === 'boolean') {
+          setOnlyNewConversations(d.only_new_conversations);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleToggleOnlyNew = async (val: boolean) => {
+    setOnlyNewConversations(val);
+    setUpdatingOnlyNew(true);
+    try {
+      const res = await fetch('/api/ai/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ only_new_conversations: val }),
+      });
+      if (!res.ok) throw new Error('Falha ao salvar preferência');
+      toast.success(
+        val
+          ? 'IA configurada para responder APENAS novas conversas (SIM)!'
+          : 'IA configurada para responder todas as conversas (NÃO)!'
+      );
+    } catch {
+      toast.error('Erro ao atualizar modo de novas conversas');
+      setOnlyNewConversations(!val);
+    } finally {
+      setUpdatingOnlyNew(false);
+    }
+  };
+
   const webhookUrl =
     typeof window !== 'undefined'
       ? `${window.location.origin}/api/whatsapp/uazapi/webhook`
@@ -460,6 +498,37 @@ export function UazApiConfigPanel() {
           <Plus className="h-4 w-4" />
           Nova Instância
         </Button>
+      </div>
+
+      {/* Regra de Ouro: IA Apenas em Conversas Novas */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl border-2 border-purple-500/30 bg-purple-500/5 dark:bg-purple-500/10 shadow-xs">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <h4 className="font-semibold text-sm text-foreground flex items-center gap-1.5">
+              🎯 IA Apenas em Conversas Novas
+            </h4>
+            <span
+              className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border shadow-2xs ${
+                onlyNewConversations
+                  ? 'bg-emerald-500 text-white border-emerald-600'
+                  : 'bg-muted text-muted-foreground border-border'
+              }`}
+            >
+              {onlyNewConversations ? 'SIM (Ativo)' : 'NÃO (Desativado)'}
+            </span>
+          </div>
+          <p className="text-xs text-muted-foreground leading-relaxed max-w-xl">
+            Ao marcar <strong>SIM</strong>, a IA responde <strong>apenas novos leads/contatos que chegarem</strong>. Todas as conversas antigas e contatos já existentes serão mantidos automaticamente para <strong>atendimento manual</strong> sem resposta automática da IA.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+          <Switch
+            checked={onlyNewConversations}
+            disabled={updatingOnlyNew}
+            onCheckedChange={handleToggleOnlyNew}
+            className="data-[state=checked]:bg-emerald-600"
+          />
+        </div>
       </div>
 
       {/* Grid: Connections List & Form */}

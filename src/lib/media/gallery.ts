@@ -42,9 +42,15 @@ export function collectMediaGallery(messages: Message[]): MediaGalleryItem[] {
   for (const message of messages) {
     const kind = galleryKind(message);
     if (!kind || !message.media_url) continue;
+    const resolvedUrl =
+      message.media_url.includes("mmg.whatsapp.net") ||
+      message.media_url.includes(".enc") ||
+      message.media_url.includes("uazapi.com/files/")
+        ? `/api/whatsapp/uazapi/media?messageId=${encodeURIComponent(message.message_id || message.id)}`
+        : message.media_url;
     items.push({
       messageId: message.id,
-      url: message.media_url,
+      url: resolvedUrl,
       kind,
       caption: message.content_text || undefined,
       createdAt: message.created_at,

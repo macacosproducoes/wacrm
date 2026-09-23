@@ -282,12 +282,16 @@ export function AudioLibraryModal({
   };
 
   const handleDragOver = (e: React.DragEvent) => {
+    // If dragging an internal audio card to reorder, ignore the file dropzone overlay!
+    if (draggedAudioId) return;
+    if (!e.dataTransfer.types.includes("Files")) return;
     e.preventDefault();
     e.stopPropagation();
     if (!isDragging) setIsDragging(true);
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
+    if (draggedAudioId) return;
     e.preventDefault();
     e.stopPropagation();
     if (e.currentTarget.contains(e.relatedTarget as Node)) return;
@@ -295,6 +299,8 @@ export function AudioLibraryModal({
   };
 
   const handleDrop = async (e: React.DragEvent) => {
+    // If dragging an internal audio card, ignore parent dropzone
+    if (draggedAudioId) return;
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);

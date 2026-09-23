@@ -159,8 +159,10 @@ export function ConversationList({
   // older value — the very next render updates the ref for any
   // subsequent async completion.
   const onConversationsLoadedRef = useRef(onConversationsLoaded);
+  const existingConversationsRef = useRef(conversations);
   useEffect(() => {
     onConversationsLoadedRef.current = onConversationsLoaded;
+    existingConversationsRef.current = conversations;
   });
 
   useEffect(() => {
@@ -168,40 +170,63 @@ export function ConversationList({
     let cancelled = false;
 
     (async () => {
-      const { data, error } = await supabase
-        .from("conversations")
-        .select(CONVERSATION_SELECT)
-        .order("last_message_at", { ascending: false });
+      const timestamp = new Date().toLocaleTimeString('pt-BR');
+      console.log(`[TIMELINE] ${timestamp} SOURCE=ConversationList:fetchTrigger resyncToken=${resyncToken} currentCount=${existingConversationsRef.current.length}`);
+      console.log(`[INBOX] load conversations trigger: resyncToken=${resyncToken}, currentCount=${existingConversationsRef.current.length}`);
+      let list: any = null;
+
+      // 1. Try Supabase browser client
+      try {
+        const { data, error } = await supabase
+          .from("conversations")
+          .select(CONVERSATION_SELECT)
+          .order("last_message_at", { ascending: false, nullsFirst: false })
+          .order("updated_at", { ascending: false });
+
+        if (!error && data && data.length > 0) {
+          list = data;
+        } else if (error) {
+          console.warn("[INBOX] Supabase client fetch warning:", error.message);
+        }
+      } catch (clientErr) {
+        console.warn("[INBOX] Supabase client fetch threw:", clientErr);
+      }
 
       if (cancelled) return;
 
-      let list = data;
-
-      if (error) {
-        // Fallback to internal server-side API
+      // 2. If client query returned 0 rows or errored, ALWAYS fallback to server API
+      if (!list || list.length === 0) {
         try {
           const apiRes = await fetch("/api/inbox/conversations").then((r) => r.json());
-          if (apiRes?.conversations) {
+          if (apiRes?.conversations && apiRes.conversations.length > 0) {
             list = apiRes.conversations;
-          } else {
-            console.error("Failed to fetch conversations:", error);
-            setLoading(false);
-            return;
+          } else if (apiRes?.conversations) {
+            list = apiRes.conversations;
           }
         } catch (apiErr) {
-          console.error("Failed to fetch conversations:", apiErr);
-          setLoading(false);
-          return;
+          console.error("[INBOX] API fallback error:", apiErr);
         }
       }
 
+      if (cancelled) return;
+
       const normalizedList = normalizeConversations(list ?? []);
+      console.log(`[INBOX] conversation count fetched: ${normalizedList.length} (previous: ${existingConversationsRef.current.length})`);
+
+      // 3. DEFENSIVE STATE PRESERVATION (ETAPA 7):
+      // If the newly fetched list is empty, BUT we already have valid conversations in memory,
+      // DO NOT wipe the list! Preserve existing state and avoid showing a false empty state.
+      if (normalizedList.length === 0 && existingConversationsRef.current.length > 0) {
+        console.warn(`[INBOX] Preserving ${existingConversationsRef.current.length} existing conversations — incoming fetch was unexpectedly empty.`);
+        setLoading(false);
+        return;
+      }
+
       onConversationsLoadedRef.current(normalizedList);
       setLoading(false);
 
-      // If user has 0 conversations, auto-trigger a sync in the background so new users (like CEGCELL)
-      // don't see an empty screen and immediately get their WhatsApp chats populated!
-      if (normalizedList.length === 0 && !hasAutoSyncedRef.current) {
+      // 4. If user actually has 0 conversations on first load, trigger background sync
+      if (normalizedList.length === 0 && existingConversationsRef.current.length === 0 && !hasAutoSyncedRef.current) {
         hasAutoSyncedRef.current = true;
         fetch('/api/whatsapp/sync', {
           method: 'POST',
@@ -213,6 +238,7 @@ export function ConversationList({
             if (data?.success && !cancelled) {
               const res = await fetch('/api/inbox/conversations').then((r) => r.json());
               if (res.conversations && res.conversations.length > 0 && !cancelled) {
+                console.log(`[INBOX] Auto-sync populated ${res.conversations.length} conversations`);
                 onConversationsLoadedRef.current(res.conversations);
               }
             }
@@ -224,9 +250,6 @@ export function ConversationList({
     return () => {
       cancelled = true;
     };
-    // `resyncToken` is included so the parent can force a refetch when
-    // the realtime channel reconnects or the tab regains focus — catches
-    // up on any events sent while the WS was disconnected or throttled.
   }, [resyncToken]);
 
   // Tag definitions for the filter picker — loaded once so labels/colours

@@ -81,10 +81,34 @@ export function AiConfig() {
   const [isActive, setIsActive] = useState(false);
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(false);
   const [onlyNewConversations, setOnlyNewConversations] = useState(false);
+  const [updatingOnlyNew, setUpdatingOnlyNew] = useState(false);
   const [maxPerConversation, setMaxPerConversation] = useState(3);
   // Empty string = leave unassigned (shared queue).
   const [handoffAgentId, setHandoffAgentId] = useState('');
   const [members, setMembers] = useState<AccountMember[]>([]);
+
+  const handleToggleOnlyNew = async (checked: boolean) => {
+    setOnlyNewConversations(checked);
+    setUpdatingOnlyNew(true);
+    try {
+      const res = await fetch('/api/ai/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ only_new_conversations: checked }),
+      });
+      if (!res.ok) throw new Error('Falha ao salvar preferência');
+      toast.success(
+        checked
+          ? '🎯 IA configurada: responderá APENAS conversas novas (SIM)! Conversas antigas ficam 100% manuais.'
+          : 'IA responderá todas as conversas elegíveis (NÃO).'
+      );
+    } catch {
+      toast.error('Erro ao atualizar modo de conversas novas');
+      setOnlyNewConversations(!checked);
+    } finally {
+      setUpdatingOnlyNew(false);
+    }
+  };
 
   // Guard keyed on the account (not a bare boolean) so an in-place
   // account switch — ownership transfer, multi-account membership —
@@ -265,6 +289,46 @@ export function AiConfig() {
         title={t('title')}
         description={t('description')}
       />
+
+      {/* 🎯 DESTAQUE EM BRANCO NO TOPO: IA APENAS EM CONVERSAS NOVAS */}
+      <div className="mb-6 rounded-2xl border-2 border-slate-200 dark:border-slate-700 bg-white dark:bg-card p-5 sm:p-6 shadow-sm text-foreground">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-5">
+          <div className="space-y-2 max-w-2xl">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-base sm:text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <span className="text-xl">🎯</span> IA Apenas em Conversas Novas
+              </span>
+              <span
+                className={`text-xs font-bold px-3 py-1 rounded-full transition-all shadow-xs ${
+                  onlyNewConversations
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-slate-100 dark:bg-muted text-slate-700 dark:text-muted-foreground border border-slate-300 dark:border-border'
+                }`}
+              >
+                {onlyNewConversations ? 'SIM (Ativo)' : 'NÃO (Desativado)'}
+              </span>
+              {updatingOnlyNew && (
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+              )}
+            </div>
+            <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+              Ao marcar <strong className="text-emerald-600 dark:text-emerald-400 font-semibold">SIM</strong>, a inteligência artificial responderá <strong className="text-slate-900 dark:text-white underline decoration-emerald-500/60 decoration-2 underline-offset-2">apenas novos leads/contatos que chegarem</strong>. Todas as conversas e contatos antigos são mantidos automaticamente em <strong className="text-slate-900 dark:text-white font-semibold">atendimento 100% manual</strong> sem resposta automática da IA.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3.5 shrink-0 self-start sm:self-center bg-slate-50 dark:bg-muted/40 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-border">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+              {onlyNewConversations ? 'Sim (Novas)' : 'Não (Todas)'}
+            </span>
+            <Switch
+              checked={onlyNewConversations}
+              onCheckedChange={handleToggleOnlyNew}
+              disabled={disabled || updatingOnlyNew}
+              className="data-[state=checked]:bg-emerald-600 scale-110"
+            />
+          </div>
+        </div>
+      </div>
 
       {configured && (
         <div className="mb-6 rounded-xl border border-primary/20 bg-primary/5 p-4 shadow-xs">
@@ -514,24 +578,25 @@ export function AiConfig() {
               />
             </div>
 
-            <div className="flex items-center justify-between gap-4 rounded-md border border-border p-3 bg-muted/20">
-              <div>
+            <div className="flex items-center justify-between gap-4 rounded-xl border-2 border-purple-500/30 p-4 bg-purple-500/5 dark:bg-purple-500/10 shadow-xs">
+              <div className="space-y-1">
                 <div className="flex items-center gap-2">
-                  <p className="text-sm font-medium text-foreground">
-                    IA apenas em conversas novas
+                  <p className="text-sm font-semibold text-foreground">
+                    🎯 IA apenas em conversas novas
                   </p>
-                  <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${onlyNewConversations ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30' : 'bg-muted text-muted-foreground border border-border'}`}>
-                    {onlyNewConversations ? 'SIM' : 'NÃO'}
+                  <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border shadow-2xs ${onlyNewConversations ? 'bg-emerald-500 text-white border-emerald-600' : 'bg-muted text-muted-foreground border-border'}`}>
+                    {onlyNewConversations ? 'SIM (Ativo)' : 'NÃO (Desativado)'}
                   </span>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Quando ativo, a IA responde apenas para clientes novos que não têm conversas antigas. Caso contrário, direciona para atendimento humanizado.
+                <p className="text-xs text-muted-foreground leading-relaxed max-w-xl">
+                  Ao marcar <strong>SIM</strong>, a IA responderá <strong>apenas novos leads/contatos que chegarem</strong>. Todas as conversas antigas e contatos já existentes serão mantidos automaticamente para <strong>atendimento manual</strong> sem resposta automática da IA.
                 </p>
               </div>
               <Switch
                 checked={onlyNewConversations}
-                onCheckedChange={setOnlyNewConversations}
-                disabled={disabled || !isActive}
+                onCheckedChange={handleToggleOnlyNew}
+                disabled={disabled || updatingOnlyNew}
+                className="data-[state=checked]:bg-emerald-600"
               />
             </div>
 

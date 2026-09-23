@@ -20,7 +20,11 @@ export async function downloadMediaMessage(message: Message): Promise<void> {
   let url = message.media_url;
   if (!url) throw new Error("This message has no attachment.");
 
-  if (url.includes("mmg.whatsapp.net") || url.includes(".enc")) {
+  if (
+    url.includes("mmg.whatsapp.net") ||
+    url.includes(".enc") ||
+    url.includes("uazapi.com/files/")
+  ) {
     url = `/api/whatsapp/uazapi/media?messageId=${encodeURIComponent(message.message_id || message.id)}`;
   }
 

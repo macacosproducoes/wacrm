@@ -124,16 +124,23 @@ export function MediaImageBubble({
 }) {
   // If URL is raw encrypted WhatsApp CDN (mmg.whatsapp.net or .enc), route through UazAPI resolver
   const targetUrl =
-    message.media_url?.includes("mmg.whatsapp.net") || message.media_url?.includes(".enc")
+    message.media_url?.includes("mmg.whatsapp.net") ||
+    message.media_url?.includes(".enc") ||
+    message.media_url?.includes("uazapi.com/files/")
       ? `/api/whatsapp/uazapi/media?messageId=${encodeURIComponent(message.message_id || message.id)}`
       : message.media_url;
 
   const { src, status } = useMediaBlobUrl(targetUrl);
   // The fetch can succeed and the bytes still not be a decodable image.
   const [broken, setBroken] = useState(false);
-  const { downloading, download } = useMediaDownload(message, t);
+  const resolvedMessage = targetUrl !== message.media_url ? { ...message, media_url: targetUrl } : message;
+  const { downloading, download } = useMediaDownload(resolvedMessage, t);
 
-  if (status === "error" || broken) {
+  // If useMediaBlobUrl is successful, use object URL `src`.
+  // If status is 'error', fall back to direct `targetUrl` for browser native rendering before giving up.
+  const displaySrc = src || (status === "error" && !broken ? targetUrl : null);
+
+  if (broken || (!displaySrc && status === "error")) {
     return (
       <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-border/60 bg-muted/40 p-4 text-center min-w-44 max-w-60 shadow-xs">
         <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -158,7 +165,7 @@ export function MediaImageBubble({
     );
   }
 
-  if (status !== "ready" || !src) {
+  if (!displaySrc) {
     return (
       <MediaPlaceholder>
         <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
@@ -169,10 +176,11 @@ export function MediaImageBubble({
   const image = (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={src}
+      src={displaySrc}
       alt={t("imageAlt")}
       className={cn(MEDIA_BOX, "rounded-lg object-contain")}
       onError={() => setBroken(true)}
+      loading="lazy"
     />
   );
 
@@ -213,14 +221,22 @@ export function MediaVideoBubble({
   onOpen?: () => void;
   t: Translator;
 }) {
-  const { downloading, download } = useMediaDownload(message, t);
+  const targetUrl =
+    message.media_url?.includes("mmg.whatsapp.net") ||
+    message.media_url?.includes(".enc") ||
+    message.media_url?.includes("uazapi.com/files/")
+      ? `/api/whatsapp/uazapi/media?messageId=${encodeURIComponent(message.message_id || message.id)}`
+      : message.media_url;
+
+  const resolvedMessage = targetUrl !== message.media_url ? { ...message, media_url: targetUrl } : message;
+  const { downloading, download } = useMediaDownload(resolvedMessage, t);
 
   return (
     <div className="relative w-fit">
       {/* Plain URL, not a blob: the element should stream rather than wait
           for up to 16 MB to land. */}
       <video
-        src={message.media_url}
+        src={targetUrl}
         controls
         preload="metadata"
         className={cn(MEDIA_BOX, "rounded-lg")}
@@ -255,7 +271,9 @@ export function MediaAudioBubble({
   t: Translator;
 }) {
   const targetUrl =
-    message.media_url?.includes("mmg.whatsapp.net") || message.media_url?.includes(".enc")
+    message.media_url?.includes("mmg.whatsapp.net") ||
+    message.media_url?.includes(".enc") ||
+    message.media_url?.includes("uazapi.com/files/")
       ? `/api/whatsapp/uazapi/media?messageId=${encodeURIComponent(message.message_id || message.id)}`
       : message.media_url;
 
@@ -282,12 +300,20 @@ export function MediaDocumentBubble({
   message: Message;
   t: Translator;
 }) {
-  const { downloading, download } = useMediaDownload(message, t);
+  const targetUrl =
+    message.media_url?.includes("mmg.whatsapp.net") ||
+    message.media_url?.includes(".enc") ||
+    message.media_url?.includes("uazapi.com/files/")
+      ? `/api/whatsapp/uazapi/media?messageId=${encodeURIComponent(message.message_id || message.id)}`
+      : message.media_url;
+
+  const resolvedMessage = targetUrl !== message.media_url ? { ...message, media_url: targetUrl } : message;
+  const { downloading, download } = useMediaDownload(resolvedMessage, t);
 
   return (
     <div className="flex items-center gap-2">
       <a
-        href={message.media_url}
+        href={targetUrl}
         target="_blank"
         rel="noopener noreferrer"
         className="flex min-w-0 flex-1 items-center gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm hover:bg-muted"

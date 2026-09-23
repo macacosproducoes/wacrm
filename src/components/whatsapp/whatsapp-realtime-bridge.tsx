@@ -29,12 +29,24 @@ export function WhatsAppRealtimeBridge() {
 
     async function tick() {
       if (!isMounted || isSyncingRef.current) return;
+      
+      const isRefreshDisabled = typeof window !== 'undefined' && (
+        Boolean((window as unknown as Record<string, unknown>).DEBUG_DISABLE_INBOX_REFRESH) ||
+        Boolean(process.env.NEXT_PUBLIC_DEBUG_DISABLE_INBOX_REFRESH)
+      );
+      if (isRefreshDisabled) {
+        console.log('[TIMELINE] WhatsAppRealtimeBridge: tick SKIPPED (DEBUG_DISABLE_INBOX_REFRESH=true)');
+        timer = setTimeout(tick, 10000);
+        return;
+      }
+
       // Pause completely if tab is in background / hidden to save connections
       if (typeof document !== 'undefined' && document.hidden) {
         timer = setTimeout(tick, 10000);
         return;
       }
 
+      console.log(`[TIMELINE] ${new Date().toLocaleTimeString('pt-BR')} SOURCE=WhatsAppRealtimeBridge:tick starting sync-realtime`);
       isSyncingRef.current = true;
       let nextDelay = 25000; // 25s base heartbeat to prevent exhausting Supabase connection pool
       try {

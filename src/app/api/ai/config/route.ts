@@ -57,11 +57,12 @@ export async function GET() {
     // Check only_new_conversations from whatsapp_connections
     let onlyNewConversations = false
     try {
-      const { data: conn } = await supabase
+      const { data: conns } = await supabase
         .from('whatsapp_connections')
         .select('provider_config')
         .eq('account_id', accountId)
-        .maybeSingle()
+        .order('updated_at', { ascending: false })
+      const conn = conns?.[0]
       if (conn?.provider_config && typeof conn.provider_config === 'object') {
         onlyNewConversations = Boolean((conn.provider_config as any).only_new_conversations)
       }
@@ -99,6 +100,53 @@ export async function POST(request: Request) {
 
     const body = await request.json().catch(() => null)
     if (!body || typeof body !== 'object') return bad('Invalid request body')
+
+    // Handle quick toggle of only_new_conversations without requiring full config payload
+    if (typeof body.only_new_conversations === 'boolean' && !body.provider) {
+      try {
+        const { data: conns } = await supabase
+          .from('whatsapp_connections')
+          .select('id, provider_config')
+          .eq('account_id', accountId)
+        if (conns && conns.length > 0) {
+          for (const conn of conns) {
+            const updated = {
+              ...(conn.provider_config || {}),
+              only_new_conversations: body.only_new_conversations,
+            }
+            await supabase
+              .from('whatsapp_connections')
+              .update({ provider_config: updated })
+              .eq('id', conn.id)
+          }
+        }
+
+        if (body.only_new_conversations === true) {
+          // When "IA apenas em conversas novas" is turned ON (SIM):
+          // All existing conversations are transitioned to manual mode (ai_autoreply_disabled = true),
+          // guaranteeing that all previous conversations stay strictly manual without AI auto-reply,
+          // while new incoming leads/conversations will receive automated AI replies.
+          const { error: convErr } = await supabase
+            .from('conversations')
+            .update({ ai_autoreply_disabled: true })
+            .eq('account_id', accountId)
+          if (convErr) {
+            console.warn('[ai/config POST] failed to set existing conversations to manual:', convErr)
+          }
+        }
+
+        return NextResponse.json({
+          success: true,
+          only_new_conversations: body.only_new_conversations,
+        })
+      } catch (connErr) {
+        console.warn('[ai/config POST] failed to update only_new_conversations:', connErr)
+        return NextResponse.json(
+          { error: 'Falha ao salvar preferência de novas conversas' },
+          { status: 500 }
+        )
+      }
+    }
 
     const provider = body.provider as AiProvider
     if (provider !== 'openai' && provider !== 'anthropic' && provider !== 'gemini') {
@@ -315,20 +363,35 @@ export async function POST(request: Request) {
 
     if (typeof body.only_new_conversations === 'boolean') {
       try {
-        const { data: conn } = await supabase
+        const { data: conns } = await supabase
           .from('whatsapp_connections')
           .select('id, provider_config')
           .eq('account_id', accountId)
-          .maybeSingle()
-        if (conn) {
-          const updated = {
-            ...(conn.provider_config || {}),
-            only_new_conversations: body.only_new_conversations,
+        if (conns && conns.length > 0) {
+          for (const conn of conns) {
+            const updated = {
+              ...(conn.provider_config || {}),
+              only_new_conversations: body.only_new_conversations,
+            }
+            await supabase
+              .from('whatsapp_connections')
+              .update({ provider_config: updated })
+              .eq('id', conn.id)
           }
-          await supabase
-            .from('whatsapp_connections')
-            .update({ provider_config: updated })
-            .eq('id', conn.id)
+        }
+
+        if (body.only_new_conversations === true) {
+          // When "IA apenas em conversas novas" is turned ON (SIM):
+          // All existing conversations are transitioned to manual mode (ai_autoreply_disabled = true),
+          // guaranteeing that all previous conversations stay strictly manual without AI auto-reply,
+          // while new incoming leads/conversations will receive automated AI replies.
+          const { error: convErr } = await supabase
+            .from('conversations')
+            .update({ ai_autoreply_disabled: true })
+            .eq('account_id', accountId)
+          if (convErr) {
+            console.warn('[ai/config POST] failed to set existing conversations to manual:', convErr)
+          }
         }
       } catch (connErr) {
         console.warn('[ai/config POST] failed to update only_new_conversations:', connErr)
@@ -365,4 +428,8 @@ export async function DELETE() {
   } catch (err) {
     return toErrorResponse(err)
   }
+}
+
+export async function PATCH(request: Request) {
+  return POST(request)
 }

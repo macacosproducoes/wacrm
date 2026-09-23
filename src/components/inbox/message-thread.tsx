@@ -199,6 +199,8 @@ export function MessageThread({
   const { user } = useAuth();
   const { getPresence, getRow, now } = usePresence();
   const [loading, setLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [hasFetchedSuccessfully, setHasFetchedSuccessfully] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -401,8 +403,10 @@ export function MessageThread({
   // during render (React 19 refs rule); consumers only read `.current`
   // inside the async fetch completion, which runs after the render.
   const onMessagesLoadedRef = useRef(onMessagesLoaded);
+  const existingMessagesRef = useRef(messages);
   useEffect(() => {
     onMessagesLoadedRef.current = onMessagesLoaded;
+    existingMessagesRef.current = messages;
   });
 
   const conversationId = conversation?.id;
@@ -421,6 +425,10 @@ export function MessageThread({
     [conversationId],
   );
 
+  useEffect(() => {
+    setHasFetchedSuccessfully(false);
+  }, [conversationId]);
+
   // Fetch messages whenever the selected conversation changes. Kept
   // separate from the unread-reset effect so that incoming messages
   // arriving while the thread is open don't trigger a full refetch —
@@ -432,45 +440,83 @@ export function MessageThread({
     let cancelled = false;
 
     (async () => {
-      // If we don't have messages for this specific conversation yet, activate loading
-      if (!messages || messages.length === 0 || messages[0]?.conversation_id !== conversationId) {
+      const timestamp = new Date().toLocaleTimeString('pt-BR');
+      console.log(`[TIMELINE] ${timestamp} SOURCE=MessageThread:fetchTrigger conv=${conversationId} resyncToken=${resyncToken} currentCount=${existingMessagesRef.current?.length ?? 0}`);
+      console.log(`[INBOX] load messages trigger: conv=${conversationId}, resyncToken=${resyncToken}, currentCount=${existingMessagesRef.current?.length ?? 0}`);
+      const hasCurrentMessages = Boolean(
+        existingMessagesRef.current &&
+        existingMessagesRef.current.length > 0 &&
+        existingMessagesRef.current.some((m) => m.conversation_id === conversationId)
+      );
+
+      if (!hasCurrentMessages) {
         setLoading(true);
       }
+      setFetchError(null);
 
       try {
-        const { data, error } = await supabase
-          .from("messages")
-          .select("*")
-          .eq("conversation_id", conversationId)
-          .order("created_at", { ascending: true });
+        let loaded: Message[] | null = null;
+
+        // 1. Query Supabase browser client
+        try {
+          const { data, error } = await supabase
+            .from("messages")
+            .select("*")
+            .eq("conversation_id", conversationId)
+            .order("created_at", { ascending: true });
+
+          if (!error && data && data.length > 0) {
+            loaded = data;
+          } else if (error) {
+            console.warn("[INBOX] Supabase client message query warning:", error.message);
+          }
+        } catch (clientErr) {
+          console.warn("[INBOX] Supabase client message query threw:", clientErr);
+        }
 
         if (cancelled) return;
 
-        if (!error && data && data.length > 0) {
-          onMessagesLoadedRef.current(data);
-          setLoading(false);
-          // Background sync to ensure we didn't miss recent WhatsApp messages
-          fetch(`/api/inbox/messages?conversation_id=${encodeURIComponent(conversationId)}`)
-            .then((r) => r.json())
-            .then((apiRes) => {
-              if (!cancelled && apiRes?.messages && apiRes.messages.length > data.length) {
-                onMessagesLoadedRef.current(apiRes.messages);
-              }
-            })
-            .catch(() => {});
-          return;
+        // 2. If client returned 0 messages or errored, fallback to server API (admin service role)
+        if (!loaded || loaded.length === 0) {
+          try {
+            const apiRes = await fetch(
+              `/api/inbox/messages?conversation_id=${encodeURIComponent(conversationId)}`
+            ).then((r) => r.json());
+
+            if (!cancelled && apiRes?.messages && apiRes.messages.length > 0) {
+              loaded = apiRes.messages;
+            } else if (apiRes?.error) {
+              console.warn("[INBOX] /api/inbox/messages API error:", apiRes.error);
+              setFetchError(apiRes.error);
+            }
+          } catch (apiErr) {
+            console.error("[INBOX] /api/inbox/messages fetch threw:", apiErr);
+            setFetchError("Falha na sincronização de mensagens.");
+          }
         }
 
-        // If DB has 0 messages or errored, sync live messages from WhatsApp via /api/inbox/messages
-        const apiRes = await fetch(
-          `/api/inbox/messages?conversation_id=${encodeURIComponent(conversationId)}`
-        ).then((r) => r.json());
+        if (cancelled) return;
 
-        if (!cancelled && apiRes?.messages && apiRes.messages.length > 0) {
-          onMessagesLoadedRef.current(apiRes.messages);
+        if (loaded && loaded.length > 0) {
+          setHasFetchedSuccessfully(true);
+          console.log(`[TIMELINE] ${new Date().toLocaleTimeString('pt-BR')} SOURCE=MessageThread:fetched conv=${conversationId} loadedCount=${loaded.length}`);
+          console.log(`[INBOX] message count: loaded ${loaded.length} messages for conv ${conversationId}`);
+          onMessagesLoadedRef.current(loaded);
+        } else if (!cancelled) {
+          setHasFetchedSuccessfully(true);
+          // DEFENSIVE STATE PRESERVATION (ETAPA 7):
+          // If we had existing messages, PRESERVE them rather than destroying state!
+          if (hasCurrentMessages) {
+            console.log(`[TIMELINE] ${new Date().toLocaleTimeString('pt-BR')} SOURCE=MessageThread:preserveExisting conv=${conversationId} count=${existingMessagesRef.current?.length ?? 0}`);
+            console.warn(`[INBOX] Preserving ${existingMessagesRef.current?.length ?? 0} existing messages for conv ${conversationId}; incoming query returned empty`);
+          } else {
+            console.log(`[TIMELINE] ${new Date().toLocaleTimeString('pt-BR')} SOURCE=MessageThread:verifiedEmpty conv=${conversationId}`);
+            console.log(`[INBOX] Conversation ${conversationId} verified empty (0 messages)`);
+          }
         }
       } catch (err) {
-        console.error("Error loading messages:", err);
+        console.error("[INBOX] Error loading messages:", err);
+        setFetchError("Erro ao carregar mensagens");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -1445,10 +1491,21 @@ export function MessageThread({
       {/* Messages Area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
         {effectiveMessages.length === 0 ? (
-          loading || conversation?.last_message_text || conversation?.last_message_at ? (
+          !hasFetchedSuccessfully || loading || conversation?.last_message_text || conversation?.last_message_at || (conversation?.unread_count ?? 0) > 0 ? (
             <div className="flex flex-col items-center justify-center py-12 gap-3">
               <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
               <p className="text-xs text-muted-foreground animate-pulse">Carregando mensagens...</p>
+            </div>
+          ) : fetchError ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-3 text-center">
+              <p className="text-sm text-destructive">{fetchError}</p>
+              <button
+                type="button"
+                onClick={() => onRefresh?.()}
+                className="text-xs text-primary underline underline-offset-2 hover:opacity-80 cursor-pointer"
+              >
+                Tentar novamente
+              </button>
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-12">

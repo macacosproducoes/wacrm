@@ -45,6 +45,7 @@ export async function GET(request: Request) {
       .from('conversations')
       .select('*, contact:contacts(*, contact_tags(tags(*)))')
       .eq('account_id', profile.account_id)
+      .order('last_message_at', { ascending: false, nullsFirst: false })
       .order('updated_at', { ascending: false });
 
     if (id) {

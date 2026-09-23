@@ -63,7 +63,10 @@ export class MediaResponseError extends Error {
 
 /** True for inbound media that has to be pulled through our proxy. */
 export function isProxiedMediaUrl(url: string): boolean {
-  return url.startsWith(PROXY_PREFIX);
+  return (
+    url.startsWith(PROXY_PREFIX) ||
+    url.startsWith('/api/whatsapp/uazapi/media')
+  );
 }
 
 function remember(url: string, blob: Blob): void {

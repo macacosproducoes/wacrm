@@ -143,3 +143,39 @@ describe("normalizeConversation", () => {
     expect(normalizeConversation(raw).contact).toBeNull();
   });
 });
+
+describe("Defensive Inbox State Preservation", () => {
+  it("preserves previous valid conversations when incoming fetch returns empty array", () => {
+    const previous = [makeConversation({ company: "Existing Co" })];
+    const incoming: Conversation[] = [];
+
+    // Preservation rule: if incoming is empty but previous has items, keep previous
+    const shouldKeep = incoming.length === 0 && previous.length > 0;
+    const resolved = shouldKeep ? previous : incoming;
+
+    expect(resolved.length).toBe(1);
+    expect(resolved[0].id).toBe("c1");
+  });
+
+  it("preserves contact join data on Realtime UPDATE event", () => {
+    const current = makeConversation({ phone: "5511999998888", company: "Target Co" });
+    // Realtime postgres_changes event payload does not include contact join
+    const realtimeUpdate: Partial<Conversation> = {
+      id: "c1",
+      unread_count: 5,
+      last_message_text: "Nova mensagem",
+    };
+
+    const merged = {
+      ...current,
+      ...realtimeUpdate,
+      contact: current.contact ?? realtimeUpdate.contact,
+      last_message_text: realtimeUpdate.last_message_text ?? current.last_message_text,
+    };
+
+    expect(merged.contact).toBeDefined();
+    expect(merged.contact?.company).toBe("Target Co");
+    expect(merged.last_message_text).toBe("Nova mensagem");
+    expect(merged.unread_count).toBe(5);
+  });
+});

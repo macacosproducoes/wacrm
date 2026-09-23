@@ -18,6 +18,7 @@ import { WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUazApiSse } from "@/hooks/use-uazapi-sse";
 import { RealtimeStatusBar } from "@/components/inbox/realtime-status-bar";
+import { useAuth } from "@/hooks/use-auth";
 
 // Remembers the agent's show/hide choice for the desktop contact panel
 // across reloads and sessions (device-scoped, like the theme prefs).
@@ -44,12 +45,42 @@ function InboxPageInner() {
    * automatically instead of showing the empty center panel.
    */
   const deepLinkConvId = searchParams.get("c");
+  const { user, accountId } = useAuth();
+
+  // Diagnostic Flag (ETAPA 9): DEBUG_DISABLE_INBOX_REALTIME
+  const isRealtimeDisabled = typeof window !== "undefined" && (
+    Boolean((window as unknown as Record<string, unknown>).DEBUG_DISABLE_INBOX_REALTIME) ||
+    Boolean(process.env.NEXT_PUBLIC_DEBUG_DISABLE_INBOX_REALTIME)
+  );
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversation, setActiveConversation] =
     useState<Conversation | null>(null);
   const [activeContact, setActiveContact] = useState<Contact | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+
+  const stateRef = useRef({
+    conversationsCount: 0,
+    messagesCount: 0,
+    selectedId: null as string | null,
+    contactName: null as string | null,
+  });
+  useEffect(() => {
+    stateRef.current = {
+      conversationsCount: conversations.length,
+      messagesCount: messages.length,
+      selectedId: activeConversation?.id ?? null,
+      contactName: activeContact?.name || activeContact?.phone || null,
+    };
+  }, [conversations.length, messages.length, activeConversation?.id, activeContact]);
+
+  const logTimeline = useCallback((source: string, extra?: Record<string, unknown>) => {
+    const timestamp = new Date().toLocaleTimeString("pt-BR");
+    console.log(
+      `[TIMELINE] ${timestamp} SOURCE=${source} user_id=${user?.id ?? "none"} account_id=${accountId ?? "none"} selected_id=${stateRef.current.selectedId ?? "none"} convs_count=${stateRef.current.conversationsCount} msgs_count=${stateRef.current.messagesCount} contact=${stateRef.current.contactName ?? "none"}` +
+      (extra ? ` payload=${JSON.stringify(extra)}` : "")
+    );
+  }, [user?.id, accountId]);
   const [whatsappConnected, setWhatsappConnected] = useState<boolean | null>(
     null
   );
@@ -153,7 +184,7 @@ function InboxPageInner() {
         .eq("id", convId)
         .maybeSingle();
 
-      if (error) {
+      if (error || !data) {
         // Fallback to internal server API (bypasses potential client RLS/parsing edge cases)
         try {
           const apiRes = await fetch(
@@ -172,6 +203,7 @@ function InboxPageInner() {
 
       if (!row) return;
       const fetched = normalizeConversation(row);
+      logTimeline("hydrateConversation", { convId, contact: fetched.contact?.name });
       setConversations((prev) => {
         const existing = prev.find((c) => c.id === fetched.id);
         if (existing) {
@@ -292,6 +324,7 @@ function InboxPageInner() {
         );
 
         if (isForActiveThread) {
+          logTimeline("handleMessageEvent:INSERT", { msgId: newMsg.id, convId: newMsg.conversation_id, forActive: true });
           setMessages((prev) => {
             // Avoid duplicates
             if (prev.some((m) => m.id === newMsg.id || (newMsg.message_id && m.message_id === newMsg.message_id))) return prev;
@@ -354,13 +387,14 @@ function InboxPageInner() {
       }
 
       if (event.eventType === "UPDATE") {
+        logTimeline("handleMessageEvent:UPDATE", { msgId: newMsg.id, status: newMsg.status });
         // Update message status
         setMessages((prev) =>
           prev.map((m) => (m.id === newMsg.id ? { ...m, ...newMsg } : m))
         );
       }
     },
-    [activeConversation, hydrateConversation]
+    [activeConversation, hydrateConversation, logTimeline]
   );
 
   // Handle realtime conversation events
@@ -373,6 +407,7 @@ function InboxPageInner() {
       const conv = event.new;
 
       if (event.eventType === "INSERT") {
+        logTimeline("handleConversationEvent:INSERT", { convId: conv.id });
         // Prepend immediately for snappy UX so the new conv shows in the
         // list right away, then hydrate to fill in the `contact` join
         // (realtime payloads never include joins). Skip both if we
@@ -388,6 +423,7 @@ function InboxPageInner() {
       }
 
       if (event.eventType === "UPDATE") {
+        logTimeline("handleConversationEvent:UPDATE", { convId: conv.id, last_message_text: conv.last_message_text });
         if (knownConvIdsRef.current.has(conv.id)) {
           // If this UPDATE is for the conv the user is currently viewing,
           // suppress the incoming unread_count — the user is reading it
@@ -401,6 +437,9 @@ function InboxPageInner() {
                 ? {
                     ...c,
                     ...conv,
+                    contact: c.contact ?? conv.contact,
+                    last_message_text: conv.last_message_text ?? c.last_message_text,
+                    last_message_at: conv.last_message_at ?? c.last_message_at,
                     unread_count: isActive ? 0 : conv.unread_count,
                   }
                 : c,
@@ -414,15 +453,23 @@ function InboxPageInner() {
           hydrateConversation(conv.id);
         }
 
-        // Update active conversation if it changed
+        // Update active conversation if it changed, strictly preserving contact join
         if (activeConversation && conv.id === activeConversation.id) {
           setActiveConversation((prev) =>
-            prev ? { ...prev, ...conv } : prev
+            prev
+              ? {
+                  ...prev,
+                  ...conv,
+                  contact: prev.contact ?? conv.contact,
+                  last_message_text: conv.last_message_text ?? prev.last_message_text,
+                  last_message_at: conv.last_message_at ?? prev.last_message_at,
+                }
+              : prev
           );
         }
       }
     },
-    [activeConversation, hydrateConversation]
+    [activeConversation, hydrateConversation, logTimeline]
   );
 
   // Subscribe to realtime. The `isConnected` flag below feeds the
@@ -433,7 +480,7 @@ function InboxPageInner() {
     channelName: "inbox-realtime",
     onMessageEvent: handleMessageEvent,
     onConversationEvent: handleConversationEvent,
-    enabled: true,
+    enabled: !isRealtimeDisabled,
   });
 
   /**
@@ -483,7 +530,7 @@ function InboxPageInner() {
    * Ingests messages directly with 0ms delay and syncs conversation summaries.
    */
   useUazApiSse({
-    enabled: true,
+    enabled: !isRealtimeDisabled,
     onMessage: useCallback((payload: Record<string, unknown>) => {
       // If event contains message data from internal whatsappBus or upstream
       if (payload.message && typeof payload.message === "object") {
@@ -508,10 +555,47 @@ function InboxPageInner() {
 
   const handleConversationsLoaded = useCallback(
     (loaded: Conversation[]) => {
+      logTimeline("handleConversationsLoaded", { incomingCount: loaded.length });
+      console.log(`[INBOX] handleConversationsLoaded: incoming count=${loaded.length}`);
+
+      // DEFENSIVE STATE PRESERVATION (ETAPA 7):
+      // If incoming list is unexpectedly empty but we already have conversations in state, preserve them!
+      if (loaded.length === 0) {
+        setConversations((prev) => {
+          if (prev.length > 0) {
+            console.warn(`[INBOX] Preserving ${prev.length} conversations in page state; ignoring empty loaded array`);
+            return prev;
+          }
+          return loaded;
+        });
+        return;
+      }
+
       setConversations(loaded);
-      // Resolve a pending deep-link here rather than in an effect — this
-      // is an event handler, so the setState calls below are allowed by
-      // react-hooks/set-state-in-effect. Runs once per ?c=<id> URL value
+
+      // PRESERVE SELECTED CONVERSATION & UPDATE IT (ETAPA 8):
+      setActiveConversation((currentActive) => {
+        if (!currentActive) return currentActive;
+        const fresh = loaded.find((c) => c.id === currentActive.id);
+        if (!fresh) return currentActive;
+        return {
+          ...currentActive,
+          ...fresh,
+          contact: fresh.contact || currentActive.contact,
+          last_message_text: fresh.last_message_text || currentActive.last_message_text,
+          last_message_at: fresh.last_message_at || currentActive.last_message_at,
+        };
+      });
+
+      // Synchronize activeContact with fresh contact data from loaded conversations
+      const currentSelectedId = stateRef.current.selectedId;
+      if (currentSelectedId) {
+        const fresh = loaded.find((c) => c.id === currentSelectedId);
+        if (fresh?.contact) {
+          setActiveContact((prev) => (fresh.contact ? { ...(prev || {}), ...fresh.contact } : prev));
+        }
+      }
+
       // Resolve a pending deep-link strictly ONCE on initial mount.
       // Subsequent realtime list refreshes or manual selections must never
       // snap the user back to the initial deep-link.
@@ -523,6 +607,7 @@ function InboxPageInner() {
         initialDeepLinkConsumedRef.current = true;
         const match = loaded.find((c) => c.id === deepLinkConvId);
         if (match) {
+          logTimeline("handleConversationsLoaded:deepLinkAutoSelect", { matchId: match.id });
           setActiveConversation(match);
           setActiveContact(match.contact ?? null);
           const cached = messagesCacheRef.current.get(match.id);
@@ -542,7 +627,8 @@ function InboxPageInner() {
               },
             ]);
           } else {
-            setMessages([]);
+            // PRESERVE LAST VALID STATE: do not wipe if existing messages already belong to this conversation
+            setMessages((prev) => (prev.length > 0 && prev.some((m) => m.conversation_id === match.id) ? prev : []));
           }
           if (match.unread_count > 0) {
             setConversations((prev) =>
@@ -554,13 +640,14 @@ function InboxPageInner() {
         }
       }
     },
-    [deepLinkConvId]
+    [deepLinkConvId, logTimeline]
   );
 
   const handleSelectConversation = useCallback(
     (conv: Conversation) => {
       // Re-clicking the already-active conversation is a no-op
       if (activeConversation?.id === conv.id) return;
+      logTimeline("handleSelectConversation", { selectedId: conv.id, last_msg: conv.last_message_text });
       setActiveConversation(conv);
       setActiveContact(conv.contact ?? null);
       
@@ -582,7 +669,8 @@ function InboxPageInner() {
           },
         ]);
       } else {
-        setMessages([]);
+        // PRESERVE LAST VALID STATE: do not wipe if existing messages already belong to this conversation
+        setMessages((prev) => (prev.length > 0 && prev.some((m) => m.conversation_id === conv.id) ? prev : []));
       }
 
       // Optimistically clear the unread badge for this conv.
@@ -603,13 +691,14 @@ function InboxPageInner() {
         window.history.replaceState(null, "", `/inbox?c=${conv.id}`);
       }
     },
-    [activeConversation?.id]
+    [activeConversation?.id, logTimeline]
   );
 
   // Mobile "back" — deselect the conversation so the list pane comes
   // back. Also clears the ?c= param silently so a refresh lands on the list
   // instead of re-opening the thread the user just backed out of.
   const handleCloseConversation = useCallback(() => {
+    logTimeline("handleCloseConversation", {});
     setActiveConversation(null);
     setActiveContact(null);
     setMessages([]);
@@ -617,17 +706,30 @@ function InboxPageInner() {
     if (typeof window !== "undefined") {
       window.history.replaceState(null, "", "/inbox");
     }
-  }, []);
+  }, [logTimeline]);
 
 
   const handleMessagesLoaded = useCallback((loaded: Message[]) => {
-    setMessages(loaded);
-    if (loaded && loaded.length > 0 && loaded[0]?.conversation_id) {
-      messagesCacheRef.current.set(loaded[0].conversation_id, loaded);
+    logTimeline("handleMessagesLoaded", { incomingCount: loaded?.length ?? 0 });
+    console.log(`[INBOX] handleMessagesLoaded: count=${loaded?.length ?? 0}`);
+    if (loaded && loaded.length > 0) {
+      setMessages(loaded);
+      if (loaded[0]?.conversation_id) {
+        messagesCacheRef.current.set(loaded[0].conversation_id, loaded);
+      }
+    } else if (loaded && loaded.length === 0) {
+      setMessages((prev) => {
+        if (prev.length > 0) {
+          console.warn(`[INBOX] Preserving ${prev.length} existing messages; ignoring empty incoming messages array`);
+          return prev;
+        }
+        return [];
+      });
     }
-  }, []);
+  }, [logTimeline]);
 
   const handleNewMessage = useCallback((msg: Message) => {
+    logTimeline("handleNewMessage", { msgId: msg.id, convId: msg.conversation_id });
     setMessages((prev) => {
       if (prev.some((m) => m.id === msg.id)) return prev;
       const withoutOptimistic = prev.filter((m) => !m.id.startsWith("temp-"));
@@ -637,10 +739,11 @@ function InboxPageInner() {
       }
       return next;
     });
-  }, []);
+  }, [logTimeline]);
 
   const handleUpdateMessage = useCallback(
     (id: string, updates: Partial<Message>) => {
+      logTimeline("handleUpdateMessage", { id, updates });
       setMessages((prev) => {
         const next = prev.map((m) => (m.id === id ? { ...m, ...updates } : m));
         if (next.length > 0 && next[0]?.conversation_id) {
@@ -649,7 +752,7 @@ function InboxPageInner() {
         return next;
       });
     },
-    []
+    [logTimeline]
   );
 
   const handleStatusChange = useCallback(

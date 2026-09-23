@@ -21,12 +21,19 @@ export async function GET(request: Request) {
 
     const admin = getAdminClient();
 
-    // 1. Find message by message_id or id
-    const { data: message } = await admin
-      .from('messages')
-      .select('id, conversation_id, message_id, content_type, media_url')
-      .or(`message_id.eq.${messageId},id.eq.${messageId}`)
-      .maybeSingle();
+    // 1. Find message by message_id or id safely (avoid invalid uuid cast error)
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId);
+    let msgQuery = admin.from('messages').select('id, conversation_id, message_id, content_type, media_url');
+    if (isUuid) {
+      msgQuery = msgQuery.or(`id.eq.${messageId},message_id.eq.${messageId}`);
+    } else {
+      msgQuery = msgQuery.eq('message_id', messageId);
+    }
+    const { data: message, error: msgErr } = await msgQuery.maybeSingle();
+
+    if (msgErr) {
+      console.warn('[UazAPI Media] Message lookup error:', msgErr);
+    }
 
     if (!message) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
@@ -34,6 +41,23 @@ export async function GET(request: Request) {
 
     // If media_url is already a decrypted, accessible URL (not raw encrypted mmg.whatsapp.net)
     if (message.media_url && !message.media_url.includes('mmg.whatsapp.net') && !message.media_url.includes('.enc')) {
+      try {
+        const fileRes = await fetch(message.media_url);
+        if (fileRes.ok) {
+          const contentType = fileRes.headers.get('content-type') || 'image/jpeg';
+          const buffer = await fileRes.arrayBuffer();
+          return new Response(buffer, {
+            status: 200,
+            headers: {
+              'Content-Type': contentType,
+              'Cache-Control': 'public, max-age=604800, immutable',
+              'Access-Control-Allow-Origin': '*',
+            },
+          });
+        }
+      } catch (proxyErr) {
+        console.warn('[UazAPI Media] Direct fetch of existing media_url failed:', proxyErr);
+      }
       return NextResponse.redirect(message.media_url, 302);
     }
 
@@ -72,7 +96,7 @@ export async function GET(request: Request) {
     const baseUrl = normalizeBaseUrl(activeConn.provider_config?.base_url || activeConn.api_url);
     const targetMsgId = message.message_id || messageId;
 
-    // 3. Call UazAPI /message/download (request only public fileURL for instant redirect)
+    // 3. Call UazAPI /message/download (request public fileURL and base64 fallback)
     const dlRes = await fetch(`${baseUrl}/message/download`, {
       method: 'POST',
       headers: {
@@ -82,9 +106,9 @@ export async function GET(request: Request) {
       body: JSON.stringify({
         id: targetMsgId,
         return_link: true,
-        return_base64: false,
+        return_base64: true,
       }),
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(8000),
     });
 
     if (!dlRes.ok) {
@@ -100,14 +124,34 @@ export async function GET(request: Request) {
     // If a public fileURL was generated
     if (dlData?.fileURL) {
       const publicUrl = String(dlData.fileURL);
+      const mime = dlData.mimetype || 'image/jpeg';
       // Persist the resolved public URL so subsequent requests hit it directly
       await admin
         .from('messages')
         .update({
           media_url: publicUrl,
-          content_type: dlData.mimetype?.startsWith('image/') ? 'image' : message.content_type || 'image',
+          content_type: mime.startsWith('image/') ? 'image' : message.content_type || 'image',
         })
         .eq('id', message.id);
+
+      // Stream the decrypted bytes directly to avoid cross-origin CORS blocks in browser
+      try {
+        const imageRes = await fetch(publicUrl);
+        if (imageRes.ok) {
+          const contentType = imageRes.headers.get('content-type') || mime;
+          const buffer = await imageRes.arrayBuffer();
+          return new Response(buffer, {
+            status: 200,
+            headers: {
+              'Content-Type': contentType,
+              'Cache-Control': 'public, max-age=604800, immutable',
+              'Access-Control-Allow-Origin': '*',
+            },
+          });
+        }
+      } catch (fetchErr) {
+        console.warn('[UazAPI Media] Failed to stream publicUrl bytes:', fetchErr);
+      }
 
       return NextResponse.redirect(publicUrl, 302);
     }
@@ -131,6 +175,7 @@ export async function GET(request: Request) {
         headers: {
           'Content-Type': mime,
           'Cache-Control': 'public, max-age=604800, immutable',
+          'Access-Control-Allow-Origin': '*',
         },
       });
     }

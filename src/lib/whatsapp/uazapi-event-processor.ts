@@ -22,6 +22,7 @@ async function downloadUazApiMediaDirect(
   messageId: string
 ): Promise<{ fileURL?: string; mimetype?: string } | null> {
   try {
+    const cleanId = messageId.includes(':') ? messageId.split(':').pop()! : messageId;
     const res = await fetch(`${normalizeBaseUrl(baseUrl)}/message/download`, {
       method: 'POST',
       headers: {
@@ -29,11 +30,11 @@ async function downloadUazApiMediaDirect(
         token,
       },
       body: JSON.stringify({
-        id: messageId,
+        id: cleanId,
         return_link: true,
         return_base64: false,
       }),
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return null;
     const data = await res.json().catch(() => null);
@@ -635,7 +636,7 @@ export async function processUazApiEvent(
   // If this is a media message and mediaUrl is missing or raw encrypted mmg.whatsapp.net,
   // resolve direct public decrypted URL via UazAPI /message/download
   if (
-    (contentType === 'image' || contentType === 'audio' || contentType === 'video' || contentType === 'document') &&
+    (contentType === 'image' || contentType === 'audio' || contentType === 'video' || contentType === 'document' || !contentType || contentType === 'text') &&
     rawExternalId &&
     (!mediaUrl || mediaUrl.includes('mmg.whatsapp.net') || mediaUrl.includes('.enc'))
   ) {
@@ -644,9 +645,14 @@ export async function processUazApiEvent(
       try {
         const uazToken = decrypt(uazTokenEnc);
         const uazBase = normalizeBaseUrl(String(connection.provider_config?.base_url || (connection as Record<string, unknown>).api_url || ''));
-        const downloaded = await downloadUazApiMediaDirect(uazBase, uazToken, rawExternalId);
+        const downloaded =
+          (await downloadUazApiMediaDirect(uazBase, uazToken, externalMessageId)) ||
+          (await downloadUazApiMediaDirect(uazBase, uazToken, rawExternalId));
         if (downloaded?.fileURL) {
           mediaUrl = downloaded.fileURL;
+          if (downloaded.mimetype?.startsWith('image/')) contentType = 'image';
+          else if (downloaded.mimetype?.startsWith('audio/')) contentType = 'audio';
+          else if (downloaded.mimetype?.startsWith('video/')) contentType = 'video';
         }
       } catch {
         // Non-blocking: fallback to proxy
@@ -862,11 +868,16 @@ export async function processUazApiEvent(
         const uazToken = decrypt(uazTokenEnc);
         const uazBase = normalizeBaseUrl(String(connection.provider_config?.base_url || (connection as Record<string, unknown>).api_url || ''));
 
-        const downloaded = await downloadUazApiMediaDirect(uazBase, uazToken, rawExternalId);
+        const downloaded =
+          (await downloadUazApiMediaDirect(uazBase, uazToken, externalMessageId)) ||
+          (await downloadUazApiMediaDirect(uazBase, uazToken, rawExternalId));
         if (downloaded?.fileURL) {
           await admin
             .from('messages')
-            .update({ media_url: downloaded.fileURL })
+            .update({ 
+              media_url: downloaded.fileURL,
+              content_type: downloaded.mimetype?.startsWith('image/') ? 'image' : contentType
+            })
             .eq('id', createdMsg.id);
 
           whatsappBus.emitInboxEvent({
