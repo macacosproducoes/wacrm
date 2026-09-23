@@ -2,11 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useTotalUnread } from "@/hooks/use-total-unread";
 import { useUnreadNotifications } from "@/hooks/use-unread-notifications";
+import { Switch } from "@/components/ui/switch";
+import { toast } from "sonner";
 import {
   Bell,
   Bot,
@@ -121,6 +123,42 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
   const { profile, profileLoading, account, accountRole, signOut } = useAuth();
   const totalUnread = useTotalUnread();
   const unreadNotifications = useUnreadNotifications();
+  const [onlyNewConversations, setOnlyNewConversations] = useState(false);
+  const [updatingOnlyNew, setUpdatingOnlyNew] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/ai/config')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d && typeof d.only_new_conversations === 'boolean') {
+          setOnlyNewConversations(d.only_new_conversations);
+        }
+      })
+      .catch(() => {});
+  }, [pathname]);
+
+  const handleToggleOnlyNew = async (checked: boolean) => {
+    setOnlyNewConversations(checked);
+    setUpdatingOnlyNew(true);
+    try {
+      const res = await fetch('/api/ai/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ only_new_conversations: checked }),
+      });
+      if (!res.ok) throw new Error('Falha ao salvar preferência');
+      toast.success(
+        checked
+          ? '🎯 IA configurada: responderá APENAS conversas novas (SIM)! Conversas antigas ficam 100% manuais.'
+          : 'IA responderá todas as conversas elegíveis (NÃO).'
+      );
+    } catch {
+      toast.error('Erro ao atualizar modo de conversas novas');
+      setOnlyNewConversations(!checked);
+    } finally {
+      setUpdatingOnlyNew(false);
+    }
+  };
   // Only surface the account-name strip when it actually carries
   // information. A solo user's personal account is named after them
   // (the 017 signup trigger seeds it from `full_name`), so showing it
@@ -293,6 +331,28 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
               );
             })}
           </ul>
+
+          <div className="mt-2 rounded-xl border border-border/80 bg-card/60 p-2.5 shadow-2xs">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0 pr-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs">🎯</span>
+                  <p className="truncate text-xs font-semibold text-foreground">
+                    IA em Novas
+                  </p>
+                </div>
+                <p className="text-[10px] text-muted-foreground truncate">
+                  {onlyNewConversations ? 'SIM (só novos)' : 'NÃO (todas)'}
+                </p>
+              </div>
+              <Switch
+                checked={onlyNewConversations}
+                onCheckedChange={handleToggleOnlyNew}
+                disabled={updatingOnlyNew}
+                className="data-[state=checked]:bg-emerald-600 scale-90"
+              />
+            </div>
+          </div>
         </nav>
 
         {/* User section */}
