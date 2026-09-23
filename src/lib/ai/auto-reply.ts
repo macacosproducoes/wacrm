@@ -92,17 +92,20 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
       return
     }
 
+    // When "IA Ativa nesta conversa" is turned ON (ai_autoreply_disabled === false),
+    // the AI responds to incoming customer messages even if an agent was previously assigned or conversation has history.
+    const isExplicitlyEnabledOnThread = conv.ai_autoreply_disabled === false
+
     // Mode: IA APENAS EM CONVERSAS NOVAS (only_new_conversations = true)
     // When enabled, AI responds only to new customer contacts who have no prior conversation history.
-    // If there are previous conversations or old messages (> 24 hours ago, or human agent messages),
-    // the thread remains strictly for human atendimento.
-    if (config.onlyNewConversations) {
+    // If the operator explicitly enabled AI on this thread, this filter is bypassed.
+    if (config.onlyNewConversations && !isExplicitlyEnabledOnThread) {
       const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
       const { data: oldMsgs } = await db
         .from('messages')
-        .select('id, sender_type, created_at')
+        .select('id, sender_type, created_at, ai_generated')
         .eq('conversation_id', conversationId)
-        .or(`created_at.lt.${oneDayAgo},sender_type.eq.agent`)
+        .or(`created_at.lt.${oneDayAgo},and(sender_type.eq.agent,ai_generated.eq.false)`)
         .limit(1)
 
       if (oldMsgs && oldMsgs.length > 0) {
@@ -130,10 +133,6 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
         return
       }
     }
-
-    // When "IA Ativa nesta conversa" is turned ON (ai_autoreply_disabled === false),
-    // the AI responds to incoming customer messages even if an agent was previously assigned.
-    const isExplicitlyEnabledOnThread = conv.ai_autoreply_disabled === false
 
     if (!isExplicitlyEnabledOnThread) {
       if (conv.assigned_agent_id) {
