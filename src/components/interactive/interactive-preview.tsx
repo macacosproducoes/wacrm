@@ -48,19 +48,19 @@ export function InteractivePreview({
 
       {payload.kind === "buttons" ? (
         <div className="flex flex-col border-t border-border">
-          {payload.buttons.map((b, i) => (
+          {(payload.buttons || []).map((b, i) => (
             <button
-              key={b.id || i}
+              key={b?.id || i}
               type="button"
               disabled
               className="flex items-center justify-center gap-1.5 border-t border-border py-2 text-sm font-medium text-primary first:border-t-0"
             >
               <Reply className="h-3.5 w-3.5" />
-              <span className="truncate">{b.title || "Button"}</span>
+              <span className="truncate">{b?.title || "Button"}</span>
             </button>
           ))}
         </div>
-      ) : (
+      ) : payload.kind === "list" ? (
         <button
           type="button"
           disabled
@@ -69,7 +69,7 @@ export function InteractivePreview({
           <List className="h-3.5 w-3.5" />
           <span className="truncate">{payload.button_label || "Menu"}</span>
         </button>
-      )}
+      ) : null}
     </div>
   );
 }

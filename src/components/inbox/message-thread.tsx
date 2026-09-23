@@ -134,23 +134,39 @@ interface MessageThreadProps {
 }
 
 function formatDateSeparator(dateStr: string, t: ReturnType<typeof useTranslations>): string {
-  const date = new Date(dateStr);
-  if (isToday(date)) return t("today");
-  if (isYesterday(date)) return t("yesterday");
-  return format(date, "MMMM d, yyyy");
+  try {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return "";
+    if (isToday(date)) return t("today");
+    if (isYesterday(date)) return t("yesterday");
+    return format(date, "MMMM d, yyyy");
+  } catch {
+    return "";
+  }
 }
 
 function groupMessagesByDate(messages: Message[]) {
   const groups: { date: string; messages: Message[] }[] = [];
-  let currentDate = "";
+  const groupsByDay = new Map<string, { date: string; messages: Message[] }>();
 
   for (const msg of messages) {
-    const day = format(new Date(msg.created_at), "yyyy-MM-dd");
-    if (day !== currentDate) {
-      currentDate = day;
-      groups.push({ date: msg.created_at, messages: [msg] });
+    let day = "unknown";
+    try {
+      const d = new Date(msg.created_at);
+      if (!isNaN(d.getTime())) {
+        day = format(d, "yyyy-MM-dd");
+      }
+    } catch {
+      day = "unknown";
+    }
+
+    const existing = groupsByDay.get(day);
+    if (existing) {
+      existing.messages.push(msg);
     } else {
-      groups[groups.length - 1].messages.push(msg);
+      const newGroup = { date: msg.created_at || new Date().toISOString(), messages: [msg] };
+      groupsByDay.set(day, newGroup);
+      groups.push(newGroup);
     }
   }
 

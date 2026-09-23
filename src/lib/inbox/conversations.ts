@@ -21,7 +21,10 @@ type RawConversation = Omit<Conversation, "contact"> & {
  * no contact (e.g. a freshly-inserted conversation) passes through untouched.
  */
 export function normalizeConversation(raw: RawConversation): Conversation {
-  const rawContact = raw.contact;
+  if (!raw) return raw as Conversation;
+  // Support both raw.contact (from aliased select) and raw.contacts (from default join)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rawContact = raw.contact || (raw as any).contacts;
   if (!rawContact) return raw as Conversation;
 
   const { contact_tags, ...contact } = rawContact;
@@ -29,9 +32,15 @@ export function normalizeConversation(raw: RawConversation): Conversation {
     ...raw,
     contact: {
       ...contact,
-      tags: (contact_tags ?? [])
-        .map((ct) => ct.tags)
-        .filter((t): t is Tag => t != null),
+      tags: Array.isArray(contact_tags)
+        ? contact_tags
+            .map((ct) => ct?.tags)
+            .filter((t): t is Tag => t != null)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        : Array.isArray((rawContact as any).tags)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ? (rawContact as any).tags
+        : [],
     },
   };
 }

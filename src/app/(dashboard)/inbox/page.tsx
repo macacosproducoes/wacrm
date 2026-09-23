@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { useUazApiSse } from "@/hooks/use-uazapi-sse";
 import { RealtimeStatusBar } from "@/components/inbox/realtime-status-bar";
 import { useAuth } from "@/hooks/use-auth";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
 
 // Remembers the agent's show/hide choice for the desktop contact panel
 // across reloads and sessions (device-scoped, like the theme prefs).
@@ -646,10 +647,13 @@ function InboxPageInner() {
               ),
             );
           }
+        } else {
+          // If not in the initial 50 loaded conversations, explicitly hydrate it from the database
+          void hydrateConversation(deepLinkConvId);
         }
       }
     },
-    [deepLinkConvId, logTimeline]
+    [deepLinkConvId, hydrateConversation, logTimeline]
   );
 
   const handleSelectConversation = useCallback(
@@ -889,23 +893,29 @@ function InboxPageInner() {
             hasActiveConv ? "flex" : "hidden lg:flex",
           )}
         >
-          <MessageThread
-            conversation={activeConversation}
-            contact={activeContact}
-            messages={messages}
-            onMessagesLoaded={handleMessagesLoaded}
-            onNewMessage={handleNewMessage}
-            onUpdateMessage={handleUpdateMessage}
-            onStatusChange={handleStatusChange}
-            onAssignChange={handleAssignChange}
-            onBack={handleCloseConversation}
-            resyncToken={resyncToken}
-            onRefresh={handleManualRefresh}
-            contactPanelOpen={contactPanelOpen}
-            onToggleContactPanel={handleToggleContactPanel}
-            isUazApi={isUazApi}
-            onContactUpdated={handleContactUpdated}
-          />
+          <ErrorBoundary
+            fallbackTitle="Falha ao carregar mensagens da conversa"
+            fallbackMessage="Ocorreu um erro ao renderizar as mensagens desta conversa. Clique em recarregar ou selecione outra conversa."
+            onReset={handleManualRefresh}
+          >
+            <MessageThread
+              conversation={activeConversation}
+              contact={activeContact}
+              messages={messages}
+              onMessagesLoaded={handleMessagesLoaded}
+              onNewMessage={handleNewMessage}
+              onUpdateMessage={handleUpdateMessage}
+              onStatusChange={handleStatusChange}
+              onAssignChange={handleAssignChange}
+              onBack={handleCloseConversation}
+              resyncToken={resyncToken}
+              onRefresh={handleManualRefresh}
+              contactPanelOpen={contactPanelOpen}
+              onToggleContactPanel={handleToggleContactPanel}
+              isUazApi={isUazApi}
+              onContactUpdated={handleContactUpdated}
+            />
+          </ErrorBoundary>
         </div>
 
         {/* Right panel: Contact sidebar — desktop only, and only when the
@@ -914,7 +924,12 @@ function InboxPageInner() {
             toggle — which is itself desktop-only — never affects it. */}
         {contactPanelOpen && (
           <div className="hidden lg:block">
-            <ContactSidebar contact={activeContact} onContactUpdated={handleContactUpdated} />
+            <ErrorBoundary
+              fallbackTitle="Falha ao carregar dados do contato"
+              fallbackMessage="Não foi possível carregar os detalhes deste contato."
+            >
+              <ContactSidebar contact={activeContact} onContactUpdated={handleContactUpdated} />
+            </ErrorBoundary>
           </div>
         )}
       </div>

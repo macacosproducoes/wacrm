@@ -464,7 +464,14 @@ export function ContactSidebar({ contact, onContactUpdated }: ContactSidebarProp
                       {note.note_text}
                     </p>
                     <p className="mt-1 text-[10px] text-muted-foreground">
-                      {format(new Date(note.created_at), "MMM d, yyyy HH:mm")}
+                      {(() => {
+                        try {
+                          const d = new Date(note.created_at);
+                          return !isNaN(d.getTime()) ? format(d, "MMM d, yyyy HH:mm") : "";
+                        } catch {
+                          return "";
+                        }
+                      })()}
                     </p>
                   </div>
                 ))}

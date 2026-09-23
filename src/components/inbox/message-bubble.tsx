@@ -264,7 +264,13 @@ export function MessageBubble({
   const t = useTranslations("Inbox.bubble");
 
   const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
-  const time = format(new Date(message.created_at), "HH:mm");
+  let time = "";
+  try {
+    const d = new Date(message.created_at);
+    if (!isNaN(d.getTime())) {
+      time = format(d, "HH:mm");
+    }
+  } catch {}
 
   // Row alignment + width cap are owned by <MessageActions> so its hover
   // group matches the bubble's content area, not the full row.

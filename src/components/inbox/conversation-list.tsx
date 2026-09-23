@@ -620,11 +620,15 @@ function ConversationItem({
     onSelect(conversation);
   }, [onSelect, conversation]);
 
-  const timeAgo = conversation.last_message_at
-    ? formatDistanceToNow(new Date(conversation.last_message_at), {
-        addSuffix: false,
-      })
-    : "";
+  let timeAgo = "";
+  if (conversation.last_message_at) {
+    try {
+      const d = new Date(conversation.last_message_at);
+      if (!isNaN(d.getTime())) {
+        timeAgo = formatDistanceToNow(d, { addSuffix: false });
+      }
+    } catch {}
+  }
 
   return (
     <button
