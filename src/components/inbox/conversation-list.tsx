@@ -159,10 +159,10 @@ export function ConversationList({
   // older value — the very next render updates the ref for any
   // subsequent async completion.
   const onConversationsLoadedRef = useRef(onConversationsLoaded);
-  const existingConversationsRef = useRef(conversations);
+  const existingConversationsRef = useRef<Conversation[]>(Array.isArray(conversations) ? conversations : []);
   useEffect(() => {
     onConversationsLoadedRef.current = onConversationsLoaded;
-    existingConversationsRef.current = conversations;
+    existingConversationsRef.current = Array.isArray(conversations) ? conversations : [];
   });
 
   useEffect(() => {
@@ -170,9 +170,10 @@ export function ConversationList({
     let cancelled = false;
 
     (async () => {
+      const currentCount = existingConversationsRef.current?.length ?? 0;
       const timestamp = new Date().toLocaleTimeString('pt-BR');
-      console.log(`[TIMELINE] ${timestamp} SOURCE=ConversationList:fetchTrigger resyncToken=${resyncToken} currentCount=${existingConversationsRef.current.length}`);
-      console.log(`[INBOX] load conversations trigger: resyncToken=${resyncToken}, currentCount=${existingConversationsRef.current.length}`);
+      console.log(`[TIMELINE] ${timestamp} SOURCE=ConversationList:fetchTrigger resyncToken=${resyncToken} currentCount=${currentCount}`);
+      console.log(`[INBOX] load conversations trigger: resyncToken=${resyncToken}, currentCount=${currentCount}`);
       let list: any = null;
 
       // 1. Try Supabase browser client
@@ -211,13 +212,14 @@ export function ConversationList({
       if (cancelled) return;
 
       const normalizedList = normalizeConversations(list ?? []);
-      console.log(`[INBOX] conversation count fetched: ${normalizedList.length} (previous: ${existingConversationsRef.current.length})`);
+      const prevCount = existingConversationsRef.current?.length ?? 0;
+      console.log(`[INBOX] conversation count fetched: ${normalizedList.length} (previous: ${prevCount})`);
 
       // 3. DEFENSIVE STATE PRESERVATION (ETAPA 7):
       // If the newly fetched list is empty, BUT we already have valid conversations in memory,
       // DO NOT wipe the list! Preserve existing state and avoid showing a false empty state.
-      if (normalizedList.length === 0 && existingConversationsRef.current.length > 0) {
-        console.warn(`[INBOX] Preserving ${existingConversationsRef.current.length} existing conversations — incoming fetch was unexpectedly empty.`);
+      if (normalizedList.length === 0 && prevCount > 0) {
+        console.warn(`[INBOX] Preserving ${prevCount} existing conversations — incoming fetch was unexpectedly empty.`);
         setLoading(false);
         return;
       }
@@ -226,7 +228,7 @@ export function ConversationList({
       setLoading(false);
 
       // 4. If user actually has 0 conversations on first load, trigger background sync
-      if (normalizedList.length === 0 && existingConversationsRef.current.length === 0 && !hasAutoSyncedRef.current) {
+      if (normalizedList.length === 0 && prevCount === 0 && !hasAutoSyncedRef.current) {
         hasAutoSyncedRef.current = true;
         fetch('/api/whatsapp/sync', {
           method: 'POST',

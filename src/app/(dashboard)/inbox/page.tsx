@@ -75,11 +75,20 @@ function InboxPageInner() {
   }, [conversations.length, messages.length, activeConversation?.id, activeContact]);
 
   const logTimeline = useCallback((source: string, extra?: Record<string, unknown>) => {
-    const timestamp = new Date().toLocaleTimeString("pt-BR");
-    console.log(
-      `[TIMELINE] ${timestamp} SOURCE=${source} user_id=${user?.id ?? "none"} account_id=${accountId ?? "none"} selected_id=${stateRef.current.selectedId ?? "none"} convs_count=${stateRef.current.conversationsCount} msgs_count=${stateRef.current.messagesCount} contact=${stateRef.current.contactName ?? "none"}` +
-      (extra ? ` payload=${JSON.stringify(extra)}` : "")
-    );
+    try {
+      const timestamp = new Date().toLocaleTimeString("pt-BR");
+      let extraStr = "";
+      if (extra) {
+        try {
+          extraStr = ` payload=${JSON.stringify(extra)}`;
+        } catch {
+          extraStr = " payload=[Unserializable]";
+        }
+      }
+      console.log(
+        `[TIMELINE] ${timestamp} SOURCE=${source} user_id=${user?.id ?? "none"} account_id=${accountId ?? "none"} selected_id=${stateRef.current?.selectedId ?? "none"} convs_count=${stateRef.current?.conversationsCount ?? 0} msgs_count=${stateRef.current?.messagesCount ?? 0} contact=${stateRef.current?.contactName ?? "none"}${extraStr}`
+      );
+    } catch {}
   }, [user?.id, accountId]);
   const [whatsappConnected, setWhatsappConnected] = useState<boolean | null>(
     null

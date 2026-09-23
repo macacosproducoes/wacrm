@@ -82,9 +82,9 @@ export function AudioLibraryModal({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Local copy of audios for instant drag-and-drop reordering and renaming
-  const [localAudios, setLocalAudios] = useState<QuickReply[]>(audioReplies);
+  const [localAudios, setLocalAudios] = useState<QuickReply[]>(Array.isArray(audioReplies) ? audioReplies : []);
   useEffect(() => {
-    setLocalAudios(audioReplies);
+    setLocalAudios(Array.isArray(audioReplies) ? audioReplies : []);
   }, [audioReplies]);
 
   // Drag and drop reordering state
@@ -102,14 +102,16 @@ export function AudioLibraryModal({
 
   const categories = useMemo(() => {
     const set = new Set<string>();
-    localAudios.forEach((item) => {
+    const audios = Array.isArray(localAudios) ? localAudios : [];
+    audios.forEach((item) => {
       if (item.category) set.add(item.category);
     });
     return Array.from(set);
   }, [localAudios]);
 
   const filteredAudios = useMemo(() => {
-    return localAudios.filter((qr) => {
+    const audios = Array.isArray(localAudios) ? localAudios : [];
+    return audios.filter((qr) => {
       if (qr.kind !== "audio") return false;
       if (selectedCategory !== "all" && qr.category !== selectedCategory) return false;
       if (search.trim()) {

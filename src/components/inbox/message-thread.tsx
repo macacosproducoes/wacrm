@@ -1653,7 +1653,7 @@ export function MessageThread({
       <AudioLibraryModal
         open={audioLibraryOpen}
         onOpenChange={setAudioLibraryOpen}
-        audioReplies={quickReplies.filter((q) => q.kind === "audio")}
+        audioReplies={Array.isArray(quickReplies) ? quickReplies.filter((q) => q.kind === "audio") : []}
         onSendAudio={handleSelectAudioFromTopBar}
         onRefreshReplies={loadQuickReplies}
       />

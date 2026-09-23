@@ -150,7 +150,7 @@ export function QuickReplyTopBar({
   const [filter, setFilter] = useState<FilterType>("all");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [categories, setCategories] = useState<QuickReplyCategory[]>([]);
-  const [localItems, setLocalItems] = useState<QuickReply[]>(quickReplies);
+  const [localItems, setLocalItems] = useState<QuickReply[]>(Array.isArray(quickReplies) ? quickReplies : []);
 
   // Drag and drop reordering state
   const [draggedId, setDraggedId] = useState<string | null>(null);
@@ -174,7 +174,7 @@ export function QuickReplyTopBar({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setLocalItems(quickReplies);
+    setLocalItems(Array.isArray(quickReplies) ? quickReplies : []);
   }, [quickReplies]);
 
   useEffect(() => {
@@ -302,7 +302,8 @@ export function QuickReplyTopBar({
   }, []);
 
   const filteredItems = useMemo(() => {
-    return localItems.filter((item) => {
+    const items = Array.isArray(localItems) ? localItems : [];
+    return items.filter((item) => {
       if (item.is_active === false) return false;
       if (selectedCategory !== "all") {
         if (item.category !== selectedCategory && item.category_id !== selectedCategory) {
@@ -319,7 +320,8 @@ export function QuickReplyTopBar({
   }, [localItems, filter, selectedCategory]);
 
   const favoritesCount = useMemo(() => {
-    return localItems.filter((i) => i.is_favorite && i.is_active !== false).length;
+    const items = Array.isArray(localItems) ? localItems : [];
+    return items.filter((i) => i.is_favorite && i.is_active !== false).length;
   }, [localItems]);
 
   // Execute actual send after 3 seconds - humanized audio simulation enabled by default!
