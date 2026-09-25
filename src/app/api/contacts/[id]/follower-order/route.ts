@@ -55,9 +55,18 @@ export async function GET(request: Request, context: RouteContext) {
 
     const latestJob = contactJobs[0] || null;
 
+    // 3. Fetch active Creative Templates available for this account
+    const { data: availableTemplates } = await admin
+      .from('creative_templates')
+      .select('id, name, category, status')
+      .eq('account_id', ctx.accountId)
+      .eq('status', 'ACTIVE')
+      .order('name');
+
     if (!latestJob) {
       return NextResponse.json({
         has_order: false,
+        templates: availableTemplates || [],
         contact: {
           id: contact.id,
           name: contact.name,
@@ -69,7 +78,7 @@ export async function GET(request: Request, context: RouteContext) {
       });
     }
 
-    // 3. Fetch Deliveries for this Job
+    // 4. Fetch Deliveries for this Job
     const { data: deliveries } = await admin
       .from('creative_deliveries')
       .select('id, provider_message_id, status, error, created_at, sent_at')
@@ -82,11 +91,14 @@ export async function GET(request: Request, context: RouteContext) {
 
     return NextResponse.json({
       has_order: true,
+      templates: availableTemplates || [],
       job: {
         id: latestJob.id,
         order_code: latestJob.source_id,
         username: inputData.instagram_username || contact.instagram_username,
         quantity: inputData.quantity || 5000,
+        template_id: latestJob.template_id,
+        platform: inputData.platform || (inputData.username?.includes('tiktok') ? 'tiktok' : 'instagram'),
         status: latestJob.status,
         output_url: latestJob.output_url,
         error: latestJob.error,
@@ -181,8 +193,22 @@ export async function POST(request: Request, context: RouteContext) {
       });
     }
 
-    // 2. If existing job with valid output_url exists, DO NOT RE-RENDER! Send existing art!
-    if (existingJob && existingJob.output_url) {
+    const requestedUsername = (body.username || '').trim().replace(/^@+/, '');
+    const requestedQuantity = body.quantity ? Number(String(body.quantity).replace(/\D/g, '')) : undefined;
+    const requestedTemplateId = body.template_id || undefined;
+    const requestedPlatform = (body.platform as ('instagram' | 'tiktok') | undefined) || undefined;
+    const forceRegenerate = Boolean(body.regenerate || body.force_regenerate);
+
+    const existingData = (existingJob?.input_data || {}) as Record<string, any>;
+    const hasModifications = Boolean(
+      (requestedUsername && requestedUsername.toLowerCase() !== String(existingData.instagram_username || existingData.username || contact.instagram_username || '').toLowerCase()) ||
+      (requestedQuantity && requestedQuantity !== Number(existingData.quantity || 5000)) ||
+      (requestedTemplateId && requestedTemplateId !== existingJob?.template_id) ||
+      (requestedPlatform && requestedPlatform !== existingData.platform)
+    );
+
+    // 2. If existing job exists, has not been modified, and regenerate is NOT requested: send existing art!
+    if (existingJob && existingJob.output_url && !forceRegenerate && !hasModifications) {
       const sendRes = await sendFollowerOrderCreative({
         jobId: existingJob.id,
         accountId: ctx.accountId,
@@ -212,7 +238,7 @@ export async function POST(request: Request, context: RouteContext) {
 
       return NextResponse.json({
         success: true,
-        message: 'Arte de confirmação enviada com sucesso ao cliente!',
+        message: 'Arte de confirmação reenviada com sucesso ao cliente!',
         job_id: existingJob.id,
         delivery_id: sendRes.deliveryId,
         provider_message_id: sendRes.providerMessageId,
@@ -220,18 +246,21 @@ export async function POST(request: Request, context: RouteContext) {
       });
     }
 
-    // 3. If no rendered job exists yet, generate it via handleFollowerOrder
-    const username = (body.username || contact.instagram_username || '').trim().replace(/^@+/, '');
-    if (!username) {
+    // 3. Generate fresh/updated creative via handleFollowerOrder with custom template, @, and quantity!
+    const effectiveUsername = requestedUsername || (contact.instagram_username || existingData.instagram_username || existingData.username || '').trim().replace(/^@+/, '');
+    if (!effectiveUsername) {
       return NextResponse.json(
-        { error: 'Contato não possui perfil do Instagram informado.' },
+        { error: 'Informe o @ perfil do cliente para gerar a arte de confirmação.' },
         { status: 400 }
       );
     }
 
-    const quantity = body.quantity ? Number(body.quantity) : 5000;
+    const effectiveQuantity = requestedQuantity || Number(existingData.quantity) || 5000;
+    const effectiveTemplateId = requestedTemplateId || existingJob?.template_id || undefined;
+    const effectivePlatform = requestedPlatform || existingData.platform || (effectiveUsername.includes('tiktok') ? 'tiktok' : 'instagram');
+
     const syntheticMessageId = `manual_gen_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    const syntheticMessageText = `Quero ${quantity} seguidores para @${username}`;
+    const syntheticMessageText = `Quero ${effectiveQuantity} seguidores para @${effectiveUsername}`;
 
     let conversationId = '';
     const { data: conv } = await admin
@@ -239,6 +268,8 @@ export async function POST(request: Request, context: RouteContext) {
       .select('id')
       .eq('account_id', ctx.accountId)
       .eq('contact_id', contact.id)
+      .order('updated_at', { ascending: false })
+      .limit(1)
       .maybeSingle();
 
     if (conv) {
@@ -261,6 +292,11 @@ export async function POST(request: Request, context: RouteContext) {
       messageId: syntheticMessageId,
       pushName: contact.name,
       traceId,
+      overrideUsername: effectiveUsername,
+      overrideQuantity: effectiveQuantity,
+      overridePlatform: effectivePlatform,
+      overrideTemplateId: effectiveTemplateId,
+      forceResend: true,
     });
 
     if (!orderRes.handled || !orderRes.creativeJob) {
@@ -273,8 +309,8 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({
       success: true,
       message: orderRes.deliverySuccess
-        ? 'Arte gerada e enviada com sucesso ao WhatsApp!'
-        : 'Arte gerada com sucesso!',
+        ? 'Nova arte gerada e enviada com sucesso ao WhatsApp!'
+        : 'Nova arte gerada com sucesso!',
       job_id: orderRes.creativeJob.id,
       order_code: orderRes.orderCode,
       output_url: orderRes.creativeJob.output_url,

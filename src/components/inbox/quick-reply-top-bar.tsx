@@ -750,8 +750,11 @@ export function QuickReplyTopBar({
                   <div className="flex items-center gap-0.5 ml-1 opacity-70 group-hover:opacity-100 transition-opacity">
                     <button
                       type="button"
-                      title="Renomear áudio/resposta"
-                      onClick={(e) => handleStartRename(item, e)}
+                      title="Editar resposta rápida / texto pronto"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenCreateReply(item.kind, item);
+                      }}
                       className="p-1 rounded hover:bg-foreground/15 text-foreground/75 hover:text-foreground transition-colors"
                     >
                       <Pencil className="h-3 w-3" />

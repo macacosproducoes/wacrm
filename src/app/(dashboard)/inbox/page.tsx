@@ -20,6 +20,7 @@ import { useUazApiSse } from "@/hooks/use-uazapi-sse";
 import { RealtimeStatusBar } from "@/components/inbox/realtime-status-bar";
 import { useAuth } from "@/hooks/use-auth";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
+import { AudioRecordingProvider } from "@/context/audio-recording-context";
 
 // Remembers the agent's show/hide choice for the desktop contact panel
 // across reloads and sessions (device-scoped, like the theme prefs).
@@ -31,7 +32,9 @@ const CONTACT_PANEL_STORAGE_KEY = "wacrm:inbox:contact-panel-open";
 export default function InboxPage() {
   return (
     <Suspense fallback={null}>
-      <InboxPageInner />
+      <AudioRecordingProvider>
+        <InboxPageInner />
+      </AudioRecordingProvider>
     </Suspense>
   );
 }
@@ -213,6 +216,16 @@ function InboxPageInner() {
 
       if (!row) return;
       const fetched = normalizeConversation(row);
+
+      // STRICT MULTI-TENANT ISOLATION:
+      // Drop any conversation that belongs to another account immediately.
+      if (accountId && fetched.account_id && fetched.account_id !== accountId) {
+        console.warn(
+          `[SECURITY / TENANCY] hydrateConversation dropped foreign conv ${convId} (account=${fetched.account_id}, myAccount=${accountId})`
+        );
+        return;
+      }
+
       logTimeline("hydrateConversation", { convId, contact: fetched.contact?.name });
       setConversations((prev) => {
         const existing = prev.find((c) => c.id === fetched.id);
@@ -230,10 +243,29 @@ function InboxPageInner() {
         }
         return [fetched, ...prev];
       });
+
+      if (convId === deepLinkConvId) {
+        setActiveConversation(fetched);
+        setActiveContact(fetched.contact ?? null);
+        if (fetched.last_message_text) {
+          const isAgent = fetched.last_message_sender === "agent" || fetched.last_message_sender === "bot";
+          setMessages([
+            {
+              id: `preview-${fetched.id}`,
+              conversation_id: fetched.id,
+              sender_type: isAgent ? "agent" : "customer",
+              content_type: "text",
+              content_text: fetched.last_message_text,
+              status: "delivered",
+              created_at: fetched.last_message_at || new Date().toISOString(),
+            },
+          ]);
+        }
+      }
     } finally {
       hydratingConvIdsRef.current.delete(convId);
     }
-  }, []);
+  }, [deepLinkConvId, logTimeline, accountId]);
 
   // Check WhatsApp connection status on mount and when tab regains focus / resyncs
   const checkConnection = useCallback(async () => {
@@ -404,7 +436,7 @@ function InboxPageInner() {
         );
       }
     },
-    [activeConversation, hydrateConversation, logTimeline]
+    [activeConversation, hydrateConversation, logTimeline, accountId]
   );
 
   // Handle realtime conversation events
@@ -415,6 +447,11 @@ function InboxPageInner() {
       old: Partial<Conversation>;
     }) => {
       const conv = event.new;
+
+      // STRICT MULTI-TENANT ISOLATION:
+      if (accountId && conv.account_id && conv.account_id !== accountId) {
+        return;
+      }
 
       if (event.eventType === "INSERT") {
         logTimeline("handleConversationEvent:INSERT", { convId: conv.id });
@@ -479,7 +516,7 @@ function InboxPageInner() {
         }
       }
     },
-    [activeConversation, hydrateConversation, logTimeline]
+    [activeConversation, hydrateConversation, logTimeline, accountId]
   );
 
   // Subscribe to realtime. The `isConnected` flag below feeds the
@@ -743,21 +780,67 @@ function InboxPageInner() {
 
   const handleNewMessage = useCallback((msg: Message) => {
     logTimeline("handleNewMessage", { msgId: msg.id, convId: msg.conversation_id });
-    setMessages((prev) => {
-      if (prev.some((m) => m.id === msg.id)) return prev;
-      const withoutOptimistic = prev.filter((m) => !m.id.startsWith("temp-"));
-      const next = [...withoutOptimistic, msg];
-      if (msg.conversation_id) {
-        messagesCacheRef.current.set(msg.conversation_id, next);
+    const currentSelectedId = stateRef.current.selectedId;
+
+    // 1. Always update memory cache for the message's specific conversation
+    if (msg.conversation_id) {
+      const cached = messagesCacheRef.current.get(msg.conversation_id) || [];
+      if (!cached.some((m) => m.id === msg.id)) {
+        const withoutOptimistic = cached.filter((m) => !m.id.startsWith("temp-"));
+        messagesCacheRef.current.set(msg.conversation_id, [...withoutOptimistic, msg]);
       }
-      return next;
-    });
+    }
+
+    // 2. ONLY mutate visible thread if the message belongs to the currently active conversation!
+    // Prevents visual leak when sending audio/media and switching conversations quickly.
+    if (msg.conversation_id && msg.conversation_id === currentSelectedId) {
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === msg.id)) return prev;
+        const withoutOptimistic = prev.filter((m) => !m.id.startsWith("temp-"));
+        return [...withoutOptimistic, msg];
+      });
+    }
+
+    // 3. Update the conversation list item's last_message preview
+    if (msg.conversation_id) {
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === msg.conversation_id
+            ? {
+                ...c,
+                last_message_text:
+                  msg.content_text ||
+                  (msg.content_type === "audio"
+                    ? "🎙️ Áudio"
+                    : msg.content_type === "image"
+                    ? "📷 Imagem"
+                    : c.last_message_text),
+                last_message_at: msg.created_at,
+                last_message_sender: msg.sender_type,
+              }
+            : c
+        )
+      );
+    }
   }, [logTimeline]);
 
   const handleUpdateMessage = useCallback(
-    (id: string, updates: Partial<Message>) => {
-      logTimeline("handleUpdateMessage", { id, updates });
+    (id: string, updates: Partial<Message>, targetConvId?: string) => {
+      logTimeline("handleUpdateMessage", { id, updates, targetConvId });
+
+      if (targetConvId) {
+        const cached = messagesCacheRef.current.get(targetConvId);
+        if (cached) {
+          messagesCacheRef.current.set(
+            targetConvId,
+            cached.map((m) => (m.id === id ? { ...m, ...updates } : m))
+          );
+        }
+      }
+
       setMessages((prev) => {
+        const hasMsg = prev.some((m) => m.id === id);
+        if (!hasMsg) return prev;
         const next = prev.map((m) => (m.id === id ? { ...m, ...updates } : m));
         if (next.length > 0 && next[0]?.conversation_id) {
           messagesCacheRef.current.set(next[0].conversation_id, next);
@@ -868,13 +951,19 @@ function InboxPageInner() {
             hasActiveConv ? "hidden lg:flex" : "flex",
           )}
         >
-          <ConversationList
-            activeConversationId={activeConversation?.id ?? null}
-            onSelect={handleSelectConversation}
-            conversations={conversations}
-            onConversationsLoaded={handleConversationsLoaded}
-            resyncToken={resyncToken}
-          />
+          <ErrorBoundary
+            fallbackTitle="Falha ao carregar lista de conversas"
+            fallbackMessage="Ocorreu um erro ao listar as conversas. Clique em recarregar."
+            onReset={handleManualRefresh}
+          >
+            <ConversationList
+              activeConversationId={activeConversation?.id ?? null}
+              onSelect={handleSelectConversation}
+              conversations={conversations}
+              onConversationsLoaded={handleConversationsLoaded}
+              resyncToken={resyncToken}
+            />
+          </ErrorBoundary>
         </div>
 
         {/* Center panel: Message thread.

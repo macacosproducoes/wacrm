@@ -23,6 +23,7 @@ import {
   MediaVideoBubble,
 } from "./message-media";
 import { InteractivePreview } from "@/components/interactive/interactive-preview";
+import { PixMessageBubble } from "./pix-message-bubble";
 import { useTranslations } from "next-intl";
 
 interface MessageBubbleProps {
@@ -222,6 +223,15 @@ function MessageContent({
       //    migration 035 backfilled the column): show the body text plainly —
       //    it is our own message, NOT a customer tap.
       if (message.interactive_payload) {
+        if ((message.interactive_payload as any).type === "pix") {
+          return (
+            <PixMessageBubble
+              payload={message.interactive_payload as any}
+              contentText={message.content_text || ""}
+              isAgent={isAgent}
+            />
+          );
+        }
         return <InteractivePreview payload={message.interactive_payload} />;
       }
       if (message.sender_type === "customer") {

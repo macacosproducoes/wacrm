@@ -235,11 +235,20 @@ export async function checkAndDispatchWelcomeMessage(
 
   let uazapiMessageId = `welcome_${Date.now()}`;
   const kind = replyRow.kind || 'text';
+  const meta = ((replyRow.interactive_payload as Record<string, unknown>) || {}) as Record<string, unknown>;
+  const hasSequencePayload =
+    meta.type === 'sequence' ||
+    (Array.isArray(replyRow.sequence_items) && replyRow.sequence_items.length > 0) ||
+    (Array.isArray(meta.sequence_items) && (meta.sequence_items as any[]).length > 0);
+  const isSequence = kind === 'sequence' || hasSequencePayload;
+
+  const messageCreatedAt = new Date().toISOString();
 
   try {
-    if (kind === 'sequence') {
-      const meta = ((replyRow.interactive_payload as Record<string, unknown>) || {}) as Record<string, unknown>;
-      const sequenceSteps = ((Array.isArray(replyRow.sequence_items) ? replyRow.sequence_items : meta.sequence_items) || []) as Array<{
+    if (isSequence) {
+      const sequenceSteps = ((Array.isArray(replyRow.sequence_items) && replyRow.sequence_items.length > 0
+        ? replyRow.sequence_items
+        : meta.sequence_items) || []) as Array<{
         order: number;
         type: string;
         content?: string;
@@ -285,15 +294,44 @@ export async function checkAndDispatchWelcomeMessage(
           if (res?.messageId) stepMsgId = res.messageId;
         }
 
-        await admin.from('messages').insert({
-          conversation_id: conversationId,
-          sender_type: 'bot',
-          content_type: step.type === 'audio' ? 'audio' : step.type === 'image' ? 'image' : 'text',
-          content_text: stepText,
-          media_url: step.media_url || null,
-          message_id: stepMsgId,
-          status: 'delivered',
-          created_at: new Date().toISOString(),
+        const stepTime = new Date().toISOString();
+        const { data: stepMsg } = await admin
+          .from('messages')
+          .insert({
+            conversation_id: conversationId,
+            sender_type: 'bot',
+            content_type: step.type === 'audio' ? 'audio' : step.type === 'image' ? 'image' : 'text',
+            content_text: stepText || (step.type === 'image' ? '[Imagem da Tabela]' : ''),
+            media_url: step.media_url || null,
+            message_id: stepMsgId,
+            status: 'delivered',
+            created_at: stepTime,
+          })
+          .select('id, created_at')
+          .maybeSingle();
+
+        // Broadcast each step via real-time bus
+        whatsappBus.emitInboxEvent({
+          accountId,
+          conversationId,
+          eventType: 'INSERT',
+          message: {
+            id: stepMsg?.id || `msg-${Date.now()}-${i}`,
+            conversation_id: conversationId,
+            sender_type: 'bot',
+            content_type: step.type === 'audio' ? 'audio' : step.type === 'image' ? 'image' : 'text',
+            content_text: stepText || (step.type === 'image' ? '[Imagem da Tabela]' : ''),
+            media_url: step.media_url || null,
+            message_id: stepMsgId,
+            status: 'delivered',
+            created_at: stepTime,
+          },
+          conversation: {
+            id: conversationId,
+            last_message_text: stepText || (step.type === 'image' ? '[Tabela de Valores]' : ''),
+            last_message_at: stepTime,
+            unread_count: 0,
+          },
         });
       }
       uazapiMessageId = `welcome_seq_${Date.now()}`;
@@ -327,22 +365,46 @@ export async function checkAndDispatchWelcomeMessage(
     return { dispatched: false, reason: 'provider_send_failed' };
   }
 
-  // 7. Record message in CRM database as 'bot'
-  const messageCreatedAt = new Date().toISOString();
-  const { data: createdMsg } = await admin
-    .from('messages')
-    .insert({
-      conversation_id: conversationId,
-      sender_type: 'bot',
-      content_type: kind === 'audio' ? 'audio' : kind === 'image' ? 'image' : 'text',
-      content_text: resolvedText,
-      media_url: replyRow.media_url || null,
-      message_id: uazapiMessageId,
-      status: 'delivered',
-      created_at: messageCreatedAt,
-    })
-    .select('id, created_at')
-    .maybeSingle();
+  // 7. For non-sequence, record single message in CRM database as 'bot'
+  if (!isSequence) {
+    const { data: createdMsg } = await admin
+      .from('messages')
+      .insert({
+        conversation_id: conversationId,
+        sender_type: 'bot',
+        content_type: kind === 'audio' ? 'audio' : kind === 'image' ? 'image' : 'text',
+        content_text: resolvedText,
+        media_url: replyRow.media_url || null,
+        message_id: uazapiMessageId,
+        status: 'delivered',
+        created_at: messageCreatedAt,
+      })
+      .select('id, created_at')
+      .maybeSingle();
+
+    whatsappBus.emitInboxEvent({
+      accountId,
+      conversationId,
+      eventType: 'INSERT',
+      message: {
+        id: createdMsg?.id || `msg-${Date.now()}`,
+        conversation_id: conversationId,
+        sender_type: 'bot',
+        content_type: kind === 'audio' ? 'audio' : 'text',
+        content_text: resolvedText,
+        media_url: replyRow.media_url || null,
+        message_id: uazapiMessageId,
+        status: 'delivered',
+        created_at: messageCreatedAt,
+      },
+      conversation: {
+        id: conversationId,
+        last_message_text: resolvedText,
+        last_message_at: messageCreatedAt,
+        unread_count: 0,
+      },
+    });
+  }
 
   // 8. Record in welcome_message_logs for idempotency and history
   await admin.from('welcome_message_logs').insert({
@@ -358,30 +420,6 @@ export async function checkAndDispatchWelcomeMessage(
   try {
     await admin.rpc('increment_quick_reply_usage', { p_id: replyRow.id });
   } catch {}
-
-  // 10. Emit to UI bus for real-time appearance
-  whatsappBus.emitInboxEvent({
-    accountId,
-    conversationId,
-    eventType: 'INSERT',
-    message: {
-      id: createdMsg?.id || `msg-${Date.now()}`,
-      conversation_id: conversationId,
-      sender_type: 'bot',
-      content_type: kind === 'audio' ? 'audio' : 'text',
-      content_text: resolvedText,
-      media_url: replyRow.media_url || null,
-      message_id: uazapiMessageId,
-      status: 'delivered',
-      created_at: messageCreatedAt,
-    },
-    conversation: {
-      id: conversationId,
-      last_message_text: resolvedText,
-      last_message_at: messageCreatedAt,
-      unread_count: 0,
-    },
-  });
 
   // 11. Schedule linked follow-up steps if any
   if (Array.isArray(config.follow_ups) && config.follow_ups.length > 0) {

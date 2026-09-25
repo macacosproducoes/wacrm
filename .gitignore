@@ -48,3 +48,8 @@ scratch/
 scratch_test_session_2/
 whatsapp_sessions/
 supabase/.temp/
+scripts/*.mjs
+scripts/*.sqlite
+scripts/*.txt
+scripts/*.json
+scripts/*.ts

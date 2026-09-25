@@ -26,6 +26,7 @@ import { Switch } from '@/components/ui/switch';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { PixConfigCard } from './pix-config-card';
 
 export interface UazApiConnectionItem {
   id: string;
@@ -908,6 +909,9 @@ export function UazApiConfigPanel() {
           </Card>
         </div>
       </div>
+
+      {/* Chave PIX Padrão da Empresa (Envio Nativo WhatsApp) */}
+      <PixConfigCard />
     </div>
   );
 }

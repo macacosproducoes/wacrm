@@ -70,7 +70,7 @@ export function isKieAi(apiKey: string, model: string): boolean {
  * Automatically retries with backoff if Kie.ai returns temporary network/maintenance errors (500, 524).
  * Strictly preserves the requested model (e.g. gemini-2.5-flash) and does NOT route to Gemini 3.x.
  */
-const DEFAULT_KIE_MODEL = 'gemini-2.5-flash'
+const DEFAULT_KIE_MODEL = 'gemini-3-5-flash-openai'
 const kieModelFailureCache = new Map<string, number>()
 
 /**
@@ -109,17 +109,17 @@ async function generateKie(args: ProviderArgs): Promise<ProviderResult> {
   // Model cascade: prioritize working models to avoid wasting time on known-down models
   const modelsToTry: string[] = []
   if (isTemporarilyDegraded) {
-    modelsToTry.push('gemini-3-5-flash-openai', 'gemini-3-8-flash-openai', cleanModel)
+    modelsToTry.push('gemini-3-5-flash-openai', 'gemini-3-7-flash-openai', cleanModel)
   } else {
-    modelsToTry.push(cleanModel)
     if (cleanModel === 'gemini-2.5-flash' || cleanModel.startsWith('gemini-2.')) {
-      modelsToTry.push('gemini-3-8-flash-openai', 'gemini-3-5-flash-openai', 'gemini-3-7-flash-openai')
+      modelsToTry.push('gemini-3-5-flash-openai', 'gemini-3-7-flash-openai', cleanModel)
     } else {
+      modelsToTry.push(cleanModel)
       if (cleanModel !== 'gemini-3-5-flash-openai') {
         modelsToTry.push('gemini-3-5-flash-openai')
       }
-      if (cleanModel !== 'gemini-3-8-flash-openai') {
-        modelsToTry.push('gemini-3-8-flash-openai')
+      if (cleanModel !== 'gemini-3-7-flash-openai') {
+        modelsToTry.push('gemini-3-7-flash-openai')
       }
     }
   }
@@ -128,7 +128,7 @@ async function generateKie(args: ProviderArgs): Promise<ProviderResult> {
 
   for (const currentModel of modelsToTry) {
     const shouldStream = true
-    const perAttemptTimeout = Math.min(timeoutMs, 8000)
+    const perAttemptTimeout = Math.min(timeoutMs, 25000)
 
     try {
       const res = await fetch('https://api.kie.ai/v1/chat/completions', {

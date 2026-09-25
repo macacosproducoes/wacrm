@@ -24,6 +24,7 @@ import {
   MessageSquareDashed,
   Zap,
   Check,
+  QrCode,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
@@ -55,10 +56,12 @@ import {
   blankButtonsPayload,
 } from "@/components/interactive/interactive-builder";
 import { validateInteractivePayload } from "@/lib/whatsapp/interactive";
-import type { InteractiveMessagePayload, QuickReply } from "@/types";
+import type { InteractiveMessagePayload, QuickReply, QuickReplyKind } from "@/types";
 import { QuickReplyPicker } from "./quick-reply-picker";
 import { SlashCommandMenu } from "./slash-command-menu";
 import { replaceQuickReplyVariables, type VariableContext } from "@/lib/inbox/quick-reply-variables";
+import { useAudioRecording } from "@/context/audio-recording-context";
+import { SendPixModal } from "./send-pix-modal";
 
 /** Media content types an agent can send from the composer. */
 export type ComposerMediaKind = "image" | "video" | "document" | "audio";
@@ -84,6 +87,7 @@ export interface SendMediaPayload {
   /** Original file name — surfaced to the recipient for documents. */
   filename?: string;
   replyToId?: string;
+  conversationId?: string;
 }
 
 interface ReplyDraft {
@@ -138,6 +142,7 @@ interface MessageComposerProps {
   insertedTextPayload?: InsertedTextPayload | null;
   externalAudioAction?: ExternalAudioActionPayload | null;
   onSelectSequence?: (qr: QuickReply) => void;
+  onOpenCreateReply?: (defaultKind: QuickReplyKind, itemToEdit?: QuickReply) => void;
 }
 
 function formatDuration(seconds: number): string {
@@ -150,12 +155,6 @@ function formatDuration(seconds: number): string {
  *  (vendored from opus-recorder into /public). Recording client-side in a
  *  Meta-accepted format means no server ffmpeg / transcode step. */
 const OPUS_ENCODER_PATH = "/opus/encoderWorker.min.js";
-
-interface SimulatingAudioState {
-  qr: QuickReply;
-  remainingSeconds: number;
-  totalSeconds: number;
-}
 
 export function MessageComposer({
   conversationId,
@@ -172,8 +171,10 @@ export function MessageComposer({
   insertedTextPayload,
   externalAudioAction,
   onSelectSequence,
+  onOpenCreateReply,
 }: MessageComposerProps) {
   const t = useTranslations("Inbox.composer");
+  const { startAudioRecording } = useAudioRecording();
 
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -187,15 +188,12 @@ export function MessageComposer({
     useState<InteractiveMessagePayload>(blankButtonsPayload);
   const [savingQuickReply, setSavingQuickReply] = useState(false);
   const [quickReplyOpen, setQuickReplyOpen] = useState(false);
+  const [pixModalOpen, setPixModalOpen] = useState(false);
 
   // Quick replies list & slash command autocomplete
   const [quickRepliesList, setQuickRepliesList] = useState<QuickReply[]>([]);
   const [showSlashMenu, setShowSlashMenu] = useState(false);
   const [slashFilter, setSlashFilter] = useState("");
-
-  // Simulated voice message ("Gravando áudio...") state
-  const [simulatingAudio, setSimulatingAudio] = useState<SimulatingAudioState | null>(null);
-  const simulationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Media attachment state. `draft` holds an uploaded-but-not-yet-sent
   // attachment; `busy` covers the upload/transcode window.
@@ -265,10 +263,6 @@ export function MessageComposer({
   useEffect(() => {
     return () => {
       clearTimer();
-      if (simulationTimerRef.current) {
-        clearInterval(simulationTimerRef.current);
-        simulationTimerRef.current = null;
-      }
       cancelledRef.current = true;
       void recorderRef.current?.stop().catch(() => {});
       removeStaged(draftRef.current?.path);
@@ -349,92 +343,17 @@ export function MessageComposer({
 
   const handleSendAudioWithPresence = useCallback(
     async (qr: QuickReply, simulateRecording = true) => {
-      if (!qr.media_url) {
-        toast.error("Áudio sem URL de mídia.");
-        return;
-      }
-
-      const durationSec = Math.max(1, Number(qr.media_duration) || 5);
-
-      if (!simulateRecording) {
-        // Direct send as native voice message (PTT)
-        onSendMedia({
-          kind: "audio",
-          mediaUrl: qr.media_url,
-          path: "",
-          filename: qr.title,
-          replyToId: replyTo?.id,
-        });
-        toast.success(`🎙️ Áudio "${qr.title}" enviado!`);
-        return;
-      }
-
-      // 1. Send live WhatsApp presence "recording" to customer
-      try {
-        void fetch("/api/whatsapp/presence", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            conversationId,
-            presence: "recording",
-            delayMs: durationSec * 1000,
-          }),
-        });
-      } catch (err) {
-        console.error("Presence recording error:", err);
-      }
-
-      // 2. Start simulation countdown state in UI
-      setSimulatingAudio({
+      if (!conversationId) return;
+      await startAudioRecording({
+        conversationId,
+        recipientName: contactName || contactPhone || "Lead",
+        recipientPhone: contactPhone || undefined,
         qr,
-        remainingSeconds: durationSec,
-        totalSeconds: durationSec,
+        simulateRecording,
+        replyToId: replyTo?.id,
       });
-
-      if (simulationTimerRef.current) {
-        clearInterval(simulationTimerRef.current);
-      }
-
-      simulationTimerRef.current = setInterval(() => {
-        setSimulatingAudio((prev) => {
-          if (!prev) return null;
-          if (prev.remainingSeconds <= 1) {
-            // Done! Send audio as PTT
-            if (simulationTimerRef.current) {
-              clearInterval(simulationTimerRef.current);
-              simulationTimerRef.current = null;
-            }
-
-            // Clear presence
-            void fetch("/api/whatsapp/presence", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                conversationId,
-                presence: "paused",
-              }),
-            }).catch(() => {});
-
-            // Send voice message
-            onSendMedia({
-              kind: "audio",
-              mediaUrl: prev.qr.media_url!,
-              path: "",
-              filename: prev.qr.title,
-              replyToId: replyTo?.id,
-            });
-            toast.success(`🎙️ Áudio "${prev.qr.title}" enviado com sucesso!`);
-            return null;
-          }
-
-          return {
-            ...prev,
-            remainingSeconds: prev.remainingSeconds - 1,
-          };
-        });
-      }, 1000);
     },
-    [conversationId, onSendMedia, replyTo?.id]
+    [conversationId, contactName, contactPhone, replyTo?.id, startAudioRecording]
   );
 
   // External text insertion from Top Bar or shortcuts
@@ -460,54 +379,6 @@ export function MessageComposer({
       void handleSendAudioWithPresence(externalAudioAction.qr, externalAudioAction.simulate);
     }
   }, [externalAudioAction, handleSendAudioWithPresence]);
-
-
-  const handleCancelSimulation = useCallback(() => {
-    if (simulationTimerRef.current) {
-      clearInterval(simulationTimerRef.current);
-      simulationTimerRef.current = null;
-    }
-    setSimulatingAudio(null);
-
-    void fetch("/api/whatsapp/presence", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        conversationId,
-        presence: "paused",
-      }),
-    }).catch(() => {});
-
-    toast.info("Envio de áudio cancelado.");
-  }, [conversationId]);
-
-  const handleSendNowSimulation = useCallback(() => {
-    if (!simulatingAudio) return;
-    if (simulationTimerRef.current) {
-      clearInterval(simulationTimerRef.current);
-      simulationTimerRef.current = null;
-    }
-    const currentQr = simulatingAudio.qr;
-    setSimulatingAudio(null);
-
-    void fetch("/api/whatsapp/presence", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        conversationId,
-        presence: "paused",
-      }),
-    }).catch(() => {});
-
-    onSendMedia({
-      kind: "audio",
-      mediaUrl: currentQr.media_url!,
-      path: "",
-      filename: currentQr.title,
-      replyToId: replyTo?.id,
-    });
-    toast.success(`🎙️ Áudio "${currentQr.title}" enviado imediatamente!`);
-  }, [simulatingAudio, conversationId, onSendMedia, replyTo?.id]);
 
   // AI draft reply
   const handleDraft = useCallback(async () => {
@@ -1148,63 +1019,7 @@ export function MessageComposer({
         }}
       />
 
-      {/* ZapPlus Realistic "Gravando áudio..." Presence Simulation Bar */}
-      {simulatingAudio ? (
-        <div className="flex items-center gap-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 shadow-sm animate-in fade-in duration-200">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-xs">
-            <Mic className="h-4 w-4 animate-bounce" />
-          </div>
-
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-foreground truncate flex items-center gap-1.5">
-                <span>🎙️ Gravando áudio para {contactName || "cliente"}...</span>
-                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono bg-emerald-500/20 px-1.5 py-0.5 rounded">
-                  {simulatingAudio.qr.title}
-                </span>
-              </span>
-              <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                {simulatingAudio.remainingSeconds}s restantes
-              </span>
-            </div>
-
-            {/* Waveform animation */}
-            <div className="mt-1.5 flex items-center gap-1 h-3 overflow-hidden">
-              {[35, 75, 100, 60, 85, 45, 90, 70, 50, 95, 80, 65, 40, 75, 90, 55, 80, 70, 45, 85, 95, 60].map((h, i) => (
-                <span
-                  key={i}
-                  className="flex-1 bg-emerald-500 rounded-full animate-pulse"
-                  style={{
-                    height: `${h}%`,
-                    animationDelay: `${(i % 6) * 120}ms`,
-                    animationDuration: "800ms",
-                  }}
-                />
-              ))}
-            </div>
-          </div>
-
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={handleCancelSimulation}
-            className="h-8 text-xs text-muted-foreground hover:text-foreground border-border"
-          >
-            Cancelar
-          </Button>
-
-          <Button
-            type="button"
-            size="sm"
-            onClick={handleSendNowSimulation}
-            className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-medium shadow-xs"
-          >
-            <Send className="mr-1 h-3 w-3" />
-            Enviar Agora
-          </Button>
-        </div>
-      ) : draft ? (
+      {draft ? (
         <MediaDraftPreview
           draft={draft}
           busy={busy}
@@ -1296,6 +1111,20 @@ export function MessageComposer({
             <span className="hidden sm:inline font-mono">ZapPlus</span>
           </Button>
 
+          {/* PIX Native Message Trigger Button */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={inputsDisabled}
+            title="Enviar Chave PIX (Nativo WhatsApp com 1 clique para copiar)"
+            onClick={() => setPixModalOpen(true)}
+            className="h-9 px-2.5 text-xs font-semibold text-teal-600 dark:text-teal-400 bg-teal-500/10 hover:bg-teal-500/20 hover:text-teal-700 dark:hover:text-teal-300 rounded-lg flex items-center gap-1.5 shrink-0 transition-colors border border-teal-500/20 shadow-sm"
+          >
+            <QrCode className="h-4 w-4 text-teal-500" />
+            <span className="hidden sm:inline font-mono font-bold tracking-tight">PIX</span>
+          </Button>
+
           {/* + menu — interactive messages */}
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -1306,6 +1135,10 @@ export function MessageComposer({
               <Plus className="h-4 w-4" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="border-border bg-popover">
+              <DropdownMenuItem onClick={() => setPixModalOpen(true)}>
+                <QrCode className="mr-2 h-4 w-4 text-teal-500" />
+                Enviar Chave PIX (Nativo)
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => openInteractiveBuilder()}>
                 <MessageSquareDashed className="mr-2 h-4 w-4" />
                 {t("interactiveMessage")}
@@ -1381,7 +1214,7 @@ export function MessageComposer({
         </div>
       )}
 
-      {!draft && !recording && !simulatingAudio && (
+      {!draft && !recording && (
         <div className="mt-1 pl-[7.5rem] pr-2 flex items-center justify-between text-[10px] text-muted-foreground">
           <p>
             Dica: Digite <span className="font-mono text-emerald-500 font-semibold">/</span> para abrir o menu do ZapPlus
@@ -1433,7 +1266,16 @@ export function MessageComposer({
         onSendAudio={handleSendAudioWithPresence}
         onSendTextDirect={(txt) => onSend(txt, replyTo?.id)}
         onSelectSequence={onSelectSequence}
+        onEditReply={(qr) => onOpenCreateReply?.(qr.kind, qr)}
         contactContext={variableContext}
+      />
+
+      {/* Send Native WhatsApp PIX Modal */}
+      <SendPixModal
+        open={pixModalOpen}
+        onOpenChange={setPixModalOpen}
+        conversationId={conversationId}
+        contactName={contactName}
       />
     </div>
   );

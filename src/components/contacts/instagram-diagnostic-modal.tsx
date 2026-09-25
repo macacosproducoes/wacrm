@@ -503,20 +503,24 @@ export function InstagramDiagnosticModal({
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="w-32">
+            <div className="w-36">
               <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
                 Seguidores
               </label>
               <select
                 value={orderQuantity}
                 onChange={(e) => setOrderQuantity(e.target.value)}
-                className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none"
+                className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none font-medium"
               >
+                <option value="500">500 seguidores</option>
                 <option value="1000">1.000 seguidores</option>
                 <option value="2000">2.000 seguidores</option>
                 <option value="5000">5.000 seguidores</option>
                 <option value="10000">10.000 seguidores</option>
                 <option value="20000">20.000 seguidores</option>
+                <option value="30000">30.000 seguidores</option>
+                <option value="50000">50.000 seguidores</option>
+                <option value="100000">100.000 seguidores</option>
               </select>
             </div>
 

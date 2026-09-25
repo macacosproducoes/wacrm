@@ -52,7 +52,7 @@ const KEY_PLACEHOLDER: Record<AiProvider, string> = {
 };
 
 const SUGGESTED_MODELS: Record<AiProvider, string[]> = {
-  gemini: ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-3-5-flash-openai'],
+  gemini: ['gemini-3-5-flash-openai', 'gemini-2.5-flash', 'gemini-1.5-flash'],
   openai: ['gpt-5.4-mini', 'gpt-4o-mini', 'gpt-4o'],
   anthropic: ['claude-haiku-4-5-20251001', 'claude-3-5-sonnet-latest'],
 };

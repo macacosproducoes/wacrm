@@ -421,6 +421,80 @@ export async function sendUazApiMedia(
   };
 }
 
+export interface UazApiPixButtonOptions {
+  number: string;
+  pixKey: string;
+  pixType: 'EMAIL' | 'PHONE' | 'CPF' | 'EVP';
+  pixName?: string;
+  text?: string;
+}
+
+/**
+ * Send native WhatsApp PIX button message via UazAPI.
+ * Endpoint: POST /send/pix-button
+ * Renders WhatsApp native payment_info flow with one-click copy button.
+ */
+export async function sendUazApiPixButton(
+  baseUrl: string,
+  token: string,
+  opts: UazApiPixButtonOptions
+): Promise<UazApiSendResult> {
+  const normalized = normalizeBaseUrl(baseUrl);
+  const formattedNumber = formatUazApiNumber(opts.number);
+  const endpoint = `${normalized}/send/pix-button`;
+
+  const body: Record<string, unknown> = {
+    number: formattedNumber,
+    pixKey: opts.pixKey.trim(),
+    pixType: opts.pixType,
+  };
+
+  if (opts.pixName && opts.pixName.trim()) {
+    body.pixName = opts.pixName.trim();
+  }
+
+  if (opts.text && opts.text.trim()) {
+    body.text = opts.text.trim();
+  }
+
+  console.log(`[sendUazApiPixButton] Sending PIX (${opts.pixType}) to ${formattedNumber} via ${endpoint}`);
+
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      token,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15000),
+  });
+
+  const data = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    console.error(`[sendUazApiPixButton] Failed (HTTP ${res.status}):`, JSON.stringify(data));
+    throw new Error(
+      data.message || data.error || `Falha ao enviar PIX nativo (HTTP ${res.status})`
+    );
+  }
+
+  const messageId =
+    data.messageid ||
+    data.id ||
+    data.messageId ||
+    data.key?.id ||
+    data.data?.key?.id ||
+    `uazapi_pix_${Date.now()}`;
+
+  console.log(`[sendUazApiPixButton] Success! messageId: ${messageId}`);
+
+  return {
+    messageId,
+    status: 'sent',
+    raw: data,
+  };
+}
+
 /**
  * Configure webhook in UazAPI.
  */

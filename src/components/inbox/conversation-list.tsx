@@ -24,6 +24,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ContactAvatar } from "@/components/ui/contact-avatar";
 import { formatContactDisplayName } from "@/lib/contacts/format-contact";
+import { useAuth } from "@/hooks/use-auth";
 
 interface ConversationListProps {
   activeConversationId: string | null;
@@ -57,6 +58,7 @@ export function ConversationList({
   resyncToken = 0,
 }: ConversationListProps) {
   const t = useTranslations("Inbox.conversationList");
+  const { accountId } = useAuth();
   
   const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = useMemo(() => [
     { label: t("filterAll"), value: "all" },
@@ -176,11 +178,15 @@ export function ConversationList({
       console.log(`[INBOX] load conversations trigger: resyncToken=${resyncToken}, currentCount=${currentCount}`);
       let list: any = null;
 
-      // 1. Try Supabase browser client
+      // 1. Try Supabase browser client with strict account isolation
       try {
-        const { data, error } = await supabase
+        let q = supabase
           .from("conversations")
-          .select(CONVERSATION_SELECT)
+          .select(CONVERSATION_SELECT);
+        if (accountId) {
+          q = q.eq("account_id", accountId);
+        }
+        const { data, error } = await q
           .order("last_message_at", { ascending: false, nullsFirst: false })
           .order("updated_at", { ascending: false });
 
@@ -224,7 +230,12 @@ export function ConversationList({
         return;
       }
 
-      onConversationsLoadedRef.current(normalizedList);
+      // Strictly ensure no foreign accounts can be passed to state
+      const filteredList = accountId
+        ? normalizedList.filter((c) => !c.account_id || c.account_id === accountId)
+        : normalizedList;
+
+      onConversationsLoadedRef.current(filteredList);
       setLoading(false);
 
       // 4. If user actually has 0 conversations on first load, trigger background sync
@@ -252,7 +263,7 @@ export function ConversationList({
     return () => {
       cancelled = true;
     };
-  }, [resyncToken]);
+  }, [resyncToken, accountId]);
 
   // Tag definitions for the filter picker — loaded once so labels/colours
   // stay stable regardless of which conversations happen to be loaded.
@@ -260,13 +271,15 @@ export function ConversationList({
     const supabase = createClient();
     let cancelled = false;
     (async () => {
-      const { data } = await supabase.from("tags").select("*").order("name");
+      let q = supabase.from("tags").select("*");
+      if (accountId) q = q.eq("account_id", accountId);
+      const { data } = await q.order("name");
       if (!cancelled && data) setTags(data as Tag[]);
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [accountId]);
 
   // Company options are derived from the loaded conversations — there's no
   // separate companies table, and only companies with a live conversation
@@ -288,6 +301,11 @@ export function ConversationList({
 
   const filtered = useMemo(() => {
     let result = conversations;
+
+    // STRICT MULTI-TENANT ISOLATION:
+    if (accountId) {
+      result = result.filter((c) => !c.account_id || c.account_id === accountId);
+    }
 
     if (filter === "unread") {
       result = result.filter((c) => c.unread_count > 0);
@@ -316,7 +334,7 @@ export function ConversationList({
     }
 
     return result;
-  }, [conversations, filter, search, selectedTagIds, selectedCompany]);
+  }, [conversations, filter, search, selectedTagIds, selectedCompany, accountId]);
 
   const toggleTag = useCallback((id: string) => {
     setSelectedTagIds((prev) =>

@@ -46,6 +46,22 @@ export function SequenceStepBuilder({
     (r) => r.kind === "video" || r.kind === "document" || r.kind === "media"
   );
 
+  const resolveStepType = (reply: QuickReply): QuickReplySequenceStep["type"] => {
+    if (reply.kind === "audio" || reply.media_type?.startsWith("audio/") || /\.(ogg|mp3|wav|m4a|opus)(\?.*)?$/i.test(reply.media_url || "")) {
+      return "audio";
+    }
+    if (reply.kind === "image" || reply.media_type?.startsWith("image/") || /\.(jpe?g|png|webp|gif)(\?.*)?$/i.test(reply.media_url || "")) {
+      return "image";
+    }
+    if (reply.kind === "video" || reply.media_type?.startsWith("video/") || /\.(mp4|3gpp|mov)(\?.*)?$/i.test(reply.media_url || "")) {
+      return "video";
+    }
+    if (reply.kind === "document" || reply.media_type?.startsWith("application/")) {
+      return "document";
+    }
+    return (reply.kind as any) || "text";
+  };
+
   const handleAddStep = (replyId?: string) => {
     let newStep: QuickReplySequenceStep;
 
@@ -55,15 +71,7 @@ export function SequenceStepBuilder({
         newStep = {
           id: String(Date.now()),
           order: steps.length + 1,
-          type: (selected.kind === "audio"
-            ? "audio"
-            : selected.kind === "image"
-            ? "image"
-            : selected.kind === "video"
-            ? "video"
-            : selected.kind === "document"
-            ? "document"
-            : "text") as any,
+          type: resolveStepType(selected),
           content: selected.content_text || selected.title,
           media_url: selected.media_url,
           media_type: selected.media_type,
@@ -99,15 +107,7 @@ export function SequenceStepBuilder({
     const next = [...steps];
     next[stepIndex] = {
       ...next[stepIndex],
-      type: (selected.kind === "audio"
-        ? "audio"
-        : selected.kind === "image"
-        ? "image"
-        : selected.kind === "video"
-        ? "video"
-        : selected.kind === "document"
-        ? "document"
-        : "text") as any,
+      type: resolveStepType(selected),
       content: selected.content_text || selected.title,
       media_url: selected.media_url,
       media_type: selected.media_type,

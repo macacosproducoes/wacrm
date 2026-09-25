@@ -224,32 +224,61 @@ export function useSequenceRunner(params: {
 
       setExecution((prev) => (prev ? { ...prev, isSending: true, remainingDelaySeconds: 0 } : null));
 
-      // Build payload based on type
+      // Auto-detect effective type if step has media_url but was marked as text
+      let effectiveType = step.type || "text";
+      if (step.media_url) {
+        if (effectiveType === "text" || !["image", "video", "audio", "document"].includes(effectiveType)) {
+          const mType = (step.media_type || "").toLowerCase();
+          const mUrl = (step.media_url || "").toLowerCase();
+          if (mType.startsWith("image/") || /\.(jpe?g|png|webp|gif)(\?.*)?$/i.test(mUrl)) {
+            effectiveType = "image";
+          } else if (mType.startsWith("audio/") || /\.(ogg|mp3|wav|m4a|opus)(\?.*)?$/i.test(mUrl)) {
+            effectiveType = "audio";
+          } else if (mType.startsWith("video/") || /\.(mp4|3gpp|mov)(\?.*)?$/i.test(mUrl)) {
+            effectiveType = "video";
+          } else {
+            effectiveType = "document";
+          }
+        }
+      }
+
       let payload: Record<string, unknown> = {
         conversation_id: conversationId,
       };
 
-      if (step.type === "text") {
+      if (effectiveType === "text") {
         const textWithVars = replaceQuickReplyVariables(step.content || "", contactContext);
-        payload = {
-          ...payload,
-          message_type: "text",
-          content_text: textWithVars,
-        };
-      } else if (step.type === "audio") {
+        if (!textWithVars.trim() && step.media_url) {
+          // Fallback to image if content is empty but media_url exists
+          effectiveType = "image";
+          payload = {
+            ...payload,
+            message_type: "image",
+            media_url: step.media_url,
+            content_text: "",
+            filename: step.filename || "imagem.jpg",
+          };
+        } else {
+          payload = {
+            ...payload,
+            message_type: "text",
+            content_text: textWithVars || " ",
+          };
+        }
+      } else if (effectiveType === "audio") {
         payload = {
           ...payload,
           message_type: "audio",
           media_url: step.media_url,
           content_text: step.content || "[Áudio Gravado]",
         };
-      } else if (["image", "video", "document"].includes(step.type)) {
+      } else if (["image", "video", "document"].includes(effectiveType)) {
         payload = {
           ...payload,
-          message_type: step.type,
+          message_type: effectiveType,
           media_url: step.media_url,
           content_text: step.content || "",
-          filename: step.filename,
+          filename: step.filename || (effectiveType === "image" ? "imagem.jpg" : undefined),
         };
       }
 
@@ -272,7 +301,7 @@ export function useSequenceRunner(params: {
             conversation_id: conversationId,
             sender_type: "agent",
             sender_id: "",
-            content_type: step.type === "text" ? "text" : (step.type as any),
+            content_type: effectiveType === "text" ? "text" : (effectiveType as any),
             content_text: (payload.content_text as string) || "",
             media_url: (step.media_url as string) || null,
             status: "sent",

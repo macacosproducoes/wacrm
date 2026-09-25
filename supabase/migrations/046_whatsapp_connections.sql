@@ -78,33 +78,39 @@ EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
 
--- Restore active Larissa WhatsApp instance
-INSERT INTO public.whatsapp_connections (
-  id,
-  account_id,
-  provider,
-  display_name,
-  phone_number,
-  status,
-  is_active,
-  provider_config,
-  mirror_inbound_media,
-  last_sync_at
-) VALUES (
-  '62fd0743-19f0-45ff-a059-12e462c24853',
-  '4fe971b8-cf70-45e2-8db3-c3eff700ae75',
-  'uazapi',
-  'Larissa',
-  '5516989233842',
-  'connected',
-  true,
-  jsonb_build_object(
-    'base_url', 'https://3nglobal.uazapi.com',
-    'token', '268e61c3f6762ada656f5899:b9ff1e33c188ba7d99f0fbc9ecff88b702a8fd94748f004c6cd3f85831e63b41837580f9:f2d8fc5a2ceb081be81017c92a91a386'
-  ),
-  true,
-  now()
-) ON CONFLICT (id) DO UPDATE SET
-  status = 'connected',
-  is_active = true,
-  provider_config = EXCLUDED.provider_config;
+-- Restore active Larissa WhatsApp instance if account exists
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.accounts WHERE id = '4fe971b8-cf70-45e2-8db3-c3eff700ae75') THEN
+    INSERT INTO public.whatsapp_connections (
+      id,
+      account_id,
+      provider,
+      display_name,
+      phone_number,
+      status,
+      is_active,
+      provider_config,
+      mirror_inbound_media,
+      last_sync_at
+    ) VALUES (
+      '62fd0743-19f0-45ff-a059-12e462c24853',
+      '4fe971b8-cf70-45e2-8db3-c3eff700ae75',
+      'uazapi',
+      'Larissa',
+      '5516989233842',
+      'connected',
+      true,
+      jsonb_build_object(
+        'base_url', 'https://3nglobal.uazapi.com',
+        'token', '268e61c3f6762ada656f5899:b9ff1e33c188ba7d99f0fbc9ecff88b702a8fd94748f004c6cd3f85831e63b41837580f9:f2d8fc5a2ceb081be81017c92a91a386'
+      ),
+      true,
+      now()
+    ) ON CONFLICT (id) DO UPDATE SET
+      status = 'connected',
+      is_active = true,
+      provider_config = EXCLUDED.provider_config;
+  END IF;
+END $$;
+

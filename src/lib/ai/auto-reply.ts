@@ -286,15 +286,6 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
         return
       }
 
-      // Pre-claim all unprocessed customer messages in this turn immediately so concurrent pollers
-      // or workers never race or produce duplicate replies during LLM generation and network calls
-      await db
-        .from('messages')
-        .update({ ai_processed_at: new Date().toISOString() })
-        .eq('conversation_id', conversationId)
-        .eq('sender_type', 'customer')
-        .is('ai_processed_at', null)
-
       // Set distributed processing lock in DB so no concurrent worker or subsequent message runs Gemini simultaneously
       await recordAiDecision(db, {
         conversationId,
@@ -496,7 +487,7 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
       }
     }
 
-    // If no text was returned due to transient upstream issues, leave thread active
+    // If no text was returned due to transient upstream issues, release lock & leave thread active
     if (!text) {
       if (contact?.phone) {
         void sendWhatsAppPresence({
@@ -505,6 +496,20 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
           presence: 'paused',
         })
       }
+      await recordAiDecision(db, {
+        conversationId,
+        accountId,
+        status: 'error',
+        reason: 'O modelo de IA não retornou texto na resposta. Bloqueio liberado.',
+        steps: [
+          {
+            name: 'Consulta ao Modelo',
+            status: 'error',
+            detail: 'O modelo retornou resposta vazia. Bloqueio de concorrência liberado.',
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      })
       console.warn(`[ai auto-reply] No text returned from model for conv ${conversationId} — leaving thread active.`)
       return
     }
@@ -907,6 +912,25 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
     }
   } catch (err) {
     console.error('[ai auto-reply] dispatch failed:', err)
+    try {
+      const errDb = supabaseAdmin()
+      await recordAiDecision(errDb, {
+        conversationId,
+        accountId,
+        status: 'error',
+        reason: err instanceof Error ? err.message : 'Falha ao processar resposta da IA',
+        steps: [
+          {
+            name: 'Execução da IA',
+            status: 'error',
+            detail: err instanceof Error ? err.message : String(err),
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      })
+    } catch {
+      // Swallowed
+    }
   }
 }
 

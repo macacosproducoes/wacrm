@@ -23,6 +23,7 @@ import {
 
 interface Profile {
   id: string;
+  user_id?: string;
   full_name: string | null;
   email: string;
   avatar_url: string | null;
@@ -285,6 +286,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         const newProfile: Profile = {
           id: data.id,
+          user_id: userId,
           full_name: data.full_name,
           email: data.email,
           avatar_url: data.avatar_url,
@@ -349,6 +351,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const currentUser = session?.user ?? null;
         setUser(currentUser);
 
+        // STRICT MULTI-TENANT CACHE VALIDATION:
+        // If the session user does not match the cached profile's user_id, purge the cache!
+        if (currentUser && cached.profile?.user_id && cached.profile.user_id !== currentUser.id) {
+          console.warn("[SECURITY / TENANCY] Purging stale sessionStorage from previous user session");
+          try {
+            sessionStorage.removeItem(CACHE_PROFILE_KEY);
+            sessionStorage.removeItem(CACHE_ACCOUNT_KEY);
+            sessionStorage.removeItem("wacrm_dashboard_summary");
+          } catch {}
+          setProfile(null);
+          setAccount(null);
+          setProfileLoading(true);
+        }
+
         if (currentUser) {
           // Don't block session loading on profile fetch — chrome
           // (header, sidebar) can render from the user object alone,
@@ -380,10 +396,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (currentUser) {
         if (currentUser.id !== lastFetchedUserIdRef.current) {
+          try {
+            sessionStorage.removeItem(CACHE_PROFILE_KEY);
+            sessionStorage.removeItem(CACHE_ACCOUNT_KEY);
+            sessionStorage.removeItem("wacrm_dashboard_summary");
+          } catch {}
+          setProfile(null);
+          setAccount(null);
+          setProfileLoading(true);
           fetchProfile(currentUser.id);
         }
       } else {
         lastFetchedUserIdRef.current = null;
+        try {
+          sessionStorage.removeItem(CACHE_PROFILE_KEY);
+          sessionStorage.removeItem(CACHE_ACCOUNT_KEY);
+          sessionStorage.removeItem("wacrm_dashboard_summary");
+        } catch {}
         setProfile(null);
         setAccount(null);
         setProfileLoading(false);

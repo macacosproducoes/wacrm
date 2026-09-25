@@ -144,9 +144,10 @@ export async function PATCH(
       scope,
     };
   } else if (nextKind === 'sequence') {
-    update.kind = 'text';
+    update.kind = 'sequence';
     const items = Array.isArray(sequence_items) ? sequence_items : [];
-    update.content_text = `[Sequência: ${items.length} mensagens]`;
+    update.content_text = body.content_text || `[Sequência: ${items.length} mensagens]`;
+    update.sequence_items = items;
     update.interactive_payload = {
       ...existingMeta,
       type: 'sequence',

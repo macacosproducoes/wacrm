@@ -96,17 +96,29 @@ export async function processUazApiEvent(
 
   let connection = connectionHint;
   if (!connection) {
-    // 1. Match the connection by owner/instance phone or identifier in webhook payload
+    // 1. Extract all identifier fields from webhook payload
     const msgData = ((body.data || body.message || body) ?? {}) as Record<string, unknown>;
     const rawOwner = String(
       body.owner ||
       msgData.owner ||
-      body.instance ||
-      msgData.instance ||
       body.sender ||
       msgData.sender ||
       ''
     ).replace(/\D/g, '');
+
+    const rawInstance = String(
+      body.instanceName ||
+      body.instance ||
+      msgData.instanceName ||
+      msgData.instance ||
+      ''
+    ).trim();
+
+    const rawToken = String(
+      body.token ||
+      msgData.token ||
+      ''
+    ).trim();
 
     const { data: allUazConns } = await admin
       .from('whatsapp_connections')
@@ -114,22 +126,38 @@ export async function processUazApiEvent(
       .eq('provider', 'uazapi');
 
     if (allUazConns && allUazConns.length > 0) {
-      if (rawOwner) {
+      // Priority 1: Match by token if present in provider_config
+      if (rawToken) {
         connection = allUazConns.find((c) => {
-          const p = String(c.phone_number || '').replace(/\D/g, '');
-          return p && (rawOwner.includes(p) || p.includes(rawOwner));
+          const cfg = (c.provider_config || {}) as Record<string, unknown>;
+          return cfg.token && String(cfg.token).includes(rawToken);
         }) || null;
       }
 
-      // 2. Fallback: pick the active connection or the first available
-      if (!connection) {
-        connection = allUazConns.find((c) => c.is_active) || allUazConns[0] || null;
+      // Priority 2: Match by instance name in provider_config
+      if (!connection && rawInstance) {
+        connection = allUazConns.find((c) => {
+          const cfg = (c.provider_config || {}) as Record<string, unknown>;
+          return cfg.instance_name === rawInstance || cfg.instanceName === rawInstance;
+        }) || null;
+      }
+
+      // Priority 3: Match by normalized owner phone
+      if (!connection && rawOwner && rawOwner.length >= 8) {
+        connection = allUazConns.find((c) => {
+          const p = String(c.phone_number || '').replace(/\D/g, '');
+          return p && (rawOwner.endsWith(p) || p.endsWith(rawOwner) || rawOwner === p);
+        }) || null;
       }
     }
   }
 
+  // STRICT MULTI-TENANT ISOLATION:
+  // Under NO circumstance will we ever fall back to an arbitrary or first connection (e.g. allUazConns[0]).
+  // Dropping an unknown/unconfigured webhook is safe; routing it to another account causes severe data contamination.
   if (!connection) {
-    return { success: false, reason: 'no_connection' };
+    console.warn(`[SECURITY / TENANCY] Unmatched UazAPI webhook rejected. No registered connection matched payload.`);
+    return { success: false, reason: 'unmatched_connection' };
   }
 
   const eventType = String(

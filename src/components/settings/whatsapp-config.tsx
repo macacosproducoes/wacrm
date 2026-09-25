@@ -71,7 +71,7 @@ export function WhatsAppConfig() {
   const [statusMessage, setStatusMessage] = useState<string>('');
 
   const searchParams = useSearchParams();
-  const [provider, setProvider] = useState<'baileys' | 'uazapi' | 'meta'>('baileys');
+  const [provider, setProvider] = useState<'baileys' | 'uazapi' | 'meta'>('uazapi');
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -83,6 +83,8 @@ export function WhatsAppConfig() {
       const saved = localStorage.getItem('wacrm_whatsapp_provider');
       if (saved === 'meta' || saved === 'uazapi' || saved === 'baileys') {
         setProvider(saved as 'baileys' | 'uazapi' | 'meta');
+      } else {
+        setProvider('uazapi');
       }
     }
   }, [searchParams]);
@@ -459,22 +461,6 @@ export function WhatsAppConfig() {
       <div className="flex flex-wrap items-center gap-2 p-1.5 bg-muted/60 backdrop-blur border border-border/60 rounded-xl w-fit mb-6">
         <button
           type="button"
-          onClick={() => handleSelectProvider('baileys')}
-          className={cn(
-            "px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2.5",
-            provider === 'baileys'
-              ? "bg-background text-foreground shadow-sm ring-1 ring-border/50 font-semibold"
-              : "text-muted-foreground hover:text-foreground"
-          )}
-        >
-          <QrCode className="size-4 text-emerald-500" />
-          <span>WhatsApp Direto (QR Code)</span>
-          <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20">
-            Recomendado / Sem UazAPI
-          </Badge>
-        </button>
-        <button
-          type="button"
           onClick={() => handleSelectProvider('uazapi')}
           className={cn(
             "px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2.5",
@@ -483,8 +469,24 @@ export function WhatsAppConfig() {
               : "text-muted-foreground hover:text-foreground"
           )}
         >
-          <Smartphone className="size-4 text-primary" />
-          <span>UazAPI (Gateway)</span>
+          <Smartphone className="size-4 text-emerald-500" />
+          <span>UazAPI (Instâncias Ativas)</span>
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20">
+            Padrão
+          </Badge>
+        </button>
+        <button
+          type="button"
+          onClick={() => handleSelectProvider('baileys')}
+          className={cn(
+            "px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2.5",
+            provider === 'baileys'
+              ? "bg-background text-foreground shadow-sm ring-1 ring-border/50 font-semibold"
+              : "text-muted-foreground hover:text-foreground"
+          )}
+        >
+          <QrCode className="size-4 text-muted-foreground" />
+          <span>WhatsApp Direto (Baileys QR)</span>
         </button>
         <button
           type="button"

@@ -57,6 +57,7 @@ interface QuickReplyPickerProps {
   onSendAudio?: (qr: QuickReply, simulateRecording: boolean) => void;
   onSendTextDirect?: (text: string) => void;
   onSelectSequence?: (qr: QuickReply) => void;
+  onEditReply?: (qr: QuickReply) => void;
   contactContext?: VariableContext;
 }
 
@@ -69,6 +70,7 @@ export function QuickReplyPicker({
   onSendAudio,
   onSendTextDirect,
   onSelectSequence,
+  onEditReply,
   contactContext = {},
 }: QuickReplyPickerProps) {
   const t = useTranslations("Inbox.composer");
@@ -937,8 +939,15 @@ export function QuickReplyPicker({
                             </span>
                             <button
                               type="button"
-                              onClick={(e) => handleStartRename(qr, e)}
-                              title="Renomear este áudio/item"
+                              onClick={(e) => {
+                                if (onEditReply) {
+                                  onOpenChange(false);
+                                  onEditReply(qr);
+                                } else {
+                                  handleStartRename(qr, e);
+                                }
+                              }}
+                              title="Editar resposta rápida / texto"
                               className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors"
                             >
                               <Pencil className="h-3 w-3" />
@@ -1041,6 +1050,22 @@ export function QuickReplyPicker({
                               <Send className="h-3.5 w-3.5" />
                             </Button>
 
+                            {/* Edit audio reply */}
+                            {onEditReply && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onOpenChange(false);
+                                  onEditReply(qr);
+                                }}
+                                title="Editar configurações deste áudio"
+                                className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+
                             {/* Delete audio from database button */}
                             <button
                               type="button"
@@ -1107,6 +1132,22 @@ export function QuickReplyPicker({
                               Iniciar Sequência
                             </Button>
 
+                            {onEditReply && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  onOpenChange(false);
+                                  onEditReply(qr);
+                                }}
+                                className="h-8 text-xs px-2 border-border hover:bg-muted gap-1 text-muted-foreground hover:text-foreground"
+                                title="Editar passos desta sequência"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                                Editar
+                              </Button>
+                            )}
+
                             <button
                               type="button"
                               onClick={(e) => {
@@ -1121,40 +1162,107 @@ export function QuickReplyPicker({
                           </>
                         )
                       ) : (
-                        <>
-                          {/* Pick / Insert in textarea */}
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => {
-                              onOpenChange(false);
-                              onPick(qr);
-                            }}
-                            className="h-8 text-xs px-3"
+                        confirmDeleteId === qr.id ? (
+                          <div
+                            className="flex items-center gap-1.5 shrink-0 bg-red-500/10 border border-red-500/30 rounded-md px-2 py-1 animate-in fade-in"
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            Inserir
-                          </Button>
+                            <span className="text-[11px] font-medium text-red-600 dark:text-red-400">
+                              Excluir da base?
+                            </span>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="destructive"
+                              disabled={deletingId === qr.id}
+                              onClick={(e) => void handleConfirmDelete(qr.id, e)}
+                              className="h-6 px-2 text-[11px] font-medium gap-1 bg-red-600 hover:bg-red-700 text-white shadow-none"
+                            >
+                              {deletingId === qr.id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3 w-3" />
+                              )}
+                              Sim
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConfirmDeleteId(null);
+                              }}
+                              className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                            >
+                              <X className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <>
+                            {onEditReply && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  onOpenChange(false);
+                                  onEditReply(qr);
+                                }}
+                                className="h-8 text-xs px-2.5 border-border hover:bg-muted gap-1 text-muted-foreground hover:text-foreground"
+                                title="Editar texto pronto completo, atalho ou categoria"
+                              >
+                                <Pencil className="h-3 w-3" />
+                                Editar
+                              </Button>
+                            )}
 
-                          {/* Direct send for text */}
-                          {!isInteractive && onSendTextDirect && (
+                            {/* Pick / Insert in textarea */}
                             <Button
                               size="sm"
+                              variant="secondary"
                               onClick={() => {
                                 onOpenChange(false);
-                                const textToSend = replaceQuickReplyVariables(
-                                  qr.content_text || qr.title,
-                                  contactContext
-                                );
-                                onSendTextDirect(textToSend);
+                                onPick(qr);
                               }}
-                              className="h-8 text-xs px-2.5 bg-primary"
-                              title="Enviar imediatamente para o contato"
+                              className="h-8 text-xs px-3"
                             >
-                              <Send className="h-3.5 w-3.5 mr-1" />
-                              Enviar
+                              Inserir
                             </Button>
-                          )}
-                        </>
+
+                            {/* Direct send for text */}
+                            {!isInteractive && onSendTextDirect && (
+                              <Button
+                                size="sm"
+                                onClick={() => {
+                                  onOpenChange(false);
+                                  const textToSend = replaceQuickReplyVariables(
+                                    qr.content_text || qr.title,
+                                    contactContext
+                                  );
+                                  onSendTextDirect(textToSend);
+                                }}
+                                className="h-8 text-xs px-2.5 bg-primary"
+                                title="Enviar imediatamente para o contato"
+                              >
+                                <Send className="h-3.5 w-3.5 mr-1" />
+                                Enviar
+                              </Button>
+                            )}
+
+                            {/* Delete text reply button */}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConfirmDeleteId(qr.id);
+                              }}
+                              title="Excluir este texto da base"
+                              className="p-1.5 rounded-md text-muted-foreground hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        )
                       )}
                     </div>
                   </div>

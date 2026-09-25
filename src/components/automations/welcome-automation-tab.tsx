@@ -22,11 +22,21 @@ import {
   Video,
   FileText,
   ChevronRight,
+  Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import type { QuickReply } from "@/types";
 
 interface ChainedFollowUpItem {
@@ -58,6 +68,73 @@ export function WelcomeAutomationTab() {
     send_if_human_active: false,
     follow_ups: [],
   });
+
+  // Editor modal state
+  const [editingReply, setEditingReply] = useState<QuickReply | null>(null);
+  const [editText, setEditText] = useState("");
+  const [editSequenceSteps, setEditSequenceSteps] = useState<any[]>([]);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+
+  const openEditReply = (reply: QuickReply) => {
+    setEditingReply(reply);
+    setEditText(reply.content_text || "");
+    const seq = Array.isArray(reply.sequence_items)
+      ? JSON.parse(JSON.stringify(reply.sequence_items))
+      : [];
+    setEditSequenceSteps(seq);
+    setIsEditOpen(true);
+  };
+
+  const handleSaveEditedReply = async () => {
+    if (!editingReply) return;
+    setSavingEdit(true);
+    try {
+      const isSequence = editingReply.kind === "sequence" || editSequenceSteps.length > 0;
+      const body: Record<string, any> = {
+        title: editingReply.title,
+        kind: editingReply.kind,
+      };
+      if (isSequence) {
+        body.sequence_items = editSequenceSteps;
+        body.content_text = editText || `[Sequência: ${editSequenceSteps.length} mensagens]`;
+      } else {
+        body.content_text = editText;
+      }
+
+      const res = await fetch(`/api/quick-replies/${editingReply.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Erro ao salvar alterações");
+      }
+
+      // Update local quickReplies list
+      setQuickReplies((prev) =>
+        prev.map((qr) =>
+          qr.id === editingReply.id
+            ? {
+                ...qr,
+                content_text: body.content_text,
+                sequence_items: isSequence ? editSequenceSteps : qr.sequence_items,
+              }
+            : qr
+        )
+      );
+
+      toast.success("Texto da automação atualizado com sucesso!");
+      setIsEditOpen(false);
+    } catch (error: any) {
+      console.error("Erro ao salvar texto da resposta:", error);
+      toast.error(error.message || "Erro ao atualizar resposta rápida");
+    } finally {
+      setSavingEdit(false);
+    }
+  };
 
   useEffect(() => {
     async function loadData() {
@@ -401,6 +478,16 @@ export function WelcomeAutomationTab() {
                   </div>
 
                   <div className="flex items-center gap-1.5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openEditReply(selectedMainReply)}
+                      className="h-6 px-2 gap-1 text-[11px] text-primary hover:text-primary hover:bg-primary/10 border-primary/30"
+                    >
+                      <Pencil className="h-3 w-3" />
+                      Editar Texto
+                    </Button>
                     {selectedMainReply.media_duration && (
                       <Badge variant="outline" className="text-[10px] font-mono">
                         {selectedMainReply.media_duration}s
@@ -423,13 +510,13 @@ export function WelcomeAutomationTab() {
                   </div>
                 </div>
 
-                {selectedMainReply.content_text && (
+                {selectedMainReply.content_text && selectedMainReply.kind !== "sequence" && (
                   <p className="text-foreground/90 whitespace-pre-line leading-relaxed font-sans bg-background/60 p-2.5 rounded border border-border/50">
                     {selectedMainReply.content_text}
                   </p>
                 )}
 
-                {selectedMainReply.media_url && (
+                {selectedMainReply.media_url && selectedMainReply.kind !== "sequence" && (
                   <div className="text-[11px] text-muted-foreground flex items-center gap-1 font-mono truncate">
                     <span>Mídia:</span>
                     <span className="truncate text-foreground/80">{selectedMainReply.media_url}</span>
@@ -437,19 +524,41 @@ export function WelcomeAutomationTab() {
                 )}
 
                 {selectedMainReply.kind === "sequence" && (
-                  <div className="pt-1.5 border-t border-border/60">
-                    <div className="text-[11px] font-semibold text-orange-700 dark:text-orange-300 flex items-center gap-1 mb-1">
-                      <Layers className="h-3.5 w-3.5" />
-                      Fluxo de Disparo da Sequência ({selectedMainReply.sequence_items?.length || 0} passos):
+                  <div className="pt-2 border-t border-border/60 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="text-[11px] font-semibold text-orange-700 dark:text-orange-300 flex items-center gap-1">
+                        <Layers className="h-3.5 w-3.5" />
+                        Passos da Sequência ({selectedMainReply.sequence_items?.length || 0} mensagens):
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => openEditReply(selectedMainReply)}
+                        className="h-6 px-2 text-[11px] text-orange-600 hover:text-orange-700 hover:bg-orange-500/10 gap-1 font-medium"
+                      >
+                        <Pencil className="h-3 w-3" />
+                        Editar Textos da Sequência
+                      </Button>
                     </div>
-                    <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
-                      {((selectedMainReply.sequence_items as any[]) || []).map((step, sIdx, arr) => (
-                        <div key={sIdx} className="flex items-center gap-1">
-                          <span className="bg-orange-500/10 text-orange-800 dark:text-orange-200 border border-orange-500/30 px-2 py-0.5 rounded font-medium">
-                            {sIdx + 1}º {step.type} {step.delay_seconds ? `(${step.delay_seconds}s)` : ""}
-                          </span>
-                          {sIdx < arr.length - 1 && (
-                            <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                    <div className="space-y-1.5">
+                      {((selectedMainReply.sequence_items as any[]) || []).map((step, sIdx) => (
+                        <div key={sIdx} className="rounded bg-background/70 p-2 border border-border/40 text-[11px] space-y-1">
+                          <div className="flex items-center justify-between font-mono text-[10px] text-muted-foreground">
+                            <span className="font-semibold text-foreground">
+                              Passo {sIdx + 1}: {step.type === "image" ? "🖼️ Imagem (Tabela)" : step.type === "audio" ? "🎙️ Áudio" : step.type === "video" ? "🎥 Vídeo" : "💬 Mensagem de Texto"}
+                            </span>
+                            {step.delay_seconds ? <span>Espera: {step.delay_seconds}s</span> : null}
+                          </div>
+                          {step.content && (
+                            <p className="whitespace-pre-line text-foreground/90 font-sans line-clamp-3 bg-muted/20 p-1.5 rounded">
+                              {step.content}
+                            </p>
+                          )}
+                          {step.media_url && (
+                            <div className="truncate text-muted-foreground text-[10px]">
+                              Mídia: <span className="font-mono text-foreground/80">{step.media_url}</span>
+                            </div>
                           )}
                         </div>
                       ))}
@@ -584,6 +693,16 @@ export function WelcomeAutomationTab() {
                               <span>{reply.title}</span>
                             </div>
                             <div className="flex items-center gap-1">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => openEditReply(reply)}
+                                className="h-6 px-1.5 gap-1 text-[10px] text-primary hover:bg-primary/10"
+                              >
+                                <Pencil className="h-3 w-3" />
+                                Editar Texto
+                              </Button>
                               {reply.media_duration && (
                                 <Badge variant="outline" className="text-[9px] font-mono">
                                   {reply.media_duration}s
@@ -634,6 +753,211 @@ export function WelcomeAutomationTab() {
           </div>
         </div>
       </div>
+
+      {/* Modal / Dialog para edição direta do texto das automações */}
+      <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
+        <DialogContent className="max-w-2xl max-h-[88vh] flex flex-col p-6">
+          <DialogHeader className="pb-3 border-b border-border/60">
+            <DialogTitle className="flex items-center gap-2 text-base text-foreground font-bold">
+              <Pencil className="h-4 w-4 text-primary" />
+              Editar Conteúdo da Automação: <span className="text-primary">{editingReply?.title}</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Edite o texto que será disparado automaticamente para o lead no WhatsApp quando esta automação for ativada.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex-1 overflow-y-auto pr-1 space-y-4 py-2">
+            {/* Se for sequência (como a tabela + texto de boas-vindas) */}
+            {editingReply && (editingReply.kind === "sequence" || editSequenceSteps.length > 0) ? (
+              <div className="space-y-4">
+                <div className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                  <Layers className="h-4 w-4 text-orange-500" />
+                  Passos da Sequência ({editSequenceSteps.length} mensagens enviadas em ordem):
+                </div>
+
+                {editSequenceSteps.map((step, idx) => (
+                  <div key={idx} className="rounded-xl border border-border bg-muted/20 p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-orange-500/15 text-orange-600 font-bold text-xs">
+                          {idx + 1}
+                        </span>
+                        <span className="text-xs font-semibold uppercase text-foreground">
+                          Passo {idx + 1}: {step.type === "image" ? "🖼️ Imagem (Tabela de Preços/Planos)" : step.type === "audio" ? "🎙️ Áudio" : step.type === "video" ? "🎥 Vídeo" : "💬 Mensagem de Texto"}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs">
+                        <label className="text-[11px] text-muted-foreground">Aguardar:</label>
+                        <div className="flex items-center gap-1">
+                          <Input
+                            type="number"
+                            min={0}
+                            value={step.delay_seconds ?? 0}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value) || 0;
+                              setEditSequenceSteps((prev) =>
+                                prev.map((s, i) => (i === idx ? { ...s, delay_seconds: val } : s))
+                              );
+                            }}
+                            className="h-7 w-16 text-xs text-center"
+                          />
+                          <span className="text-[11px] text-muted-foreground">seg</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {step.media_url && (
+                      <div className="space-y-1.5">
+                        <label className="text-[11px] font-medium text-muted-foreground block">
+                          URL da Mídia:
+                        </label>
+                        <Input
+                          value={step.media_url || ""}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setEditSequenceSteps((prev) =>
+                              prev.map((s, i) => (i === idx ? { ...s, media_url: val } : s))
+                            );
+                          }}
+                          className="h-8 text-xs font-mono"
+                          placeholder="https://..."
+                        />
+                        {step.type === "image" && step.media_url && (
+                          <div className="relative h-28 w-44 rounded-lg overflow-hidden border border-border bg-background mt-1">
+                            <img
+                              src={step.media_url}
+                              alt="Prévia da tabela"
+                              className="h-full w-full object-cover"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-medium text-foreground">
+                          {step.type === "image" ? "Legenda da Imagem (opcional):" : "Texto da Mensagem enviada ao Lead:"}
+                        </label>
+                        <span className="text-[10px] text-muted-foreground font-mono">
+                          {(step.content || "").length} caracteres
+                        </span>
+                      </div>
+
+                      {/* Variáveis para inserir no passo */}
+                      <div className="flex flex-wrap items-center gap-1 pb-1">
+                        <span className="text-[10px] text-muted-foreground flex items-center gap-1 mr-1">
+                          <Sparkles className="h-3 w-3 text-amber-500" /> Inserir:
+                        </span>
+                        {[
+                          { label: "Primeiro Nome", tag: "{{primeiro_nome}}" },
+                          { label: "Nome Completo", tag: "{{nome}}" },
+                          { label: "Empresa", tag: "{{empresa}}" },
+                          { label: "Atendente", tag: "{{atendente}}" },
+                        ].map((v) => (
+                          <button
+                            key={v.tag}
+                            type="button"
+                            onClick={() => {
+                              setEditSequenceSteps((prev) =>
+                                prev.map((s, i) =>
+                                  i === idx ? { ...s, content: (s.content || "") + " " + v.tag } : s
+                                )
+                              );
+                            }}
+                            className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-background border border-border/80 hover:border-primary hover:text-primary transition-colors cursor-pointer"
+                          >
+                            + {v.tag}
+                          </button>
+                        ))}
+                      </div>
+
+                      <Textarea
+                        rows={step.type === "text" ? 7 : 2}
+                        value={step.content || ""}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setEditSequenceSteps((prev) =>
+                            prev.map((s, i) => (i === idx ? { ...s, content: val } : s))
+                          );
+                        }}
+                        placeholder={
+                          step.type === "image"
+                            ? "Legenda opcional para a imagem..."
+                            : "Digite o texto da mensagem que será enviada para o lead..."
+                        }
+                        className="text-xs font-sans leading-relaxed resize-y"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-foreground">
+                    Texto da Mensagem Enviada:
+                  </label>
+                  <span className="text-[10px] text-muted-foreground font-mono">
+                    {editText.length} caracteres
+                  </span>
+                </div>
+
+                {/* Variáveis para inserir no texto simples */}
+                <div className="flex flex-wrap items-center gap-1.5 pb-1">
+                  <span className="text-[11px] text-muted-foreground flex items-center gap-1 mr-1">
+                    <Sparkles className="h-3.5 w-3.5 text-amber-500" /> Inserir tag:
+                  </span>
+                  {[
+                    { label: "Primeiro Nome", tag: "{{primeiro_nome}}" },
+                    { label: "Nome Completo", tag: "{{nome}}" },
+                    { label: "Empresa", tag: "{{empresa}}" },
+                    { label: "Atendente", tag: "{{atendente}}" },
+                  ].map((v) => (
+                    <button
+                      key={v.tag}
+                      type="button"
+                      onClick={() => setEditText((prev) => (prev ? prev + " " + v.tag : v.tag))}
+                      className="text-[11px] font-mono px-2 py-0.5 rounded bg-background border border-border/80 hover:border-primary hover:text-primary transition-colors cursor-pointer"
+                    >
+                      + {v.tag}
+                    </button>
+                  ))}
+                </div>
+
+                <Textarea
+                  rows={9}
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                  placeholder="Digite o texto da mensagem que será enviada para o lead..."
+                  className="text-xs font-sans leading-relaxed resize-y"
+                />
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="pt-3 border-t border-border/60 gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsEditOpen(false)}
+              disabled={savingEdit}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              onClick={handleSaveEditedReply}
+              disabled={savingEdit}
+              className="gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90 font-medium"
+            >
+              <Save className="h-4 w-4" />
+              {savingEdit ? "Salvando Alterações..." : "Salvar Alterações no Texto"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

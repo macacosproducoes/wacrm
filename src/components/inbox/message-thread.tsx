@@ -742,7 +742,8 @@ export function MessageThread({
 
   const handleSendMedia = useCallback(
     async (payload: SendMediaPayload) => {
-      if (!conversation) return;
+      const targetConvId = payload.conversationId || conversation?.id;
+      if (!targetConvId) return;
 
       // Documents show their filename in our own bubble (and to the
       // recipient as the Meta caption when no caption was typed); other
@@ -755,7 +756,7 @@ export function MessageThread({
       const tempId = `temp-${Date.now()}`;
       const optimisticMsg: Message = {
         id: tempId,
-        conversation_id: conversation.id,
+        conversation_id: targetConvId,
         sender_type: "agent",
         content_type: payload.kind,
         content_text: contentText,
@@ -772,7 +773,7 @@ export function MessageThread({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            conversation_id: conversation.id,
+            conversation_id: targetConvId,
             message_type: payload.kind,
             media_url: payload.mediaUrl,
             content_text: contentText,
@@ -807,7 +808,7 @@ export function MessageThread({
         void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
       }
     },
-    [conversation, onNewMessage, onUpdateMessage],
+    [conversation?.id, onNewMessage, onUpdateMessage],
   );
 
   const handleSendInteractive = useCallback(
@@ -1162,6 +1163,32 @@ export function MessageThread({
     [conversation, onAssignChange],
   );
 
+  const effectiveMessages = useMemo(() => {
+    if (!conversation) return [];
+    if (messages && messages.length > 0 && messages[0]?.conversation_id === conversation.id) {
+      return messages;
+    }
+    if (messages && messages.length > 0 && messages.some((m) => m.conversation_id === conversation.id)) {
+      return messages.filter((m) => m.conversation_id === conversation.id);
+    }
+    // If messages are not in state yet, but conversation summary has last_message_text, provide instant preview
+    if (conversation.last_message_text) {
+      const isAgent = conversation.last_message_sender === "agent" || conversation.last_message_sender === "bot";
+      return [
+        {
+          id: `preview-${conversation.id}`,
+          conversation_id: conversation.id,
+          sender_type: isAgent ? "agent" : "customer",
+          content_type: "text",
+          content_text: conversation.last_message_text,
+          status: "delivered",
+          created_at: conversation.last_message_at || new Date().toISOString(),
+        } as Message,
+      ];
+    }
+    return [];
+  }, [messages, conversation?.id, conversation?.last_message_text, conversation?.last_message_at, conversation?.last_message_sender]);
+
   // Empty state — same WhatsApp-style doodle background as the active
   // thread below, so swapping between empty/selected doesn't change the
   // pattern under the user's eye.
@@ -1190,31 +1217,6 @@ export function MessageThread({
     created_at: conversation.created_at,
     updated_at: conversation.updated_at,
   };
-
-  const effectiveMessages = useMemo(() => {
-    if (messages && messages.length > 0 && messages[0]?.conversation_id === conversation.id) {
-      return messages;
-    }
-    if (messages && messages.length > 0 && messages.some((m) => m.conversation_id === conversation.id)) {
-      return messages.filter((m) => m.conversation_id === conversation.id);
-    }
-    // If messages are not in state yet, but conversation summary has last_message_text, provide instant preview
-    if (conversation.last_message_text) {
-      const isAgent = conversation.last_message_sender === "agent" || conversation.last_message_sender === "bot";
-      return [
-        {
-          id: `preview-${conversation.id}`,
-          conversation_id: conversation.id,
-          sender_type: isAgent ? "agent" : "customer",
-          content_type: "text",
-          content_text: conversation.last_message_text,
-          status: "delivered",
-          created_at: conversation.last_message_at || new Date().toISOString(),
-        } as Message,
-      ];
-    }
-    return [];
-  }, [messages, conversation.id, conversation.last_message_text, conversation.last_message_at]);
 
   const displayName = formatContactDisplayName(effectiveContact.name, effectiveContact.phone);
   const messageGroups = groupMessagesByDate(effectiveMessages);
@@ -1648,6 +1650,7 @@ export function MessageThread({
         insertedTextPayload={insertedTextPayload}
         externalAudioAction={externalAudioAction}
         onSelectSequence={startSequence}
+        onOpenCreateReply={handleOpenCreateReply}
       />
 
       <TemplatePicker
