@@ -401,7 +401,25 @@ export class CreativeRenderer {
       borderSvg = `\n  <circle cx="${cx}" cy="${cy}" r="${radius - el.borderWidth / 2}" fill="none" stroke="${escapeXml(el.borderColor)}" stroke-width="${el.borderWidth}"${transformAttr}${opacityAttr}/>`;
     }
 
-    return imageSvg + borderSvg;
+    // Official Instagram/TikTok Verified Badge if order is for verified
+    let verifiedBadgeSvg = '';
+    if (context.is_verified || context.verified) {
+      const badgeSize = Math.max(28, Math.round(radius * 0.54));
+      // Position at bottom-right corner of circle avatar
+      const badgeX = Math.round(cx + radius * 0.65 - badgeSize / 2);
+      const badgeY = Math.round(cy + radius * 0.65 - badgeSize / 2);
+
+      verifiedBadgeSvg = `
+  <g id="verified_badge_${uniqueId}" transform="translate(${badgeX}, ${badgeY})">
+    <svg width="${badgeSize}" height="${badgeSize}" viewBox="0 0 40 40">
+      <circle cx="20" cy="20" r="19" fill="#0f172a" stroke="#1e293b" stroke-width="2.5"/>
+      <path fill="#0095F6" d="M19.998 4l2.5 2.1 3.2-.2 1.7 2.8 3.1 1 .8 3.2 2.5 2.1-.8 3.2-2.5 2.1-1.7 2.8-3.2-.2-2.5 2.1-3.1-1-3.1 1-2.5-2.1-3.2.2-1.7-2.8-2.5-2.1.8-3.2 2.5-2.1.8-3.2 1.7-2.8 3.2.2 2.5-2.1 3.1 1z"/>
+      <path fill="#ffffff" d="M17.5 24.5l-4.5-4.5 1.8-1.8 2.7 2.7 7.2-7.2 1.8 1.8z"/>
+    </svg>
+  </g>`;
+    }
+
+    return imageSvg + borderSvg + verifiedBadgeSvg;
   }
 
   /**

@@ -70,13 +70,12 @@ export function isKieAi(apiKey: string, model: string): boolean {
  * Automatically retries with backoff if Kie.ai returns temporary network/maintenance errors (500, 524).
  * Strictly preserves the requested model (e.g. gemini-2.5-flash) and does NOT route to Gemini 3.x.
  */
-const DEFAULT_KIE_MODEL = 'gemini-3-5-flash-openai'
+const DEFAULT_KIE_MODEL = 'gemini-2.5-flash'
 const kieModelFailureCache = new Map<string, number>()
 
 /**
  * Generate completion via Kie.ai OpenAI-compatible endpoint.
- * Prioritizes active operational Gemini Flash models on Kie.ai
- * for ultra-fast responses and zero dead time.
+ * Strictly honors the user requested model (e.g. gemini-2.5-flash) without overriding.
  */
 async function generateKie(args: ProviderArgs): Promise<ProviderResult> {
   const { apiKey, model, systemPrompt, messages, timeoutMs } = args
@@ -102,27 +101,8 @@ async function generateKie(args: ProviderArgs): Promise<ProviderResult> {
     })
   }
 
-  // Check if requested model had a recent temporary failure (within 5 minutes)
-  const lastFailed = kieModelFailureCache.get(cleanModel)
-  const isTemporarilyDegraded = Boolean(lastFailed && Date.now() - lastFailed < 5 * 60 * 1000)
-
-  // Model cascade: prioritize working models to avoid wasting time on known-down models
-  const modelsToTry: string[] = []
-  if (isTemporarilyDegraded) {
-    modelsToTry.push('gemini-3-5-flash-openai', 'gemini-3-7-flash-openai', cleanModel)
-  } else {
-    if (cleanModel === 'gemini-2.5-flash' || cleanModel.startsWith('gemini-2.')) {
-      modelsToTry.push('gemini-3-5-flash-openai', 'gemini-3-7-flash-openai', cleanModel)
-    } else {
-      modelsToTry.push(cleanModel)
-      if (cleanModel !== 'gemini-3-5-flash-openai') {
-        modelsToTry.push('gemini-3-5-flash-openai')
-      }
-      if (cleanModel !== 'gemini-3-7-flash-openai') {
-        modelsToTry.push('gemini-3-7-flash-openai')
-      }
-    }
-  }
+  // Strictly try the requested model
+  const modelsToTry: string[] = [cleanModel]
 
   let lastError: unknown = null
 

@@ -194,7 +194,14 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const requestedUsername = (body.username || '').trim().replace(/^@+/, '');
-    const requestedQuantity = body.quantity ? Number(String(body.quantity).replace(/\D/g, '')) : undefined;
+    const isVerifiedRequested = Boolean(
+      body.is_verified ||
+      body.isVerified ||
+      String(body.quantity).toUpperCase().includes('VERIFICAD')
+    );
+    const requestedQuantity = isVerifiedRequested
+      ? 'VERIFICADO'
+      : (body.quantity ? Number(String(body.quantity).replace(/\D/g, '')) : undefined);
     const requestedTemplateId = body.template_id || undefined;
     const requestedPlatform = (body.platform as ('instagram' | 'tiktok') | undefined) || undefined;
     const forceRegenerate = Boolean(body.regenerate || body.force_regenerate);
@@ -202,7 +209,8 @@ export async function POST(request: Request, context: RouteContext) {
     const existingData = (existingJob?.input_data || {}) as Record<string, any>;
     const hasModifications = Boolean(
       (requestedUsername && requestedUsername.toLowerCase() !== String(existingData.instagram_username || existingData.username || contact.instagram_username || '').toLowerCase()) ||
-      (requestedQuantity && requestedQuantity !== Number(existingData.quantity || 5000)) ||
+      (isVerifiedRequested !== Boolean(existingData.is_verified || existingData.verified)) ||
+      (requestedQuantity && requestedQuantity !== (existingData.is_verified ? 'VERIFICADO' : Number(existingData.quantity || 5000))) ||
       (requestedTemplateId && requestedTemplateId !== existingJob?.template_id) ||
       (requestedPlatform && requestedPlatform !== existingData.platform)
     );
@@ -255,12 +263,16 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
-    const effectiveQuantity = requestedQuantity || Number(existingData.quantity) || 5000;
+    const effectiveQuantity = isVerifiedRequested
+      ? 'VERIFICADO'
+      : (requestedQuantity || Number(existingData.quantity) || 5000);
     const effectiveTemplateId = requestedTemplateId || existingJob?.template_id || undefined;
     const effectivePlatform = requestedPlatform || existingData.platform || (effectiveUsername.includes('tiktok') ? 'tiktok' : 'instagram');
 
     const syntheticMessageId = `manual_gen_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    const syntheticMessageText = `Quero ${effectiveQuantity} seguidores para @${effectiveUsername}`;
+    const syntheticMessageText = isVerifiedRequested
+      ? `Quero selo verificado para @${effectiveUsername}`
+      : `Quero ${effectiveQuantity} seguidores para @${effectiveUsername}`;
 
     let conversationId = '';
     const { data: conv } = await admin
@@ -294,6 +306,7 @@ export async function POST(request: Request, context: RouteContext) {
       traceId,
       overrideUsername: effectiveUsername,
       overrideQuantity: effectiveQuantity,
+      overrideIsVerified: isVerifiedRequested,
       overridePlatform: effectivePlatform,
       overrideTemplateId: effectiveTemplateId,
       forceResend: true,

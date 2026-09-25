@@ -185,4 +185,35 @@ describe('sendPixMessage', () => {
     expect(result.merchantName).toBe('Loja Padrão');
     expect(sendSpy).toHaveBeenCalled();
   });
+
+  it('sends standard Pix Copia e Cola message via UAZAPI when sendMode is copia_e_cola', async () => {
+    const textSpy = vi.spyOn(uazapiClient, 'sendUazApiText').mockResolvedValue({
+      messageId: 'uazapi-text-111',
+      status: 'sent',
+      raw: {},
+    });
+    const buttonSpy = vi.spyOn(uazapiClient, 'sendUazApiPixButton');
+
+    const result = await sendPixMessage({
+      accountId: 'acc-1',
+      conversationId: 'conv-123',
+      pixKey: '11971121710',
+      pixKeyType: 'PHONE',
+      merchantName: 'Engajamento Real',
+      sendMode: 'copia_e_cola',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.sendMode).toBe('copia_e_cola');
+    expect(result.pixCopiaECola).toBeDefined();
+    expect(result.pixCopiaECola?.startsWith('000201')).toBe(true);
+    expect(buttonSpy).not.toHaveBeenCalled();
+    expect(textSpy).toHaveBeenCalledWith(
+      'https://test.uazapi.com',
+      'decrypted-token-abc',
+      expect.objectContaining({
+        text: result.pixCopiaECola,
+      })
+    );
+  });
 });

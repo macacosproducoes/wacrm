@@ -23,6 +23,9 @@ export async function POST(request: Request) {
     const customKey = body.pixKey || body.pix_key ? String(body.pixKey || body.pix_key).trim() : undefined;
     const customType = body.pixKeyType || body.pix_key_type ? (String(body.pixKeyType || body.pix_key_type).toUpperCase() as PixKeyType) : undefined;
     const customName = body.merchantName || body.merchant_name ? String(body.merchantName || body.merchant_name).trim() : undefined;
+    const customCity = body.merchantCity || body.merchant_city ? String(body.merchantCity || body.merchant_city).trim() : undefined;
+    const customAmount = body.amount !== undefined && body.amount !== null && body.amount !== '' ? body.amount : undefined;
+    const sendMode = (body.sendMode || body.send_mode || 'both') as 'button' | 'copia_e_cola' | 'both';
 
     const result = await sendPixMessage({
       accountId: ctx.accountId,
@@ -31,7 +34,10 @@ export async function POST(request: Request) {
       pixKey: customKey,
       pixKeyType: customType,
       merchantName: customName,
+      merchantCity: customCity,
+      amount: customAmount,
       text: customText,
+      sendMode,
     });
 
     return NextResponse.json({
@@ -41,6 +47,8 @@ export async function POST(request: Request) {
       pix_key: result.pixKey,
       pix_key_type: result.pixKeyType,
       merchant_name: result.merchantName,
+      pix_copia_e_cola: result.pixCopiaECola,
+      send_mode: result.sendMode,
     });
   } catch (err: any) {
     console.error('[send-pix route] Error:', err);

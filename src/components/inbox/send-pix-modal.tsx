@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import {
   QrCode,
@@ -28,6 +28,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { type PixKeyType, validatePixKey, detectPixKeyType } from "@/lib/pix/pix-validator";
+import { generatePixCopiaECola } from "@/lib/pix/pix-copia-e-cola";
 
 interface SendPixModalProps {
   open: boolean;
@@ -53,6 +54,9 @@ export function SendPixModal({
   const [optionalText, setOptionalText] = useState("Segue a nossa chave PIX para pagamento:");
   const [isEditingOverride, setIsEditingOverride] = useState(false);
   const [saveAsDefault, setSaveAsDefault] = useState(false);
+  const [sendMode, setSendMode] = useState<"both" | "copia_e_cola" | "button">("both");
+  const [amount, setAmount] = useState("");
+  const [copiedCopiaECola, setCopiedCopiaECola] = useState(false);
 
   // Load account config when opening
   useEffect(() => {
@@ -88,6 +92,30 @@ export function SendPixModal({
     if (detected && isEditingOverride) {
       setPixKeyType(detected);
     }
+  };
+
+  // Live generated BACEN standard Pix Copia e Cola
+  const liveCopiaECola = useMemo(() => {
+    if (!pixKey.trim()) return "";
+    try {
+      return generatePixCopiaECola({
+        pixKey: pixKey.trim(),
+        pixKeyType,
+        merchantName: merchantName.trim() || "PIX",
+        merchantCity: "SAO PAULO",
+        amount: amount ? parseFloat(amount.replace(",", ".")) : undefined,
+      });
+    } catch {
+      return "";
+    }
+  }, [pixKey, pixKeyType, merchantName, amount]);
+
+  const handleCopyCode = () => {
+    if (!liveCopiaECola) return;
+    navigator.clipboard.writeText(liveCopiaECola);
+    setCopiedCopiaECola(true);
+    toast.success("Código PIX Copia e Cola copiado!");
+    setTimeout(() => setCopiedCopiaECola(false), 2000);
   };
 
   const handleSend = async () => {
@@ -126,6 +154,8 @@ export function SendPixModal({
           pixKey: validation.formattedKey,
           pixKeyType,
           merchantName: merchantName.trim() || undefined,
+          sendMode,
+          amount: amount ? parseFloat(amount.replace(",", ".")) : undefined,
         }),
       });
 
@@ -135,7 +165,11 @@ export function SendPixModal({
       }
 
       toast.success(
-        `✅ Mensagem PIX nativa enviada com sucesso para ${contactName || "o cliente"}!`
+        sendMode === "copia_e_cola"
+          ? `✅ PIX Copia e Cola enviado com sucesso para ${contactName || "o cliente"}!`
+          : sendMode === "both"
+          ? `✅ PIX (Botão Nativo + Copia e Cola) enviado para ${contactName || "o cliente"}!`
+          : `✅ Mensagem PIX nativa enviada com sucesso para ${contactName || "o cliente"}!`
       );
       onOpenChange(false);
     } catch (err: any) {
@@ -286,6 +320,106 @@ export function SendPixModal({
               </div>
             )}
 
+            {/* Formato de Envio */}
+            <div className="space-y-1.5">
+              <Label className="text-[11px] font-semibold text-foreground flex items-center justify-between">
+                <span>Formato de Envio no WhatsApp</span>
+                <span className="text-[10px] text-muted-foreground font-normal">
+                  Padrão BACEN aceito por todos os bancos
+                </span>
+              </Label>
+              <div className="grid grid-cols-3 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setSendMode("both")}
+                  className={`px-2 py-1.5 rounded-lg border text-[11px] font-medium transition-all text-center cursor-pointer ${
+                    sendMode === "both"
+                      ? "border-emerald-500 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold shadow-xs"
+                      : "border-border bg-background hover:bg-muted/60 text-muted-foreground"
+                  }`}
+                >
+                  <span className="block font-bold">Ambos</span>
+                  <span className="text-[9px] opacity-80">Botão + Copia e Cola</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSendMode("copia_e_cola")}
+                  className={`px-2 py-1.5 rounded-lg border text-[11px] font-medium transition-all text-center cursor-pointer ${
+                    sendMode === "copia_e_cola"
+                      ? "border-emerald-500 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold shadow-xs"
+                      : "border-border bg-background hover:bg-muted/60 text-muted-foreground"
+                  }`}
+                >
+                  <span className="block font-bold">Copia e Cola</span>
+                  <span className="text-[9px] opacity-80">Padrão Bancário</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSendMode("button")}
+                  className={`px-2 py-1.5 rounded-lg border text-[11px] font-medium transition-all text-center cursor-pointer ${
+                    sendMode === "button"
+                      ? "border-emerald-500 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold shadow-xs"
+                      : "border-border bg-background hover:bg-muted/60 text-muted-foreground"
+                  }`}
+                >
+                  <span className="block font-bold">Botão Nativo</span>
+                  <span className="text-[9px] opacity-80">Card WhatsApp</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Valor do PIX (Opcional) */}
+            <div>
+              <Label className="text-[11px] font-medium text-foreground mb-1 flex items-center justify-between">
+                <span>Valor (R$) — Opcional</span>
+                <span className="text-[10px] text-muted-foreground">Deixe em branco para valor livre</span>
+              </Label>
+              <Input
+                type="text"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="Ex: 49,90"
+                className="h-8 text-xs font-mono"
+              />
+            </div>
+
+            {/* Live Copia e Cola Preview */}
+            {liveCopiaECola && sendMode !== "button" && (
+              <div className="rounded-lg border border-border bg-muted/30 p-2.5 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-foreground flex items-center gap-1">
+                    <Copy className="h-3 w-3 text-emerald-600" />
+                    Código Pix Copia e Cola Oficial (BACEN):
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={handleCopyCode}
+                    className="h-6 px-2 text-[10px] gap-1 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-500/10 cursor-pointer"
+                  >
+                    {copiedCopiaECola ? (
+                      <>
+                        <Check className="h-3 w-3 text-emerald-600" />
+                        <span>Copiado</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-3 w-3" />
+                        <span>Copiar</span>
+                      </>
+                    )}
+                  </Button>
+                </div>
+                <div className="font-mono text-[10px] text-muted-foreground bg-background/80 p-2 rounded border border-border/50 break-all select-all leading-tight max-h-16 overflow-y-auto">
+                  {liveCopiaECola}
+                </div>
+                <p className="text-[10px] text-emerald-600 dark:text-emerald-400">
+                  ✓ Reconhecido instantaneamente em Nubank, Itaú, Bradesco, Inter, Santander, etc.
+                </p>
+              </div>
+            )}
+
             {/* Mensagem opcional de texto */}
             <div>
               <Label className="text-[11px] font-medium text-foreground mb-1 block">
@@ -299,7 +433,11 @@ export function SendPixModal({
                 className="text-xs leading-relaxed resize-none"
               />
               <p className="mt-1 text-[10px] text-muted-foreground">
-                O cliente receberá esta mensagem acompanhada do card nativo do WhatsApp com o botão oficial "Copiar Chave".
+                {sendMode === "copia_e_cola"
+                  ? "O cliente receberá esta mensagem e em seguida o código oficial Copia e Cola para colar diretamente no aplicativo do banco."
+                  : sendMode === "both"
+                  ? "O cliente receberá o card oficial do WhatsApp com botão e o código Copia e Cola padrão para bancos que exigem o formato EMV."
+                  : "O cliente receberá esta mensagem acompanhada do card nativo do WhatsApp com o botão oficial \"Copiar Chave\"."}
               </p>
             </div>
           </div>
@@ -320,7 +458,7 @@ export function SendPixModal({
             size="sm"
             onClick={handleSend}
             disabled={sending || loadingConfig || !pixKey.trim()}
-            className="gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm font-semibold"
+            className="gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm font-semibold cursor-pointer"
           >
             {sending ? (
               <>
@@ -330,7 +468,13 @@ export function SendPixModal({
             ) : (
               <>
                 <Send className="h-3.5 w-3.5" />
-                <span>⚡ Enviar PIX Nativo</span>
+                <span>
+                  {sendMode === "copia_e_cola"
+                    ? "⚡ Enviar Copia e Cola"
+                    : sendMode === "both"
+                    ? "⚡ Enviar Botão + Copia e Cola"
+                    : "⚡ Enviar PIX Nativo"}
+                </span>
               </>
             )}
           </Button>

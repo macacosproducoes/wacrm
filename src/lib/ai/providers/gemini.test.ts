@@ -150,23 +150,17 @@ describe('generateGemini adapter', () => {
     )
   })
 
-  it('cascades to operational fallback when first Kie.ai model gives error 500', async () => {
+  it('strictly preserves and requests gemini-2.5-flash without altering the model', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          json: async () => ({ code: 500, msg: 'Network error' }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          json: async () => ({
-            choices: [{ message: { content: 'Retry OK' } }],
-            usage: { total_tokens: 15 },
-          }),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { content: 'Resposta OK' } }],
+          usage: { total_tokens: 15 },
         }),
+      }),
     )
 
     const result = await generateGemini({
@@ -177,12 +171,10 @@ describe('generateGemini adapter', () => {
       timeoutMs: 5000,
     })
 
-    expect(result.text).toBe('Retry OK')
-    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2)
-    const call1Body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]?.body as string)
-    const call2Body = JSON.parse(vi.mocked(fetch).mock.calls[1][1]?.body as string)
-    expect(call1Body.model).toBe('gemini-3-5-flash-openai')
-    expect(call2Body.model).toBe('gemini-3-7-flash-openai')
+    expect(result.text).toBe('Resposta OK')
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+    const callBody = JSON.parse(vi.mocked(fetch).mock.calls[0][1]?.body as string)
+    expect(callBody.model).toBe('gemini-2.5-flash')
   })
 
   it('strips trailing assistant messages so Gemini requests always end on user turn', async () => {

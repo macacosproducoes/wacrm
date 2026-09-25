@@ -105,6 +105,7 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
   // Customization state for resend / editing
   const [customUsername, setCustomUsername] = useState("");
   const [customQuantity, setCustomQuantity] = useState(5000);
+  const [isVerified, setIsVerified] = useState(false);
   const [customTemplateId, setCustomTemplateId] = useState("");
   const [customPlatform, setCustomPlatform] = useState<"instagram" | "tiktok">("instagram");
   const [forceRegenerate, setForceRegenerate] = useState(false);
@@ -139,13 +140,19 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
   // Sync state with fetched data
   useEffect(() => {
     if (data?.job) {
+      const jobIsVerif = Boolean(
+        (data.job as any).is_verified ||
+        String(data.job.quantity).toUpperCase().includes("VERIFICAD")
+      );
       setCustomUsername(data.job.username || data.contact?.instagram_username || "");
-      setCustomQuantity(Number(data.job.quantity) || 5000);
+      setCustomQuantity(jobIsVerif ? 1 : (Number(data.job.quantity) || 5000));
+      setIsVerified(jobIsVerif);
       setCustomTemplateId(data.job.template_id || data.templates?.[0]?.id || "");
       setCustomPlatform((data.job.platform as any) || "instagram");
     } else if (data?.contact) {
       setCustomUsername(data.contact.instagram_username || "");
       setCustomQuantity(5000);
+      setIsVerified(false);
       setCustomTemplateId(data.templates?.[0]?.id || "");
       setCustomPlatform("instagram");
     }
@@ -221,10 +228,16 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
   const hasImage = Boolean(job?.output_url);
   const deliveryError = data?.steps?.delivery_error || job?.error;
 
+  const currentIsVerified = Boolean(
+    (job as any)?.is_verified ||
+    String(job?.quantity).toUpperCase().includes("VERIFICAD")
+  );
+
   const isModified = Boolean(
     (customUsername.trim().replace(/^@+/, "").toLowerCase() !==
       (job?.username || "").trim().replace(/^@+/, "").toLowerCase()) ||
-    (Number(customQuantity) !== Number(job?.quantity || 5000)) ||
+    (isVerified !== currentIsVerified) ||
+    (!isVerified && Number(customQuantity) !== Number(job?.quantity || 5000)) ||
     (customTemplateId && job?.template_id && customTemplateId !== job?.template_id) ||
     (customPlatform !== (job?.platform || "instagram")) ||
     forceRegenerate
@@ -247,7 +260,8 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
 
     if (useCustomParams) {
       payload.username = customUsername.trim().replace(/^@+/, "");
-      payload.quantity = Number(customQuantity);
+      payload.quantity = isVerified ? "VERIFICADO" : Number(customQuantity);
+      payload.is_verified = isVerified;
       payload.template_id = customTemplateId || undefined;
       payload.platform = customPlatform;
       payload.regenerate = isModified || forceRegenerate;
@@ -409,9 +423,15 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
             </span>
           </div>
           <div className="flex items-center justify-between text-muted-foreground">
-            <span>Quantidade:</span>
-            <span className="font-semibold text-foreground">
-              {Number(job?.quantity || 5000).toLocaleString("pt-BR")} seguidores
+            <span>{currentIsVerified ? "Serviço:" : "Quantidade:"}</span>
+            <span className="font-semibold text-foreground flex items-center gap-1">
+              {currentIsVerified ? (
+                <span className="inline-flex items-center gap-1 text-sky-500 font-bold">
+                  ✓ Selo Verificado
+                </span>
+              ) : (
+                `${Number(job?.quantity || 5000).toLocaleString("pt-BR")} seguidores`
+              )}
             </span>
           </div>
         </div>
@@ -649,12 +669,12 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
               </div>
             </div>
 
-            {/* Followers Quantity with Quick Pills */}
+            {/* Followers Quantity or Verified Badge with Quick Pills */}
             <div className="space-y-1.5">
               <label className="font-semibold text-foreground flex items-center justify-between">
-                <span>Quantidade de Seguidores</span>
+                <span>{isVerified ? "Serviço Selecionado" : "Quantidade de Seguidores"}</span>
                 <span className="font-mono text-primary font-bold">
-                  {Number(customQuantity || 0).toLocaleString("pt-BR")} seguidores
+                  {isVerified ? "✓ Selo Verificado Oficial" : `${Number(customQuantity || 0).toLocaleString("pt-BR")} seguidores`}
                 </span>
               </label>
 
@@ -664,9 +684,12 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
                   <button
                     key={qty}
                     type="button"
-                    onClick={() => setCustomQuantity(qty)}
+                    onClick={() => {
+                      setCustomQuantity(qty);
+                      setIsVerified(false);
+                    }}
                     className={`px-2 py-1 rounded text-[11px] font-medium transition-colors border ${
-                      Number(customQuantity) === qty
+                      !isVerified && Number(customQuantity) === qty
                         ? "bg-primary text-primary-foreground border-primary"
                         : "bg-muted/50 hover:bg-muted border-border text-foreground"
                     }`}
@@ -674,17 +697,39 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
                     {qty >= 1000 ? `${qty / 1000}k` : qty}
                   </button>
                 ))}
+
+                {/* VERIFICADO Pill */}
+                <button
+                  type="button"
+                  onClick={() => setIsVerified((prev) => !prev)}
+                  className={`px-2.5 py-1 rounded text-[11px] font-semibold transition-colors border flex items-center gap-1 ${
+                    isVerified
+                      ? "bg-sky-500 text-white border-sky-400 shadow-sm"
+                      : "bg-sky-500/10 text-sky-600 dark:text-sky-400 hover:bg-sky-500/20 border-sky-500/30"
+                  }`}
+                >
+                  <span>✓ VERIFICADO</span>
+                </button>
               </div>
 
-              <Input
-                type="number"
-                min={1}
-                step={50}
-                placeholder="5000"
-                value={customQuantity || ""}
-                onChange={(e) => setCustomQuantity(Number(e.target.value))}
-                className="h-9 text-xs"
-              />
+              {isVerified ? (
+                <div className="rounded-md border border-sky-500/30 bg-sky-500/10 p-2.5 text-xs text-sky-700 dark:text-sky-300 flex items-center gap-2">
+                  <span className="text-base font-bold">✓</span>
+                  <span>
+                    <strong>Modo Selo Verificado Ativo:</strong> O criativo 960x960 será gerado com o selo azul oficial de verificação sobre o perfil.
+                  </span>
+                </div>
+              ) : (
+                <Input
+                  type="number"
+                  min={1}
+                  step={50}
+                  placeholder="5000"
+                  value={customQuantity || ""}
+                  onChange={(e) => setCustomQuantity(Number(e.target.value))}
+                  className="h-9 text-xs"
+                />
+              )}
             </div>
 
             {/* Notice / Status description */}

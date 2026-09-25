@@ -41,6 +41,7 @@ export interface ParsedFollowerOrder {
   username?: string;
   quantity?: number;
   quantityFormatted?: string;
+  isVerified?: boolean;
 }
 
 /**
@@ -62,8 +63,10 @@ export function parseFollowerOrder(text: string | null | undefined): ParsedFollo
   const raw = text.trim();
   if (!raw) return { isFollowerOrder: false };
 
-  // Check follower or platform order intent
-  const followerIntentRegex = /(?:seguidor|seguidores|follower|followers|tiktok|tick\s*tok|tik\s*tok)/i;
+  const isVerifiedIntent = /(?:verificad[oa]|selo(?:\s+azul)?|badge)/i.test(raw);
+
+  // Check follower, platform or verified order intent
+  const followerIntentRegex = /(?:seguidor|seguidores|follower|followers|tiktok|tick\s*tok|tik\s*tok|verificad[oa]|selo|badge)/i;
   if (!followerIntentRegex.test(raw)) {
     return { isFollowerOrder: false };
   }
@@ -109,8 +112,8 @@ export function parseFollowerOrder(text: string | null | undefined): ParsedFollo
 
   // 2. Extract Quantity
   // Matches:
-  // - "5.000 seguidores" / "5000 seguidores"
-  // - "10k seguidores" / "10 mil seguidores" / "5MIL" / "5 k" / "5K"
+  // - "5.000 seguidores" / "5000 seguidores" / "30.000" / "50.000" / "100.000"
+  // - "10k seguidores" / "10 mil seguidores" / "30k" / "50 mil" / "100k"
   // - "5 mil para tick tok" / "quero 5.000" / "quantidade 5000"
   let quantity = 0;
   let quantityFormatted = '';
@@ -137,6 +140,12 @@ export function parseFollowerOrder(text: string | null | undefined): ParsedFollo
     }
   }
 
+  // If user requested verified badge and no numeric follower amount was provided
+  if (!quantity && isVerifiedIntent) {
+    quantity = 1;
+    quantityFormatted = 'Selo Verificado';
+  }
+
   if (!quantity) {
     return { isFollowerOrder: false };
   }
@@ -147,6 +156,7 @@ export function parseFollowerOrder(text: string | null | undefined): ParsedFollo
     username,
     quantity,
     quantityFormatted,
+    isVerified: isVerifiedIntent,
   };
 }
 
@@ -163,6 +173,7 @@ export interface HandleFollowerOrderParams {
   overrideQuantity?: number | string;
   overridePlatform?: 'instagram' | 'tiktok';
   overrideTemplateId?: string;
+  overrideIsVerified?: boolean;
   forceResend?: boolean;
 }
 
@@ -204,16 +215,22 @@ export async function handleFollowerOrder(
     const isTtk =
       overridePlatform === 'tiktok' ||
       /(?:tiktok|tick\s*tok)/i.test(overrideUsername);
-    const qtyNum =
-      typeof overrideQuantity === 'number'
-        ? overrideQuantity
-        : parseInt(String(overrideQuantity).replace(/\D/g, ''), 10) || 5000;
+    const isExplicitVerified = Boolean(
+      params.overrideIsVerified ||
+      String(overrideQuantity).toUpperCase().includes('VERIFICAD')
+    );
+    const qtyNum = isExplicitVerified
+      ? 1
+      : typeof overrideQuantity === 'number'
+      ? overrideQuantity
+      : parseInt(String(overrideQuantity).replace(/\D/g, ''), 10) || 5000;
     parsed = {
       isFollowerOrder: true,
       platform: overridePlatform || (isTtk ? 'tiktok' : 'instagram'),
       username: rawUser,
       quantity: qtyNum,
-      quantityFormatted: qtyNum.toLocaleString('pt-BR'),
+      quantityFormatted: isExplicitVerified ? 'Selo Verificado' : qtyNum.toLocaleString('pt-BR'),
+      isVerified: isExplicitVerified,
     };
   } else {
     parsed = parseFollowerOrder(messageText);
@@ -325,9 +342,17 @@ export async function handleFollowerOrder(
   const neutralAvatar = isTikTok ? NEUTRAL_TIKTOK_AVATAR : NEUTRAL_INSTAGRAM_AVATAR;
   const templateProfileImage = finalResolvedImage || neutralAvatar;
 
+  const isVerifiedOrder = Boolean(
+    parsed.isVerified ||
+    params.overrideIsVerified ||
+    String(overrideQuantity).toUpperCase().includes('VERIFICAD')
+  );
+
   // 3. Generate Order Code & Idempotency Key
-  const orderCode = `PED-${orderQuantity}-${orderUsername.toUpperCase()}`;
-  const idempotencyKey = `follower_order_${accountId}_${contactId}_${orderUsername}_${orderQuantity}_${messageId}`;
+  const orderCode = isVerifiedOrder
+    ? `PED-VERIFICADO-${orderUsername.toUpperCase()}`
+    : `PED-${orderQuantity}-${orderUsername.toUpperCase()}`;
+  const idempotencyKey = `follower_order_${accountId}_${contactId}_${orderUsername}_${orderQuantity}_${isVerifiedOrder ? 'verif_' : ''}${messageId}`;
 
   if (traceId) {
     TraceLogger.log(traceId, 'T7', 'ORDER CREATED', {
@@ -364,16 +389,27 @@ export async function handleFollowerOrder(
     ? contact.name
     : pushName || parsed.username;
 
+  const finalServiceLabel = isVerifiedOrder
+    ? (isTikTok ? 'Selo Verificado TikTok' : 'Selo Verificado Instagram')
+    : serviceLabel;
+
+  const quantityDisplay = isVerifiedOrder
+    ? (parsed.quantity && parsed.quantity > 1 ? `${parsed.quantityFormatted} + Selo Verificado` : 'Selo Verificado')
+    : (parsed.quantityFormatted || String(parsed.quantity));
+
   const renderContext = {
-    title: 'CONFIRMAÇÃO DE PEDIDO',
+    title: isVerifiedOrder ? 'SOLICITAÇÃO DE VERIFICAÇÃO' : 'CONFIRMAÇÃO DE PEDIDO',
     name: recipientName,
     code: orderCode,
     platform: parsed.platform || 'instagram',
     platform_label: platformLabel,
     username: parsed.username,
     instagram_username: parsed.username,
-    quantity: parsed.quantityFormatted || String(parsed.quantity),
-    service: serviceLabel,
+    quantity: quantityDisplay,
+    service: finalServiceLabel,
+    is_verified: isVerifiedOrder,
+    verified: isVerifiedOrder,
+    verified_badge: isVerifiedOrder ? '✓' : '',
     date: new Date().toLocaleDateString('pt-BR'),
     profile_image: templateProfileImage,
     amount: 'R$ 49,90',
@@ -383,8 +419,8 @@ export async function handleFollowerOrder(
     recipient: phone,
     order: {
       code: orderCode,
-      quantity: parsed.quantityFormatted || String(parsed.quantity),
-      service: serviceLabel,
+      quantity: quantityDisplay,
+      service: finalServiceLabel,
       amount: 'R$ 49,90',
       date: new Date().toLocaleDateString('pt-BR'),
     },
