@@ -128,12 +128,40 @@ export function ManualFollowUpModal({
   };
 
   const availableReplies = quickReplies.filter((q) => q.is_active !== false);
-  const audios = availableReplies.filter((r) => r.kind === "audio");
-  const images = availableReplies.filter((r) => r.kind === "image");
-  const sequences = availableReplies.filter((r) => r.kind === "sequence");
-  const texts = availableReplies.filter((r) => r.kind === "text");
+
+  const isAudioReply = (r: QuickReply) =>
+    r.kind === "audio" ||
+    r.category === "Áudios" ||
+    (r.media_type && r.media_type.startsWith("audio/")) ||
+    (r.media_url && /\.(ogg|mp3|wav|m4a|opus)($|\?)/i.test(r.media_url));
+
+  const isImageReply = (r: QuickReply) =>
+    r.kind === "image" ||
+    (r.media_type && r.media_type.startsWith("image/")) ||
+    (r.media_url && /\.(jpe?g|png|webp|gif)($|\?)/i.test(r.media_url));
+
+  const isSequenceReply = (r: QuickReply) =>
+    r.kind === "sequence" ||
+    (Array.isArray(r.sequence_items) && r.sequence_items.length > 0);
+
+  const audios = availableReplies.filter(isAudioReply);
+  const images = availableReplies.filter((r) => isImageReply(r) && !isAudioReply(r));
+  const sequences = availableReplies.filter(isSequenceReply);
   const otherMedia = availableReplies.filter(
-    (r) => r.kind === "video" || r.kind === "document" || r.kind === "media"
+    (r) =>
+      !isAudioReply(r) &&
+      !isImageReply(r) &&
+      !isSequenceReply(r) &&
+      (r.kind === "video" || r.kind === "document" || r.kind === "media")
+  );
+  const texts = availableReplies.filter(
+    (r) =>
+      !isAudioReply(r) &&
+      !isImageReply(r) &&
+      !isSequenceReply(r) &&
+      r.kind !== "video" &&
+      r.kind !== "document" &&
+      r.kind !== "media"
   );
 
   const selectedReply = availableReplies.find((r) => r.id === selectedReplyId);

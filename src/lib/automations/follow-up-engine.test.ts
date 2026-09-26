@@ -99,4 +99,46 @@ describe("follow-up-engine logic & rules", () => {
     expect(isPastDue).toBe(true);
     expect(isFutureDue).toBe(false);
   });
+
+  it("accurately detects audio kind from media_url, media_type, category, or payload", () => {
+    function detectKind(quickReply: any) {
+      const meta = quickReply?.interactive_payload || {};
+      const rawKind = String(quickReply?.kind || meta.type || 'text').toLowerCase();
+      const mediaUrl = String(quickReply?.media_url || meta.media_url || '').trim();
+      const mediaType = String(quickReply?.media_type || meta.media_type || '').toLowerCase();
+      const category = String(quickReply?.category || meta.category || '').toLowerCase();
+
+      if (
+        rawKind === 'audio' ||
+        meta.type === 'audio' ||
+        category.includes('áudio') ||
+        category.includes('audio') ||
+        mediaType.startsWith('audio/') ||
+        /\.(ogg|mp3|wav|m4a|aac|opus)($|\?)/i.test(mediaUrl)
+      ) {
+        return 'audio';
+      }
+      return rawKind;
+    }
+
+    // Audio with kind='text' in DB but audio URL & category
+    const audioWithTextKind = {
+      kind: 'text',
+      category: 'Áudios',
+      media_url: 'https://storage.supabase.co/audio.ogg',
+      media_type: 'audio/ogg',
+      interactive_payload: { type: 'audio' },
+    };
+    expect(detectKind(audioWithTextKind)).toBe('audio');
+
+    // Real text message
+    const realText = {
+      kind: 'text',
+      category: 'Geral',
+      media_url: null,
+      content_text: 'Olá!',
+    };
+    expect(detectKind(realText)).toBe('text');
+  });
 });
+

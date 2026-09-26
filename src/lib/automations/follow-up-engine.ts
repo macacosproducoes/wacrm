@@ -129,7 +129,7 @@ export async function scheduleManualFollowUp(params: {
         created_by_user_id: params.userId || null,
         idempotency_key: `manual_${params.conversationId}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       })
-      .select('*, quick_reply:quick_replies(id, title, kind, content_text, color)')
+      .select('*, quick_reply:quick_replies(*)')
       .single();
 
     if (error) return { success: false, error: error.message };
@@ -149,7 +149,7 @@ export async function getConversationFollowUps(conversationId: string): Promise<
   try {
     const { data, error } = await admin
       .from('conversation_follow_ups')
-      .select('*, quick_reply:quick_replies(id, title, kind, content_text, color)')
+      .select('*, quick_reply:quick_replies(*)')
       .eq('conversation_id', conversationId)
       .order('scheduled_at', { ascending: true })
       .limit(30);
@@ -306,11 +306,59 @@ export async function processDueFollowUps(): Promise<{ processed: number; sent: 
 
       const baseUrl = typeof uazConfig.base_url === 'string' ? uazConfig.base_url : 'https://free.uazapi.com';
       const formattedPhone = formatUazApiNumber(contact.phone);
-      const kind = String(quickReply?.kind || 'text');
+      // Determine effective kind and media URL robustly
+      const meta = ((quickReply?.interactive_payload as Record<string, unknown>) || {}) as Record<string, unknown>;
+      const rawKind = String(quickReply?.kind || meta.type || 'text').toLowerCase();
+      const mediaUrl = String(quickReply?.media_url || meta.media_url || '').trim();
+      const mediaType = String(quickReply?.media_type || meta.media_type || '').toLowerCase();
+      const category = String(quickReply?.category || meta.category || '').toLowerCase();
+
+      let effectiveKind: 'sequence' | 'audio' | 'image' | 'video' | 'document' | 'text' = 'text';
+
+      if (
+        rawKind === 'sequence' ||
+        meta.type === 'sequence' ||
+        (Array.isArray(quickReply?.sequence_items) && quickReply.sequence_items.length > 0) ||
+        (Array.isArray(meta.sequence_items) && (meta.sequence_items as unknown[]).length > 0)
+      ) {
+        effectiveKind = 'sequence';
+      } else if (
+        rawKind === 'audio' ||
+        meta.type === 'audio' ||
+        category.includes('áudio') ||
+        category.includes('audio') ||
+        mediaType.startsWith('audio/') ||
+        /\.(ogg|mp3|wav|m4a|aac|opus)($|\?)/i.test(mediaUrl)
+      ) {
+        effectiveKind = 'audio';
+      } else if (
+        rawKind === 'image' ||
+        meta.type === 'image' ||
+        category.includes('imagem') ||
+        category.includes('image') ||
+        mediaType.startsWith('image/') ||
+        /\.(jpe?g|png|webp|gif)($|\?)/i.test(mediaUrl)
+      ) {
+        effectiveKind = 'image';
+      } else if (
+        rawKind === 'video' ||
+        meta.type === 'video' ||
+        mediaType.startsWith('video/') ||
+        /\.(mp4|mov|avi|webm)($|\?)/i.test(mediaUrl)
+      ) {
+        effectiveKind = 'video';
+      } else if (
+        rawKind === 'document' ||
+        meta.type === 'document' ||
+        mediaType.startsWith('application/') ||
+        /\.(pdf|docx?|xlsx?)($|\?)/i.test(mediaUrl)
+      ) {
+        effectiveKind = 'document';
+      }
+
       let uazapiMessageId = `followup_${Date.now()}`;
 
-      if (kind === 'sequence') {
-        const meta = ((quickReply?.interactive_payload as Record<string, unknown>) || {}) as Record<string, unknown>;
+      if (effectiveKind === 'sequence') {
         const sequenceSteps = ((Array.isArray(quickReply?.sequence_items) ? quickReply.sequence_items : meta.sequence_items) || []) as Array<{
           order: number;
           type: string;
@@ -337,7 +385,6 @@ export async function processDueFollowUps(): Promise<{ processed: number; sent: 
               number: formattedPhone,
               url: step.media_url,
               type: 'audio',
-              caption: stepText || undefined,
               ptt: true,
             });
             if (res?.messageId) stepMsgId = res.messageId;
@@ -361,7 +408,7 @@ export async function processDueFollowUps(): Promise<{ processed: number; sent: 
             conversation_id: row.conversation_id,
             sender_type: 'bot',
             content_type: step.type === 'audio' ? 'audio' : step.type === 'image' ? 'image' : 'text',
-            content_text: stepText,
+            content_text: stepText || (step.type === 'audio' ? '[Áudio]' : step.type === 'image' ? '[Imagem]' : ''),
             media_url: step.media_url || null,
             message_id: stepMsgId,
             status: 'delivered',
@@ -369,20 +416,19 @@ export async function processDueFollowUps(): Promise<{ processed: number; sent: 
           });
         }
         uazapiMessageId = `followup_seq_${Date.now()}`;
-      } else if (kind === 'audio' && quickReply?.media_url) {
+      } else if (effectiveKind === 'audio' && mediaUrl) {
         const res = await sendUazApiMedia(baseUrl, plainToken, {
           number: formattedPhone,
-          url: String(quickReply.media_url),
+          url: mediaUrl,
           type: 'audio',
-          caption: resolvedText || undefined,
           ptt: true,
         });
         if (res.messageId) uazapiMessageId = res.messageId;
-      } else if (['image', 'video', 'document'].includes(kind) && quickReply?.media_url) {
+      } else if (['image', 'video', 'document'].includes(effectiveKind) && mediaUrl) {
         const res = await sendUazApiMedia(baseUrl, plainToken, {
           number: formattedPhone,
-          url: String(quickReply.media_url),
-          type: kind as 'image' | 'video' | 'document',
+          url: mediaUrl,
+          type: effectiveKind as 'image' | 'video' | 'document',
           caption: resolvedText || undefined,
         });
         if (res.messageId) uazapiMessageId = res.messageId;
@@ -396,14 +442,20 @@ export async function processDueFollowUps(): Promise<{ processed: number; sent: 
 
       // 8. Record in messages table as 'bot'
       const msgTimestamp = new Date().toISOString();
+      const messageContentText =
+        effectiveKind === 'audio'
+          ? (resolvedText.startsWith('🎙️') ? resolvedText : `🎙️ ${resolvedText || '[Áudio]'}`)
+          : resolvedText;
+
       const { data: createdMsg } = await admin
         .from('messages')
         .insert({
           conversation_id: row.conversation_id,
           sender_type: 'bot',
-          content_type: kind === 'audio' ? 'audio' : kind === 'image' ? 'image' : 'text',
-          content_text: resolvedText,
-          media_url: (quickReply?.media_url as string) || null,
+          content_type: effectiveKind,
+          content_text: messageContentText,
+          media_url: mediaUrl || null,
+          media_type: mediaType || (effectiveKind === 'audio' ? 'audio/ogg' : null),
           message_id: uazapiMessageId,
           status: 'delivered',
           created_at: msgTimestamp,
@@ -433,16 +485,17 @@ export async function processDueFollowUps(): Promise<{ processed: number; sent: 
           id: createdMsg?.id || `msg-${Date.now()}`,
           conversation_id: row.conversation_id,
           sender_type: 'bot',
-          content_type: kind === 'audio' ? 'audio' : 'text',
-          content_text: resolvedText,
-          media_url: (quickReply?.media_url as string) || null,
+          content_type: effectiveKind,
+          content_text: messageContentText,
+          media_url: mediaUrl || null,
+          media_type: mediaType || (effectiveKind === 'audio' ? 'audio/ogg' : null),
           message_id: uazapiMessageId,
           status: 'delivered',
           created_at: msgTimestamp,
         },
         conversation: {
           id: row.conversation_id,
-          last_message_text: resolvedText,
+          last_message_text: effectiveKind === 'audio' ? '🎙️ [Áudio]' : messageContentText,
           last_message_at: msgTimestamp,
           unread_count: 0,
         },

@@ -234,14 +234,56 @@ export async function checkAndDispatchWelcomeMessage(
   const phone = formatUazApiNumber(contactRow?.phone || '');
 
   let uazapiMessageId = `welcome_${Date.now()}`;
-  const kind = replyRow.kind || 'text';
   const meta = ((replyRow.interactive_payload as Record<string, unknown>) || {}) as Record<string, unknown>;
-  const hasSequencePayload =
+  const rawKind = String(replyRow.kind || meta.type || 'text').toLowerCase();
+  const mediaUrl = String(replyRow.media_url || meta.media_url || uazConfig.media_url || '').trim();
+  const mediaType = String(replyRow.media_type || meta.media_type || '').toLowerCase();
+  const category = String(replyRow.category || meta.category || '').toLowerCase();
+
+  let effectiveKind: 'sequence' | 'audio' | 'image' | 'video' | 'document' | 'text' = 'text';
+
+  if (
+    rawKind === 'sequence' ||
     meta.type === 'sequence' ||
     (Array.isArray(replyRow.sequence_items) && replyRow.sequence_items.length > 0) ||
-    (Array.isArray(meta.sequence_items) && (meta.sequence_items as any[]).length > 0);
-  const isSequence = kind === 'sequence' || hasSequencePayload;
+    (Array.isArray(meta.sequence_items) && (meta.sequence_items as unknown[]).length > 0)
+  ) {
+    effectiveKind = 'sequence';
+  } else if (
+    rawKind === 'audio' ||
+    meta.type === 'audio' ||
+    category.includes('áudio') ||
+    category.includes('audio') ||
+    mediaType.startsWith('audio/') ||
+    /\.(ogg|mp3|wav|m4a|aac|opus)($|\?)/i.test(mediaUrl)
+  ) {
+    effectiveKind = 'audio';
+  } else if (
+    rawKind === 'image' ||
+    meta.type === 'image' ||
+    category.includes('imagem') ||
+    category.includes('image') ||
+    mediaType.startsWith('image/') ||
+    /\.(jpe?g|png|webp|gif)($|\?)/i.test(mediaUrl)
+  ) {
+    effectiveKind = 'image';
+  } else if (
+    rawKind === 'video' ||
+    meta.type === 'video' ||
+    mediaType.startsWith('video/') ||
+    /\.(mp4|mov|avi|webm)($|\?)/i.test(mediaUrl)
+  ) {
+    effectiveKind = 'video';
+  } else if (
+    rawKind === 'document' ||
+    meta.type === 'document' ||
+    mediaType.startsWith('application/') ||
+    /\.(pdf|docx?|xlsx?)($|\?)/i.test(mediaUrl)
+  ) {
+    effectiveKind = 'document';
+  }
 
+  const isSequence = effectiveKind === 'sequence';
   const messageCreatedAt = new Date().toISOString();
 
   try {
@@ -274,7 +316,6 @@ export async function checkAndDispatchWelcomeMessage(
             number: phone,
             url: step.media_url,
             type: 'audio',
-            caption: stepText || undefined,
             ptt: true,
           });
           if (res?.messageId) stepMsgId = res.messageId;
@@ -301,7 +342,7 @@ export async function checkAndDispatchWelcomeMessage(
             conversation_id: conversationId,
             sender_type: 'bot',
             content_type: step.type === 'audio' ? 'audio' : step.type === 'image' ? 'image' : 'text',
-            content_text: stepText || (step.type === 'image' ? '[Imagem da Tabela]' : ''),
+            content_text: stepText || (step.type === 'audio' ? '[Áudio]' : step.type === 'image' ? '[Imagem]' : ''),
             media_url: step.media_url || null,
             message_id: stepMsgId,
             status: 'delivered',
@@ -320,7 +361,7 @@ export async function checkAndDispatchWelcomeMessage(
             conversation_id: conversationId,
             sender_type: 'bot',
             content_type: step.type === 'audio' ? 'audio' : step.type === 'image' ? 'image' : 'text',
-            content_text: stepText || (step.type === 'image' ? '[Imagem da Tabela]' : ''),
+            content_text: stepText || (step.type === 'audio' ? '[Áudio]' : step.type === 'image' ? '[Imagem]' : ''),
             media_url: step.media_url || null,
             message_id: stepMsgId,
             status: 'delivered',
@@ -335,21 +376,19 @@ export async function checkAndDispatchWelcomeMessage(
         });
       }
       uazapiMessageId = `welcome_seq_${Date.now()}`;
-    } else if (kind === 'audio' && (replyRow.media_url || uazConfig.media_url)) {
-      const audioUrl = replyRow.media_url || '';
+    } else if (effectiveKind === 'audio' && mediaUrl) {
       const sendRes = await sendUazApiMedia(baseUrl, plainToken, {
         number: phone,
-        url: audioUrl,
+        url: mediaUrl,
         type: 'audio',
-        caption: resolvedText || undefined,
         ptt: true,
       });
       if (sendRes.messageId) uazapiMessageId = sendRes.messageId;
-    } else if (['image', 'video', 'document'].includes(kind) && replyRow.media_url) {
+    } else if (['image', 'video', 'document'].includes(effectiveKind) && mediaUrl) {
       const sendRes = await sendUazApiMedia(baseUrl, plainToken, {
         number: phone,
-        url: replyRow.media_url,
-        type: kind as 'image' | 'video' | 'document',
+        url: mediaUrl,
+        type: effectiveKind as 'image' | 'video' | 'document',
         caption: resolvedText || undefined,
       });
       if (sendRes.messageId) uazapiMessageId = sendRes.messageId;
@@ -367,14 +406,20 @@ export async function checkAndDispatchWelcomeMessage(
 
   // 7. For non-sequence, record single message in CRM database as 'bot'
   if (!isSequence) {
+    const messageContentText =
+      effectiveKind === 'audio'
+        ? (resolvedText.startsWith('🎙️') ? resolvedText : `🎙️ ${resolvedText || '[Áudio]'}`)
+        : resolvedText;
+
     const { data: createdMsg } = await admin
       .from('messages')
       .insert({
         conversation_id: conversationId,
         sender_type: 'bot',
-        content_type: kind === 'audio' ? 'audio' : kind === 'image' ? 'image' : 'text',
-        content_text: resolvedText,
-        media_url: replyRow.media_url || null,
+        content_type: effectiveKind,
+        content_text: messageContentText,
+        media_url: mediaUrl || null,
+        media_type: mediaType || (effectiveKind === 'audio' ? 'audio/ogg' : null),
         message_id: uazapiMessageId,
         status: 'delivered',
         created_at: messageCreatedAt,
@@ -390,16 +435,17 @@ export async function checkAndDispatchWelcomeMessage(
         id: createdMsg?.id || `msg-${Date.now()}`,
         conversation_id: conversationId,
         sender_type: 'bot',
-        content_type: kind === 'audio' ? 'audio' : 'text',
-        content_text: resolvedText,
-        media_url: replyRow.media_url || null,
+        content_type: effectiveKind,
+        content_text: messageContentText,
+        media_url: mediaUrl || null,
+        media_type: mediaType || (effectiveKind === 'audio' ? 'audio/ogg' : null),
         message_id: uazapiMessageId,
         status: 'delivered',
         created_at: messageCreatedAt,
       },
       conversation: {
         id: conversationId,
-        last_message_text: resolvedText,
+        last_message_text: effectiveKind === 'audio' ? '🎙️ [Áudio]' : messageContentText,
         last_message_at: messageCreatedAt,
         unread_count: 0,
       },
