@@ -80,6 +80,9 @@ function InboxPageInner() {
 
   const logTimeline = useCallback((source: string, extra?: Record<string, unknown>) => {
     try {
+      const isDebug = typeof window !== "undefined" && Boolean((window as unknown as Record<string, unknown>).DEBUG_LOGS);
+      if (!isDebug) return;
+
       const timestamp = new Date().toLocaleTimeString("pt-BR");
       let extraStr = "";
       if (extra) {

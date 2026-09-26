@@ -129,11 +129,13 @@ export async function startUazApiListener(accountId: string): Promise<boolean> {
         const ownerUserId = acct?.owner_user_id;
         if (!ownerUserId) return;
 
-        // Fetch existing conversations
+        // Fetch existing conversations (bounded to 50 recent)
         const { data: convs } = await admin
           .from('conversations')
           .select('id, contact_id, last_message_at, contacts(phone)')
-          .eq('account_id', accountId);
+          .eq('account_id', accountId)
+          .order('last_message_at', { ascending: false, nullsFirst: false })
+          .limit(50);
 
         const convMapByPhone = new Map<string, { id: string; contact_id: string; last_message_at: string | null }>();
         for (const c of convs || []) {
@@ -351,10 +353,11 @@ export async function startUazApiListener(accountId: string): Promise<boolean> {
     }
 
     // Run first batch immediately.
-    // On Vercel serverless, do NOT register an infinite setInterval as it continuously consumes Fluid CPU.
+    // Webhooks (/api/whatsapp/uazapi/webhook) deliver messages in real time.
+    // Use a conservative 60s fallback poll instead of 5s to avoid exhausting Supabase connection pool.
     void pollBatch();
     if (process.env.VERCEL !== '1') {
-      listener.pollInterval = setInterval(pollBatch, 5000);
+      listener.pollInterval = setInterval(pollBatch, 60000);
     }
   }
 

@@ -46,9 +46,11 @@ export function WhatsAppRealtimeBridge() {
         return;
       }
 
-      console.log(`[TIMELINE] ${new Date().toLocaleTimeString('pt-BR')} SOURCE=WhatsAppRealtimeBridge:tick starting sync-realtime`);
+      if (Boolean((window as unknown as Record<string, unknown>).DEBUG_LOGS)) {
+        console.log(`[TIMELINE] ${new Date().toLocaleTimeString('pt-BR')} SOURCE=WhatsAppRealtimeBridge:tick starting sync-realtime`);
+      }
       isSyncingRef.current = true;
-      let nextDelay = 25000; // 25s base heartbeat to prevent exhausting Supabase connection pool
+      let nextDelay = 60000; // 60s base heartbeat to prevent exhausting Supabase connection pool and API log volume
       try {
         const controller = new AbortController();
         const abortTimeout = setTimeout(() => controller.abort(), 8000);
@@ -60,10 +62,10 @@ export function WhatsAppRealtimeBridge() {
         clearTimeout(abortTimeout);
 
         if (!res.ok) {
-          nextDelay = 35000;
+          nextDelay = 90000;
         }
       } catch {
-        nextDelay = 45000;
+        nextDelay = 120000;
       } finally {
         isSyncingRef.current = false;
         if (isMounted) {

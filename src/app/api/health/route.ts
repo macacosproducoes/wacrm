@@ -14,7 +14,15 @@ function getAdminClient() {
   return createAdminClient(url, key);
 }
 
+let cachedHealthResponse: { data: Record<string, unknown>; expiresAt: number } | null = null;
+const HEALTH_CACHE_TTL_MS = 30_000;
+
 export async function GET() {
+  const now = Date.now();
+  if (cachedHealthResponse && now < cachedHealthResponse.expiresAt) {
+    return NextResponse.json(cachedHealthResponse.data, { status: 200 });
+  }
+
   const startTime = Date.now();
   let whatsappStatus = 'DISCONNECTED';
   let webhookStatus = 'UNKNOWN';
@@ -183,7 +191,7 @@ export async function GET() {
 
     const isSystemHealthy = whatsappStatus === 'CONNECTED' && webhookStatus === 'HEALTHY' && dbStatus === 'HEALTHY';
 
-    return NextResponse.json({
+    const responseBody = {
       status: isSystemHealthy ? 'HEALTHY' : 'DEGRADED',
       checks: {
         DATABASE: dbStatus,
@@ -205,7 +213,14 @@ export async function GET() {
         responseTimeMs: Date.now() - startTime,
         timestamp: new Date().toISOString(),
       },
-    }, { status: 200 });
+    };
+
+    cachedHealthResponse = {
+      data: responseBody,
+      expiresAt: Date.now() + HEALTH_CACHE_TTL_MS,
+    };
+
+    return NextResponse.json(responseBody, { status: 200 });
   } catch (err: any) {
     return NextResponse.json({
       status: 'UNHEALTHY',

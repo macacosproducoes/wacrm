@@ -82,11 +82,11 @@ export function useRealtime({
 
       if (!isMounted) return;
 
-      // Unique channel identifier per subscription instance prevents collision
-      const uniqueChannelName = `${channelName}_${Date.now()}`;
+      // Stable channel identifier allows Supabase Realtime to reuse topic
+      const activeChannelName = channelName;
 
       activeChannel = supabase
-        .channel(uniqueChannelName)
+        .channel(activeChannelName)
         .on(
           "postgres_changes",
           { event: "*", schema: "public", table: "messages" },
@@ -150,9 +150,9 @@ export function useRealtime({
               );
             }
 
-            // Exponential backoff automatic reconnect: 1s, 2s, 4s, capped at 10s
-            const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current - 1), 10000);
-            console.warn(`[realtime] Connection status: ${status}. Scheduling reconnect attempt ${reconnectAttemptsRef.current} in ${delay}ms...`);
+            // Exponential backoff reconnect: 2s, 4s, 8s, 16s, capped at 30s
+            // Prevents rapid reconnect loops flooding Supabase Realtime logs
+            const delay = Math.min(2000 * Math.pow(1.5, reconnectAttemptsRef.current - 1), 30000);
             
             if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
             reconnectTimeoutRef.current = setTimeout(() => {

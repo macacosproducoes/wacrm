@@ -27,20 +27,24 @@ export interface IngestWebhookEventParams {
   payload: Record<string, unknown>;
 }
 
+import { sanitizeLogPayload, extractEssentialWebhookMetadata, logger } from '@/lib/logger';
+
 export class WebhookEventManager {
   /**
-   * Computes SHA-256 hash of payload
+   * Computes SHA-256 hash of essential payload attributes (never entire raw payload with media)
    */
-  static hashPayload(payload: Record<string, unknown>): string {
-    return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+  static hashPayload(payload: Record<string, unknown>, messageId?: string): string {
+    const meta = extractEssentialWebhookMetadata(payload);
+    const key = `${meta.event}:${messageId || meta.messageId}:${meta.phone}:${meta.textSnippet || ''}`;
+    return crypto.createHash('sha256').update(key).digest('hex');
   }
 
   /**
-   * Persists incoming event before ACK (non-blocking if table is still being migrated)
+   * Persists incoming event before ACK with sanitized payload (strips base64/media/massive objects)
    */
   static async recordReceived(params: IngestWebhookEventParams): Promise<{ id?: string; isDuplicate?: boolean }> {
     const admin = supabaseAdmin();
-    const hash = this.hashPayload(params.payload);
+    const hash = this.hashPayload(params.payload, params.messageId);
 
     try {
       // 1. Idempotency check by messageId if present
@@ -56,7 +60,10 @@ export class WebhookEventManager {
         }
       }
 
-      // 2. Insert into webhook_events
+      // 2. Prune and sanitize payload - NEVER store raw base64, media, or huge arrays
+      const prunedPayload = sanitizeLogPayload(params.payload, 2) as Record<string, unknown>;
+
+      // 3. Insert into webhook_events
       const { data, error } = await admin
         .from('webhook_events')
         .insert({
@@ -66,7 +73,7 @@ export class WebhookEventManager {
           message_id: params.messageId || null,
           connection_id: params.connectionId || null,
           account_id: params.accountId || null,
-          payload: params.payload,
+          payload: prunedPayload,
           payload_hash: hash,
           processing_status: 'RECEIVED',
           received_at: new Date().toISOString(),
@@ -75,14 +82,14 @@ export class WebhookEventManager {
         .maybeSingle();
 
       if (error) {
-        // If table doesn't exist yet, non-blocking fallback
-        console.warn('[webhook_events] Notice: could not insert into webhook_events (fallback active):', error.message);
+        // Log once via logger without spamming
+        logger.debug('webhook_events', 'insert non-blocking fallback', { error: error.message });
         return { isDuplicate: false };
       }
 
       return { id: data?.id, isDuplicate: false };
     } catch (err: unknown) {
-      console.warn('[webhook_events] Record received catch:', err);
+      logger.debug('webhook_events', 'recordReceived catch', { error: err instanceof Error ? err.message : String(err) });
       return { isDuplicate: false };
     }
   }

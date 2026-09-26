@@ -173,9 +173,11 @@ export function ConversationList({
 
     (async () => {
       const currentCount = existingConversationsRef.current?.length ?? 0;
-      const timestamp = new Date().toLocaleTimeString('pt-BR');
-      console.log(`[TIMELINE] ${timestamp} SOURCE=ConversationList:fetchTrigger resyncToken=${resyncToken} currentCount=${currentCount}`);
-      console.log(`[INBOX] load conversations trigger: resyncToken=${resyncToken}, currentCount=${currentCount}`);
+      if (typeof window !== "undefined" && Boolean((window as unknown as Record<string, unknown>).DEBUG_LOGS)) {
+        const timestamp = new Date().toLocaleTimeString('pt-BR');
+        console.log(`[TIMELINE] ${timestamp} SOURCE=ConversationList:fetchTrigger resyncToken=${resyncToken} currentCount=${currentCount}`);
+        console.log(`[INBOX] load conversations trigger: resyncToken=${resyncToken}, currentCount=${currentCount}`);
+      }
       let list: any = null;
 
       // 1. Try Supabase browser client with strict account isolation

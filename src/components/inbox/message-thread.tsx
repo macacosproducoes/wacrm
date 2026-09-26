@@ -456,9 +456,11 @@ export function MessageThread({
     let cancelled = false;
 
     (async () => {
-      const timestamp = new Date().toLocaleTimeString('pt-BR');
-      console.log(`[TIMELINE] ${timestamp} SOURCE=MessageThread:fetchTrigger conv=${conversationId} resyncToken=${resyncToken} currentCount=${existingMessagesRef.current?.length ?? 0}`);
-      console.log(`[INBOX] load messages trigger: conv=${conversationId}, resyncToken=${resyncToken}, currentCount=${existingMessagesRef.current?.length ?? 0}`);
+      if (typeof window !== "undefined" && Boolean((window as unknown as Record<string, unknown>).DEBUG_LOGS)) {
+        const timestamp = new Date().toLocaleTimeString('pt-BR');
+        console.log(`[TIMELINE] ${timestamp} SOURCE=MessageThread:fetchTrigger conv=${conversationId} resyncToken=${resyncToken} currentCount=${existingMessagesRef.current?.length ?? 0}`);
+        console.log(`[INBOX] load messages trigger: conv=${conversationId}, resyncToken=${resyncToken}, currentCount=${existingMessagesRef.current?.length ?? 0}`);
+      }
       const hasCurrentMessages = Boolean(
         existingMessagesRef.current &&
         existingMessagesRef.current.length > 0 &&
@@ -515,19 +517,23 @@ export function MessageThread({
 
         if (loaded && loaded.length > 0) {
           setHasFetchedSuccessfully(true);
-          console.log(`[TIMELINE] ${new Date().toLocaleTimeString('pt-BR')} SOURCE=MessageThread:fetched conv=${conversationId} loadedCount=${loaded.length}`);
-          console.log(`[INBOX] message count: loaded ${loaded.length} messages for conv ${conversationId}`);
+          if (typeof window !== "undefined" && Boolean((window as unknown as Record<string, unknown>).DEBUG_LOGS)) {
+            console.log(`[TIMELINE] ${new Date().toLocaleTimeString('pt-BR')} SOURCE=MessageThread:fetched conv=${conversationId} loadedCount=${loaded.length}`);
+            console.log(`[INBOX] message count: loaded ${loaded.length} messages for conv ${conversationId}`);
+          }
           onMessagesLoadedRef.current(loaded);
         } else if (!cancelled) {
           setHasFetchedSuccessfully(true);
           // DEFENSIVE STATE PRESERVATION (ETAPA 7):
           // If we had existing messages, PRESERVE them rather than destroying state!
           if (hasCurrentMessages) {
-            console.log(`[TIMELINE] ${new Date().toLocaleTimeString('pt-BR')} SOURCE=MessageThread:preserveExisting conv=${conversationId} count=${existingMessagesRef.current?.length ?? 0}`);
-            console.warn(`[INBOX] Preserving ${existingMessagesRef.current?.length ?? 0} existing messages for conv ${conversationId}; incoming query returned empty`);
+            if (typeof window !== "undefined" && Boolean((window as unknown as Record<string, unknown>).DEBUG_LOGS)) {
+              console.log(`[TIMELINE] ${new Date().toLocaleTimeString('pt-BR')} SOURCE=MessageThread:preserveExisting conv=${conversationId} count=${existingMessagesRef.current?.length ?? 0}`);
+            }
           } else {
-            console.log(`[TIMELINE] ${new Date().toLocaleTimeString('pt-BR')} SOURCE=MessageThread:verifiedEmpty conv=${conversationId}`);
-            console.log(`[INBOX] Conversation ${conversationId} verified empty (0 messages)`);
+            if (typeof window !== "undefined" && Boolean((window as unknown as Record<string, unknown>).DEBUG_LOGS)) {
+              console.log(`[TIMELINE] ${new Date().toLocaleTimeString('pt-BR')} SOURCE=MessageThread:verifiedEmpty conv=${conversationId}`);
+            }
           }
         }
       } catch (err) {

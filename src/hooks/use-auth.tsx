@@ -141,8 +141,8 @@ const CACHE_ACCOUNT_KEY = "wacrm_cached_account";
 function getCachedAuth(): { profile: Profile | null; account: AccountSummary | null } {
   if (typeof window === "undefined") return { profile: null, account: null };
   try {
-    const p = sessionStorage.getItem(CACHE_PROFILE_KEY);
-    const a = sessionStorage.getItem(CACHE_ACCOUNT_KEY);
+    const p = localStorage.getItem(CACHE_PROFILE_KEY) ?? sessionStorage.getItem(CACHE_PROFILE_KEY);
+    const a = localStorage.getItem(CACHE_ACCOUNT_KEY) ?? sessionStorage.getItem(CACHE_ACCOUNT_KEY);
     return {
       profile: p ? JSON.parse(p) : null,
       account: a ? JSON.parse(a) : null,
@@ -153,7 +153,8 @@ function getCachedAuth(): { profile: Profile | null; account: AccountSummary | n
 }
 
 /** Attempts at the profile lookup, including the first. */
-const PROFILE_FETCH_ATTEMPTS = 2;
+const PROFILE_FETCH_ATTEMPTS = 3;
+const PROFILE_FETCH_TIMEOUT_MS = 10000;
 const PROFILE_FETCH_RETRY_MS = 1500;
 
 function sleep(ms: number) {
@@ -204,7 +205,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       let data: ProfileRow | null = null;
       for (let attempt = 1; ; attempt++) {
         const timeoutPromise = new Promise<{ data: null; error: { message: string; details?: string; hint?: string; code?: string } }>((resolve) =>
-          setTimeout(() => resolve({ data: null, error: { message: "Supabase profile query timed out" } }), 3500)
+          setTimeout(() => resolve({ data: null, error: { message: "Supabase profile query timed out" } }), PROFILE_FETCH_TIMEOUT_MS)
         );
 
         const queryPromise = supabase
@@ -229,7 +230,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           continue;
         }
         lastFetchedUserIdRef.current = null;
-        if (error) setStatusDetail(error.message);
+        if (!profile && error) setStatusDetail(error.message);
         return;
       }
 
@@ -298,9 +299,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setProfile(newProfile);
         setAccount(accountRow);
         try {
-          sessionStorage.setItem(CACHE_PROFILE_KEY, JSON.stringify(newProfile));
+          const pStr = JSON.stringify(newProfile);
+          localStorage.setItem(CACHE_PROFILE_KEY, pStr);
+          sessionStorage.setItem(CACHE_PROFILE_KEY, pStr);
           if (accountRow) {
-            sessionStorage.setItem(CACHE_ACCOUNT_KEY, JSON.stringify(accountRow));
+            const aStr = JSON.stringify(accountRow);
+            localStorage.setItem(CACHE_ACCOUNT_KEY, aStr);
+            sessionStorage.setItem(CACHE_ACCOUNT_KEY, aStr);
           }
         } catch {}
         if (!data.account_id || !accountRole) {
@@ -430,6 +435,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     try {
+      localStorage.removeItem(CACHE_PROFILE_KEY);
+      localStorage.removeItem(CACHE_ACCOUNT_KEY);
       sessionStorage.removeItem(CACHE_PROFILE_KEY);
       sessionStorage.removeItem(CACHE_ACCOUNT_KEY);
       sessionStorage.removeItem("wacrm_dashboard_summary");

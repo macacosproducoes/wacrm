@@ -143,11 +143,13 @@ async function handleSync(request: Request) {
       return NextResponse.json({ success: true, syncedMessages: 0, chatsChecked: 0 });
     }
 
-    // 4. Fetch existing conversations to compare timestamps
+    // 4. Fetch existing conversations to compare timestamps (bounded to 100 recent)
     const { data: existingConvs } = await admin
       .from('conversations')
       .select('id, contact_id, last_message_at, contacts (phone)')
-      .eq('account_id', accountId);
+      .eq('account_id', accountId)
+      .order('last_message_at', { ascending: false, nullsFirst: false })
+      .limit(100);
 
     const convMapByPhone = new Map<string, { id: string; contact_id: string; last_message_at: string | null }>();
     for (const c of existingConvs || []) {

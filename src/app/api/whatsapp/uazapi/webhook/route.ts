@@ -2,6 +2,7 @@ import { NextResponse, after } from 'next/server';
 import { createClient as createAdminClient } from '@supabase/supabase-js';
 import { TraceLogger } from '@/lib/whatsapp/trace';
 import { WebhookEventManager } from '@/lib/whatsapp/webhook-events';
+import { logger } from '@/lib/logger';
 
 function supabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -62,6 +63,35 @@ export async function POST(request: Request) {
     const rawMsgId = String(key.id || msgData.messageid || msgData.id || body.id || '').trim();
     const messageId = rawMsgId.includes(':') ? rawMsgId.split(':').pop()! : rawMsgId;
 
+    const chatData = ((body.chat || body.data || body) ?? {}) as Record<string, unknown>;
+    const rawChatId = String(
+      chatData.wa_chatid ||
+      chatData.id ||
+      msgData.chatid ||
+      msgData.remoteJid ||
+      key.remoteJid ||
+      body.chatid ||
+      ''
+    ).trim();
+
+    const isGroup = Boolean(
+      chatData.isGroup ||
+      chatData.wa_isGroup ||
+      msgData.isGroup ||
+      body.isGroup ||
+      rawChatId.endsWith('@g.us') ||
+      rawChatId.includes('-')
+    );
+
+    if (isGroup) {
+      // Discard group messages immediately without any database insertion or logging to preserve Supabase quota
+      return NextResponse.json({
+        status: 'ok',
+        trace_id: traceId,
+        skipped: 'group_message',
+      }, { status: 200 });
+    }
+
     TraceLogger.log(traceId, '01', 'UAZAPI RECEIVED', {
       eventType,
       messageId: messageId || undefined,
@@ -120,10 +150,7 @@ export async function POST(request: Request) {
       });
     }
 
-    // 3. Mark event state QUEUED
-    await WebhookEventManager.updateStatus(traceId, 'QUEUED');
-
-    // 4. Delegate asynchronous background processing to Next.js serverless-safe after()
+    // 3. Delegate asynchronous background processing to Next.js serverless-safe after()
     // This keeps the Vercel Lambda alive until the follower order or AI response is delivered,
     // independent of whether the CRM frontend is open or closed!
     const hasFollowerOrder = Boolean(processResult.followerOrderParams);
@@ -137,7 +164,6 @@ export async function POST(request: Request) {
     if (hasFollowerOrder || hasAiTask) {
       after(async () => {
         try {
-          await WebhookEventManager.updateStatus(traceId, 'PROCESSING');
 
           // Priority 1: Automated Follower Order Workflow (Instagram Resolver -> Creative Job -> UAZAPI Send)
           let followerOrderHandled = false;
@@ -192,7 +218,14 @@ export async function POST(request: Request) {
     }
 
     const tTotal = performance.now() - t0;
-    console.log(`[TRACE ${traceId}] Inbound message persisted to DB & ACKed to UAZAPI in ${tTotal.toFixed(2)}ms`);
+    logger.webhook({
+      provider: 'uazapi',
+      event: eventType,
+      messageId: messageId || undefined,
+      connectionId: queryConnectionId || undefined,
+      status: 'processed',
+      durationMs: tTotal,
+    });
 
     // 5. Instant 200 OK ACK to UAZAPI
     return NextResponse.json({
@@ -208,7 +241,7 @@ export async function POST(request: Request) {
 
   } catch (err: any) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[TRACE ${traceId}] Webhook fatal intake error:`, message, err);
+    logger.error('UAZAPI_WEBHOOK', `Fatal intake error: ${message}`, err, { traceId });
     await WebhookEventManager.updateStatus(traceId, 'FAILED', message);
     return NextResponse.json({
       error: 'Internal server error',

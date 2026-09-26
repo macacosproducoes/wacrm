@@ -13,6 +13,8 @@ export interface TraceContext {
   step?: string;
 }
 
+import { sanitizeLogPayload, logger } from '@/lib/logger';
+
 export class TraceLogger {
   static generateTraceId(prefix = 'trc'): string {
     const ts = Date.now().toString(36);
@@ -21,8 +23,17 @@ export class TraceLogger {
   }
 
   static log(traceId: string, stepCode: string, stepName: string, meta?: Record<string, unknown>) {
+    // Only log trace details if debug is enabled or in development
+    if (!logger.isDebugEnabled() && process.env.NODE_ENV === 'production') {
+      return;
+    }
+
     const timestamp = new Date().toISOString();
-    const metaStr = meta && Object.keys(meta).length > 0 ? ` | ${JSON.stringify(meta)}` : '';
+    let metaStr = '';
+    if (meta && Object.keys(meta).length > 0) {
+      const sanitized = sanitizeLogPayload(meta, 2);
+      metaStr = ` | ${JSON.stringify(sanitized)}`;
+    }
     console.log(`[TRACE ${traceId}] [${stepCode}] ${stepName} (${timestamp})${metaStr}`);
   }
 }

@@ -158,12 +158,18 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
     }
   }, [data]);
 
+  const fetchOrderDataRef = useRef(fetchOrderData);
+  fetchOrderDataRef.current = fetchOrderData;
+
+  const onContactUpdatedRef = useRef(onContactUpdated);
+  onContactUpdatedRef.current = onContactUpdated;
+
   // Real-time listener on creative_jobs and creative_deliveries
   useEffect(() => {
     if (!contact?.id || !accountId) return;
 
     const supabase = createClient();
-    const channelName = `follower_order_${contact.id}_${Date.now()}`;
+    const channelName = `follower_order_${contact.id}`;
 
     const channel = supabase
       .channel(channelName)
@@ -176,8 +182,7 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
           filter: `account_id=eq.${accountId}`,
         },
         () => {
-          console.log("[FollowerOrderCard] Realtime creative_jobs event received, re-fetching...");
-          fetchOrderData(true);
+          fetchOrderDataRef.current?.(true);
         }
       )
       .on(
@@ -189,8 +194,7 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
           filter: `account_id=eq.${accountId}`,
         },
         () => {
-          console.log("[FollowerOrderCard] Realtime creative_deliveries event received, re-fetching...");
-          fetchOrderData(true);
+          fetchOrderDataRef.current?.(true);
         }
       )
       .on(
@@ -202,11 +206,10 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
           filter: `id=eq.${contact.id}`,
         },
         (payload) => {
-          console.log("[FollowerOrderCard] Realtime contact update received, re-fetching...");
-          if (payload.new && onContactUpdated) {
-            onContactUpdated(payload.new as Contact);
+          if (payload.new && onContactUpdatedRef.current) {
+            onContactUpdatedRef.current(payload.new as Contact);
           }
-          fetchOrderData(true);
+          fetchOrderDataRef.current?.(true);
         }
       )
       .subscribe();
@@ -214,11 +217,11 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
     activeChannelRef.current = channel;
 
     return () => {
-      if (activeChannelRef.current) {
-        supabase.removeChannel(activeChannelRef.current);
+      if (channel) {
+        supabase.removeChannel(channel);
       }
     };
-  }, [contact?.id, accountId, fetchOrderData, onContactUpdated]);
+  }, [contact?.id, accountId]);
 
   const job = data?.job;
   const isSent = Boolean(data?.is_sent || job?.status === "SENT");

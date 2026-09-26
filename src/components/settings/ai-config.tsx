@@ -299,11 +299,10 @@ export function AiConfig() {
                 <span className="text-xl">🎯</span> IA Apenas em Conversas Novas
               </span>
               <span
-                className={`text-xs font-bold px-3 py-1 rounded-full transition-all shadow-xs ${
-                  onlyNewConversations
+                className={`text-xs font-bold px-3 py-1 rounded-full transition-all shadow-xs ${onlyNewConversations
                     ? 'bg-emerald-600 text-white'
                     : 'bg-slate-100 dark:bg-muted text-slate-700 dark:text-muted-foreground border border-slate-300 dark:border-border'
-                }`}
+                  }`}
               >
                 {onlyNewConversations ? 'SIM (Ativo)' : 'NÃO (Desativado)'}
               </span>
@@ -345,11 +344,10 @@ export function AiConfig() {
                   <span className="text-xs text-muted-foreground font-mono bg-background px-2 py-0.5 rounded border">
                     {model}
                   </span>
-                  <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium border ${
-                    isActive 
-                      ? 'bg-emerald-500/15 text-emerald-600 border-emerald-500/30 dark:text-emerald-400' 
+                  <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium border ${isActive
+                      ? 'bg-emerald-500/15 text-emerald-600 border-emerald-500/30 dark:text-emerald-400'
                       : 'bg-muted text-muted-foreground border-border'
-                  }`}>
+                    }`}>
                     <span className={`size-1.5 rounded-full ${isActive ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground'}`} />
                     {isActive ? 'Agente Ativo (Ligado)' : 'Pausado'}
                   </span>
@@ -429,11 +427,10 @@ export function AiConfig() {
                       type="button"
                       onClick={() => setModel(s)}
                       disabled={disabled}
-                      className={`rounded px-2 py-0.5 text-xs font-mono transition-colors ${
-                        model === s
+                      className={`rounded px-2 py-0.5 text-xs font-mono transition-colors ${model === s
                           ? 'bg-primary text-primary-foreground font-medium'
                           : 'bg-muted hover:bg-muted/80 text-muted-foreground'
-                      }`}
+                        }`}
                     >
                       {s}
                     </button>

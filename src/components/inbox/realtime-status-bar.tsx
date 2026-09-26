@@ -27,6 +27,9 @@ export function RealtimeStatusBar({ isRealtimeConnected }: { isRealtimeConnected
     let cancelled = false;
 
     async function fetchHealth() {
+      // Skip health polling if tab is backgrounded
+      if (typeof document !== "undefined" && document.hidden) return;
+
       try {
         const res = await fetch("/api/health");
         if (res.ok) {
@@ -39,10 +42,20 @@ export function RealtimeStatusBar({ isRealtimeConnected }: { isRealtimeConnected
     }
 
     void fetchHealth();
-    const interval = setInterval(fetchHealth, 15000);
+    // Poll every 60s instead of 15s to reduce Supabase query volume by 75%
+    const interval = setInterval(fetchHealth, 60000);
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void fetchHealth();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
     return () => {
       cancelled = true;
       clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, []);
 

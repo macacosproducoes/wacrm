@@ -5,6 +5,8 @@
  * Handles instance connection, QR code generation, message sending, and webhook setup.
  */
 
+import { logger, sanitizeLogPayload } from '@/lib/logger';
+
 export interface UazApiStatusResponse {
   status: 'connected' | 'connecting' | 'disconnected' | 'hibernated' | 'unknown';
   qrcode?: string | null;
@@ -397,7 +399,7 @@ export async function sendUazApiMedia(
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    console.error(`[sendUazApiMedia] Failed (HTTP ${res.status}):`, JSON.stringify(data));
+    logger.error('sendUazApiMedia', `Failed (HTTP ${res.status})`, undefined, { response: data });
     throw new Error(
       data.message || data.error || `Failed to send media (HTTP ${res.status})`
     );
@@ -412,7 +414,7 @@ export async function sendUazApiMedia(
     data.data?.key?.id ||
     `uazapi_media_${Date.now()}`;
 
-  console.log(`[sendUazApiMedia] Success! messageId: ${messageId}`);
+  logger.info('sendUazApiMedia', `Success! messageId: ${messageId}`);
 
   return {
     messageId,
@@ -457,7 +459,7 @@ export async function sendUazApiPixButton(
     body.text = opts.text.trim();
   }
 
-  console.log(`[sendUazApiPixButton] Sending PIX (${opts.pixType}) to ${formattedNumber} via ${endpoint}`);
+  logger.info('sendUazApiPixButton', `Sending PIX (${opts.pixType}) to ${formattedNumber}`);
 
   const res = await fetch(endpoint, {
     method: 'POST',
@@ -472,7 +474,7 @@ export async function sendUazApiPixButton(
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    console.error(`[sendUazApiPixButton] Failed (HTTP ${res.status}):`, JSON.stringify(data));
+    logger.error('sendUazApiPixButton', `Failed (HTTP ${res.status})`, undefined, { response: data });
     throw new Error(
       data.message || data.error || `Falha ao enviar PIX nativo (HTTP ${res.status})`
     );
