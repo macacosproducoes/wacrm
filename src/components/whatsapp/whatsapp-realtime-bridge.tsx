@@ -77,11 +77,33 @@ export function WhatsAppRealtimeBridge() {
     // Initial trigger after 3s to let the page settle
     timer = setTimeout(tick, 3000);
 
+    // Periodic check for due conditional follow-ups (every 30s)
+    let followUpTimer: NodeJS.Timeout | null = null;
+    const checkFollowUps = async () => {
+      if (!isMounted || (typeof document !== 'undefined' && document.hidden)) {
+        followUpTimer = setTimeout(checkFollowUps, 30000);
+        return;
+      }
+      try {
+        await fetch('/api/follow-ups/cron', { method: 'POST' });
+      } catch {
+        // Silently catch background errors
+      } finally {
+        if (isMounted) {
+          followUpTimer = setTimeout(checkFollowUps, 30000);
+        }
+      }
+    };
+    followUpTimer = setTimeout(checkFollowUps, 5000);
+
     // Resync when tab becomes visible after being hidden
     const onVisibility = () => {
-      if (document.visibilityState === 'visible' && !isSyncingRef.current) {
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(tick, 1000);
+      if (document.visibilityState === 'visible') {
+        if (!isSyncingRef.current) {
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(tick, 1000);
+        }
+        void fetch('/api/follow-ups/cron', { method: 'POST' }).catch(() => {});
       }
     };
 
@@ -91,6 +113,7 @@ export function WhatsAppRealtimeBridge() {
     return () => {
       isMounted = false;
       if (timer) clearTimeout(timer);
+      if (followUpTimer) clearTimeout(followUpTimer);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('focus', onVisibility);
     };

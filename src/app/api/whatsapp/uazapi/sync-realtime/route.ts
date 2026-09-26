@@ -12,6 +12,7 @@ import {
 } from '@/lib/whatsapp/conversation-helpers';
 import { handleInboundMessageInstagram } from '@/lib/instagram-resolver';
 import { handleFollowerOrder } from '@/lib/orders/follower-order-handler';
+import { processDueFollowUps } from '@/lib/automations/follow-up-engine';
 
 export const dynamic = 'force-dynamic';
 
@@ -74,6 +75,11 @@ async function handleSync(request: Request) {
     // 1. Ensure persistent server-side background SSE listener is running
     void startUazApiListener(accountId).catch((err) => {
       console.error('[sync-realtime] Error starting background listener:', err);
+    });
+
+    // 1b. Process any due follow-ups in the background
+    void processDueFollowUps().catch((err) => {
+      console.warn('[sync-realtime] Error processing due follow-ups:', err);
     });
 
     const admin = supabaseAdmin();

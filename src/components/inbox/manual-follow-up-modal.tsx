@@ -34,7 +34,7 @@ export function ManualFollowUpModal({
   onScheduled,
 }: ManualFollowUpModalProps) {
   const [selectedReplyId, setSelectedReplyId] = useState<string>("");
-  const [scheduleType, setScheduleType] = useState<"30m" | "2h" | "today18" | "tomorrow9" | "custom">("2h");
+  const [scheduleType, setScheduleType] = useState<"1m" | "5m" | "15m" | "30m" | "1h" | "2h" | "today18" | "tomorrow9" | "custom">("1m");
   const [customDateTime, setCustomDateTime] = useState<string>("");
   const [cancelOnClientReply, setCancelOnClientReply] = useState(true);
   const [cancelOnAgentReply, setCancelOnAgentReply] = useState(true);
@@ -43,8 +43,20 @@ export function ManualFollowUpModal({
   // Compute scheduled date
   const computeScheduledTime = (): Date => {
     const now = new Date();
+    if (scheduleType === "1m") {
+      return new Date(now.getTime() + 60 * 1000);
+    }
+    if (scheduleType === "5m") {
+      return new Date(now.getTime() + 5 * 60 * 1000);
+    }
+    if (scheduleType === "15m") {
+      return new Date(now.getTime() + 15 * 60 * 1000);
+    }
     if (scheduleType === "30m") {
       return new Date(now.getTime() + 30 * 60 * 1000);
+    }
+    if (scheduleType === "1h") {
+      return new Date(now.getTime() + 60 * 60 * 1000);
     }
     if (scheduleType === "2h") {
       return new Date(now.getTime() + 2 * 60 * 60 * 1000);
@@ -66,7 +78,7 @@ export function ManualFollowUpModal({
     if (scheduleType === "custom" && customDateTime) {
       return new Date(customDateTime);
     }
-    return new Date(now.getTime() + 60 * 60 * 1000);
+    return new Date(now.getTime() + 60 * 1000);
   };
 
   const handleSchedule = async () => {
@@ -218,6 +230,42 @@ export function ManualFollowUpModal({
             <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2">
               <button
                 type="button"
+                onClick={() => setScheduleType("1m")}
+                className={`rounded-md border p-2 text-center text-xs font-medium transition-all ${
+                  scheduleType === "1m"
+                    ? "border-amber-500 bg-amber-500/10 text-amber-600 dark:text-amber-400 font-semibold shadow-xs"
+                    : "border-border text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                ⚡ 1 min (Agora)
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setScheduleType("5m")}
+                className={`rounded-md border p-2 text-center text-xs font-medium transition-all ${
+                  scheduleType === "5m"
+                    ? "border-primary bg-primary/10 text-primary font-semibold shadow-xs"
+                    : "border-border text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                Em 5 min
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setScheduleType("15m")}
+                className={`rounded-md border p-2 text-center text-xs font-medium transition-all ${
+                  scheduleType === "15m"
+                    ? "border-primary bg-primary/10 text-primary font-semibold shadow-xs"
+                    : "border-border text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                Em 15 min
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setScheduleType("30m")}
                 className={`rounded-md border p-2 text-center text-xs font-medium transition-all ${
                   scheduleType === "30m"
@@ -226,6 +274,18 @@ export function ManualFollowUpModal({
                 }`}
               >
                 Em 30 min
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setScheduleType("1h")}
+                className={`rounded-md border p-2 text-center text-xs font-medium transition-all ${
+                  scheduleType === "1h"
+                    ? "border-primary bg-primary/10 text-primary font-semibold shadow-xs"
+                    : "border-border text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                Em 1 hora
               </button>
 
               <button

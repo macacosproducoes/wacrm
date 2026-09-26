@@ -206,6 +206,14 @@ export async function POST(request: Request) {
             console.log(`[TRACE ${traceId}] AI auto-reply completed in after() execution context.`);
           }
 
+          // Priority 3: Process due follow-ups in background
+          try {
+            const { processDueFollowUps } = await import('@/lib/automations/follow-up-engine');
+            await processDueFollowUps();
+          } catch (fuErr) {
+            console.warn(`[TRACE ${traceId}] Non-critical error processing due follow-ups:`, fuErr);
+          }
+
           await WebhookEventManager.updateStatus(traceId, 'COMPLETED');
         } catch (taskErr: any) {
           console.error(`[TRACE ${traceId}] Error in after() background execution:`, taskErr);
