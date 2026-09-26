@@ -35,7 +35,7 @@ export function PixMessageBubble({ payload, contentText, isAgent }: PixMessageBu
 
   // If there is intro text preceding the PIX key
   const introText = contentText
-    ? contentText.replace(/\[Chave PIX[^\]]*\]/gi, "").trim()
+    ? contentText.replace(/\[(Chave PIX|PIX Copia e Cola)[^\]]*\]/gi, "").trim()
     : "";
 
   return (
@@ -58,7 +58,7 @@ export function PixMessageBubble({ payload, contentText, isAgent }: PixMessageBu
             </span>
           </div>
           <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase text-emerald-700 dark:text-emerald-300">
-            {keyType}
+            {keyType === "COPIA_E_COLA" ? "Copia e Cola" : keyType}
           </span>
         </div>
 
@@ -75,7 +75,7 @@ export function PixMessageBubble({ payload, contentText, isAgent }: PixMessageBu
 
           <div>
             <span className="text-[10px] font-medium uppercase text-muted-foreground block">
-              Chave PIX
+              {keyType === "COPIA_E_COLA" ? "Código Copia e Cola" : "Chave PIX"}
             </span>
             <span className="text-xs font-mono font-medium text-foreground break-all select-all block bg-background/60 p-1.5 rounded border border-border/50">
               {pixKey}

@@ -3,7 +3,7 @@
  * Supports: EMAIL, PHONE, CPF (and CNPJ), EVP (Random UUID)
  */
 
-export type PixKeyType = 'EMAIL' | 'PHONE' | 'CPF' | 'EVP';
+export type PixKeyType = 'EMAIL' | 'PHONE' | 'CPF' | 'EVP' | 'COPIA_E_COLA';
 
 export interface PixValidationResult {
   valid: boolean;
@@ -119,10 +119,28 @@ function isValidEmail(email: string): boolean {
 }
 
 /**
+ * Validates PIX Copia e Cola (BR Code EMV standard string or dynamic URL).
+ */
+function isValidCopiaECola(code: string): boolean {
+  const clean = code.trim().replace(/[\r\n\t]/g, '');
+  if (clean.length < 15) return false;
+  // Standard BR Code starts with 000201
+  if (clean.startsWith('000201')) return true;
+  // Official BACEN PIX domain in URL or payload
+  if (/br\.gov\.bcb\.pix/i.test(clean) || /pix\.bcb\.gov\.br/i.test(clean)) return true;
+  // Payment gateway generated dynamic PIX URL or code
+  if (/^https?:\/\/.*pix/i.test(clean)) return true;
+  // Generic payload with at least 25 characters
+  if (clean.length >= 25 && /^[a-zA-Z0-9.+*:@/_\s=-]+$/.test(clean)) return true;
+  return false;
+}
+
+/**
  * Auto-detects the PIX key type based on its format.
  */
 export function detectPixKeyType(key: string): PixKeyType | null {
   const trimmed = key.trim();
+  if (trimmed.startsWith('000201') || /br\.gov\.bcb\.pix/i.test(trimmed)) return 'COPIA_E_COLA';
   if (isValidEmail(trimmed)) return 'EMAIL';
   if (isValidEvp(trimmed)) return 'EVP';
 
@@ -132,6 +150,8 @@ export function detectPixKeyType(key: string): PixKeyType | null {
 
   const phoneCheck = isValidPhone(trimmed);
   if (phoneCheck.valid) return 'PHONE';
+
+  if (trimmed.length >= 25 && isValidCopiaECola(trimmed)) return 'COPIA_E_COLA';
 
   return null;
 }
@@ -146,6 +166,19 @@ export function validatePixKey(key: string, type: PixKeyType): PixValidationResu
   }
 
   switch (type) {
+    case 'COPIA_E_COLA': {
+      const clean = raw.trim().replace(/[\r\n\t]/g, '');
+      if (!isValidCopiaECola(clean)) {
+        return {
+          valid: false,
+          error: 'Código PIX Copia e Cola inválido. Cole o código BR Code gerado pelo seu banco (geralmente inicia com 000201...).',
+          formattedKey: clean,
+          detectedType: 'COPIA_E_COLA',
+        };
+      }
+      return { valid: true, formattedKey: clean, detectedType: 'COPIA_E_COLA' };
+    }
+
     case 'EMAIL': {
       if (!isValidEmail(raw)) {
         return {
@@ -220,7 +253,7 @@ export function validatePixKey(key: string, type: PixKeyType): PixValidationResu
     default:
       return {
         valid: false,
-        error: `Tipo de chave não suportado: ${type}. Utilize EMAIL, PHONE, CPF ou EVP.`,
+        error: `Tipo de chave não suportado: ${type}. Utilize EMAIL, PHONE, CPF, EVP ou COPIA_E_COLA.`,
         formattedKey: raw,
       };
   }

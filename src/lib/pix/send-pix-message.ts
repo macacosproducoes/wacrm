@@ -146,7 +146,9 @@ export async function sendPixMessage(params: SendPixMessageParams): Promise<Send
 
   // 5. Generate standard BACEN Pix Copia e Cola string if required
   let pixCopiaECola: string | undefined = undefined;
-  if (sendMode === 'copia_e_cola' || sendMode === 'both') {
+  if (rawPixKeyType === 'COPIA_E_COLA') {
+    pixCopiaECola = finalPixKey;
+  } else if (sendMode === 'copia_e_cola' || sendMode === 'both') {
     pixCopiaECola = generatePixCopiaECola({
       pixKey: finalPixKey,
       pixKeyType: rawPixKeyType,

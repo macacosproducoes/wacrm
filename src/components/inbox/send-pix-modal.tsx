@@ -97,6 +97,9 @@ export function SendPixModal({
   // Live generated BACEN standard Pix Copia e Cola
   const liveCopiaECola = useMemo(() => {
     if (!pixKey.trim()) return "";
+    if (pixKeyType === "COPIA_E_COLA" || pixKey.trim().startsWith("000201")) {
+      return pixKey.trim();
+    }
     try {
       return generatePixCopiaECola({
         pixKey: pixKey.trim(),
@@ -236,7 +239,9 @@ export function SendPixModal({
                   </div>
                   <div className="flex items-center justify-between text-[11px] text-muted-foreground">
                     <span>Tipo:</span>
-                    <span className="font-mono uppercase font-bold text-emerald-600">{pixKeyType}</span>
+                    <span className="font-mono uppercase font-bold text-emerald-600">
+                      {pixKeyType === "COPIA_E_COLA" ? "Código Copia e Cola" : pixKeyType}
+                    </span>
                   </div>
                   <div className="pt-1">
                     <span className="font-mono text-xs text-foreground bg-background/80 p-2 rounded border border-border/60 break-all select-all block">
@@ -263,36 +268,51 @@ export function SendPixModal({
                   )}
                 </div>
 
-                <div className="grid grid-cols-3 gap-2">
-                  <div className="col-span-1">
-                    <Label className="text-[11px] text-muted-foreground mb-1 block">Tipo</Label>
-                    <select
-                      value={pixKeyType}
-                      onChange={(e) => setPixKeyType(e.target.value as PixKeyType)}
-                      className="w-full h-8 px-2 text-xs rounded-md border border-border bg-background text-foreground"
-                    >
-                      <option value="EMAIL">E-mail</option>
-                      <option value="PHONE">Telefone</option>
-                      <option value="CPF">CPF/CNPJ</option>
-                      <option value="EVP">Aleatória (EVP)</option>
-                    </select>
-                  </div>
-                  <div className="col-span-2">
-                    <Label className="text-[11px] text-muted-foreground mb-1 block">Chave PIX</Label>
-                    <Input
-                      value={pixKey}
-                      onChange={(e) => handleKeyChange(e.target.value)}
-                      placeholder={
-                        pixKeyType === "EMAIL"
-                          ? "financeiro@empresa.com"
-                          : pixKeyType === "PHONE"
-                          ? "11987654321"
-                          : pixKeyType === "CPF"
-                          ? "123.456.789-00"
-                          : "UUID da chave aleatória"
-                      }
-                      className="h-8 text-xs font-mono"
-                    />
+                <div className="space-y-2">
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="col-span-1">
+                      <Label className="text-[11px] text-muted-foreground mb-1 block">Tipo</Label>
+                      <select
+                        value={pixKeyType}
+                        onChange={(e) => setPixKeyType(e.target.value as PixKeyType)}
+                        className="w-full h-8 px-2 text-xs rounded-md border border-border bg-background text-foreground"
+                      >
+                        <option value="COPIA_E_COLA">PIX Copia e Cola</option>
+                        <option value="EMAIL">E-mail</option>
+                        <option value="PHONE">Telefone</option>
+                        <option value="CPF">CPF/CNPJ</option>
+                        <option value="EVP">Aleatória (EVP)</option>
+                      </select>
+                    </div>
+                    <div className="col-span-2">
+                      <Label className="text-[11px] text-muted-foreground mb-1 block">
+                        {pixKeyType === "COPIA_E_COLA" ? "Código PIX Copia e Cola" : "Chave PIX"}
+                      </Label>
+                      {pixKeyType === "COPIA_E_COLA" ? (
+                        <Textarea
+                          value={pixKey}
+                          onChange={(e) => handleKeyChange(e.target.value)}
+                          placeholder="Cole aqui o código PIX Copia e Cola (000201...)"
+                          rows={2}
+                          className="text-xs font-mono resize-none"
+                        />
+                      ) : (
+                        <Input
+                          value={pixKey}
+                          onChange={(e) => handleKeyChange(e.target.value)}
+                          placeholder={
+                            pixKeyType === "EMAIL"
+                              ? "financeiro@empresa.com"
+                              : pixKeyType === "PHONE"
+                              ? "11987654321"
+                              : pixKeyType === "CPF"
+                              ? "123.456.789-00"
+                              : "UUID da chave aleatória"
+                          }
+                          className="h-8 text-xs font-mono"
+                        />
+                      )}
+                    </div>
                   </div>
                 </div>
 

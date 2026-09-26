@@ -110,6 +110,11 @@ export function generatePixCopiaECola(options: GeneratePixCopiaEColaOptions): st
     throw new Error('Chave PIX obrigatória para gerar Pix Copia e Cola.');
   }
 
+  // If already a Copia e Cola / BR Code string, preserve it as is
+  if (pixKeyType === 'COPIA_E_COLA' || pixKey.trim().startsWith('000201')) {
+    return pixKey.trim();
+  }
+
   const emvKey = formatPixKeyForEMV(pixKey, pixKeyType);
 
   // 1. Tag 00: Payload Format Indicator (Fixed '01')

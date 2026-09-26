@@ -216,4 +216,34 @@ describe('sendPixMessage', () => {
       })
     );
   });
+
+  it('sends native button and preserves exact Copia e Cola payload when pixKeyType is COPIA_E_COLA', async () => {
+    const rawCopiaECola = '00020126360014BR.GOV.BCB.PIX0114+5511999999995204000053039865802BR5910TESTE6009SAO PAULO62070503***6304ABCD';
+    const buttonSpy = vi.spyOn(uazapiClient, 'sendUazApiPixButton').mockResolvedValue({
+      messageId: 'uazapi-btn-999',
+      status: 'sent',
+      raw: {},
+    });
+
+    const result = await sendPixMessage({
+      accountId: 'acc-1',
+      conversationId: 'conv-123',
+      pixKey: rawCopiaECola,
+      pixKeyType: 'COPIA_E_COLA',
+      merchantName: 'Minha Empresa',
+      sendMode: 'button',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.pixKey).toBe(rawCopiaECola);
+    expect(result.pixKeyType).toBe('COPIA_E_COLA');
+    expect(buttonSpy).toHaveBeenCalledWith(
+      'https://test.uazapi.com',
+      'decrypted-token-abc',
+      expect.objectContaining({
+        pixKey: rawCopiaECola,
+        pixType: 'COPIA_E_COLA',
+      })
+    );
+  });
 });

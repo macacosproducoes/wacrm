@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -58,7 +59,7 @@ export function PixConfigCard() {
 
   const validation = validatePixKey(pixKey, pixKeyType);
 
-  const handleKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleKeyChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const val = e.target.value;
     setPixKey(val);
     // Optional auto-detection of type if user hasn't locked one
@@ -157,9 +158,15 @@ export function PixConfigCard() {
                   <Label className="text-xs font-semibold uppercase text-muted-foreground tracking-wider">
                     Tipo de Chave PIX
                   </Label>
-                  <div className="grid grid-cols-4 gap-1.5">
-                    {(['CPF', 'PHONE', 'EMAIL', 'EVP'] as PixKeyType[]).map((type) => {
+                  <div className="grid grid-cols-5 gap-1.5">
+                    {(['COPIA_E_COLA', 'CPF', 'PHONE', 'EMAIL', 'EVP'] as PixKeyType[]).map((type) => {
                       const active = pixKeyType === type;
+                      const label =
+                        type === 'COPIA_E_COLA'
+                          ? 'Copia e Cola'
+                          : type === 'PHONE'
+                          ? 'Telefone'
+                          : type;
                       return (
                         <button
                           key={type}
@@ -171,7 +178,7 @@ export function PixConfigCard() {
                               : 'bg-muted/40 border-border/70 text-muted-foreground hover:bg-muted'
                           }`}
                         >
-                          {type === 'PHONE' ? 'Telefone' : type}
+                          {label}
                         </button>
                       );
                     })}
@@ -182,7 +189,7 @@ export function PixConfigCard() {
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
                     <Label className="text-xs font-semibold uppercase text-muted-foreground tracking-wider">
-                      Chave PIX ({pixKeyType})
+                      {pixKeyType === 'COPIA_E_COLA' ? 'Código PIX Copia e Cola' : `Chave PIX (${pixKeyType})`}
                     </Label>
                     {pixKey && (
                       <span className="text-[11px]">
@@ -198,21 +205,32 @@ export function PixConfigCard() {
                       </span>
                     )}
                   </div>
-                  <Input
-                    value={pixKey}
-                    onChange={handleKeyChange}
-                    placeholder={
-                      pixKeyType === 'CPF'
-                        ? '000.000.000-00 ou CNPJ'
-                        : pixKeyType === 'PHONE'
-                        ? '+55 11 99999-9999'
-                        : pixKeyType === 'EMAIL'
-                        ? 'pix@minhaempresa.com.br'
-                        : 'UUID chave aleatória (ex: e2a609d5-47fe-...)'
-                    }
-                    className="font-mono text-sm border-border"
-                  />
+                  {pixKeyType === 'COPIA_E_COLA' ? (
+                    <Textarea
+                      value={pixKey}
+                      onChange={handleKeyChange}
+                      placeholder="Cole aqui o código PIX Copia e Cola completo gerado pelo seu banco (000201...)"
+                      rows={3}
+                      className="font-mono text-xs border-border resize-none"
+                    />
+                  ) : (
+                    <Input
+                      value={pixKey}
+                      onChange={handleKeyChange}
+                      placeholder={
+                        pixKeyType === 'CPF'
+                          ? '000.000.000-00 ou CNPJ'
+                          : pixKeyType === 'PHONE'
+                          ? '+55 11 99999-9999'
+                          : pixKeyType === 'EMAIL'
+                          ? 'pix@minhaempresa.com.br'
+                          : 'UUID chave aleatória (ex: e2a609d5-47fe-...)'
+                      }
+                      className="font-mono text-sm border-border"
+                    />
+                  )}
                   <p className="text-[11px] text-muted-foreground">
+                    {pixKeyType === 'COPIA_E_COLA' && 'Código BR Code do Pix Copia e Cola (padrão BACEN 000201...). O cliente poderá pagar com 1 toque no WhatsApp.'}
                     {pixKeyType === 'PHONE' && 'Informe o DDD e o número celular.'}
                     {pixKeyType === 'CPF' && 'Informe os 11 dígitos do CPF ou 14 dígitos do CNPJ.'}
                     {pixKeyType === 'EMAIL' && 'Informe o e-mail completo associado à conta bancária.'}

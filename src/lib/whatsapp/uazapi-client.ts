@@ -426,7 +426,7 @@ export async function sendUazApiMedia(
 export interface UazApiPixButtonOptions {
   number: string;
   pixKey: string;
-  pixType: 'EMAIL' | 'PHONE' | 'CPF' | 'EVP';
+  pixType: 'EMAIL' | 'PHONE' | 'CPF' | 'EVP' | 'COPIA_E_COLA';
   pixName?: string;
   text?: string;
 }
@@ -445,10 +445,14 @@ export async function sendUazApiPixButton(
   const formattedNumber = formatUazApiNumber(opts.number);
   const endpoint = `${normalized}/send/pix-button`;
 
+  // UazAPI validates keyType against: 'CPF', 'CNPJ', 'PHONE', 'EMAIL', 'EVP'.
+  // For 'COPIA_E_COLA', we map to 'EVP' so WhatsApp NativeFlow accepts the payload.
+  const mappedPixType = opts.pixType === 'COPIA_E_COLA' ? 'EVP' : opts.pixType;
+
   const body: Record<string, unknown> = {
     number: formattedNumber,
     pixKey: opts.pixKey.trim(),
-    pixType: opts.pixType,
+    pixType: mappedPixType,
   };
 
   if (opts.pixName && opts.pixName.trim()) {

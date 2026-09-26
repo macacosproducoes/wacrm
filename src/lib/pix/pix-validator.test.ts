@@ -66,7 +66,27 @@ describe('pix-validator', () => {
     });
   });
 
+  describe('COPIA_E_COLA', () => {
+    it('accepts standard BR Code starting with 000201', () => {
+      const brCode = '00020126360014BR.GOV.BCB.PIX0114+5511999999995204000053039865802BR5910EMPRESA6009SAO PAULO62070503***6304ABCD';
+      const res = validatePixKey(brCode, 'COPIA_E_COLA');
+      expect(res.valid).toBe(true);
+      expect(res.formattedKey).toBe(brCode);
+      expect(res.detectedType).toBe('COPIA_E_COLA');
+    });
+
+    it('rejects too short Copia e Cola', () => {
+      const res = validatePixKey('12345', 'COPIA_E_COLA');
+      expect(res.valid).toBe(false);
+      expect(res.error).toContain('Código PIX Copia e Cola inválido');
+    });
+  });
+
   describe('detectPixKeyType', () => {
+    it('detects Copia e Cola', () => {
+      expect(detectPixKeyType('00020126360014BR.GOV.BCB.PIX0114+551199999999520400005303986...')).toBe('COPIA_E_COLA');
+    });
+
     it('detects email', () => {
       expect(detectPixKeyType('pix@empresa.com')).toBe('EMAIL');
     });
