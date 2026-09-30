@@ -9,7 +9,7 @@ import { MessageTemplate } from '@/types';
 import { Step1ChooseTemplate } from '@/components/broadcasts/step1-choose-template';
 import { Step2SelectAudience } from '@/components/broadcasts/step2-select-audience';
 import { Step3Personalize } from '@/components/broadcasts/step3-personalize';
-import { Step4ScheduleSend } from '@/components/broadcasts/step4-schedule-send';
+import { Step4ScheduleSend, DEFAULT_COOLDOWN_SETTINGS, type CooldownSettings } from '@/components/broadcasts/step4-schedule-send';
 import { useBroadcastSending } from '@/hooks/use-broadcast-sending';
 import { Check } from 'lucide-react';
 import { useTranslations } from 'next-intl';
@@ -45,6 +45,7 @@ export default function NewBroadcastPage() {
   >({});
   const [headerMediaUrl, setHeaderMediaUrl] = useState('');
   const [name, setName] = useState('');
+  const [cooldownSettings, setCooldownSettings] = useState<CooldownSettings>(DEFAULT_COOLDOWN_SETTINGS);
 
   async function handleSend() {
     if (!template) return;
@@ -62,6 +63,7 @@ export default function NewBroadcastPage() {
         },
         variables,
         headerMediaUrl,
+        cooldownSettings,
       });
       router.push(`/broadcasts/${broadcastId}`);
     } catch (err) {
@@ -221,7 +223,12 @@ export default function NewBroadcastPage() {
               onNameChange={setName}
               template={template}
               audience={audience}
-              onSend={handleSend}
+              cooldownSettings={cooldownSettings}
+              onCooldownSettingsChange={setCooldownSettings}
+              onSend={(settings) => {
+                if (settings) setCooldownSettings(settings);
+                handleSend();
+              }}
               onSaveDraft={handleSaveDraft}
               onBack={() => setCurrentStep(2)}
               isProcessing={isProcessing}

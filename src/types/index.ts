@@ -449,12 +449,29 @@ export interface Deal {
   assignee?: Profile;
 }
 
-export type BroadcastStatus = 'draft' | 'scheduled' | 'sending' | 'sent' | 'failed';
-export type RecipientStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'replied' | 'failed';
+export type BroadcastStatus =
+  | 'draft'
+  | 'scheduled'
+  | 'sending'
+  | 'paused'
+  | 'sent'
+  | 'failed'
+  | 'cancelled';
+
+export type RecipientStatus =
+  | 'pending'
+  | 'processing'
+  | 'sent'
+  | 'delivered'
+  | 'read'
+  | 'replied'
+  | 'failed'
+  | 'cancelled';
 
 export interface Broadcast {
   id: string;
   user_id: string;
+  account_id?: string;
   name: string;
   template_name: string;
   template_language: string;
@@ -475,6 +492,18 @@ export interface Broadcast {
    */
   delivery_locked_at?: string | null;
   created_at: string;
+  /** Cooldown & Queue controls (migration 051) */
+  cooldown_interval_seconds?: number;
+  batch_size?: number;
+  batch_pause_seconds?: number;
+  daily_limit?: number;
+  window_start_time?: string;
+  window_end_time?: string;
+  timezone?: string;
+  paused_reason?: string | null;
+  next_run_at?: string | null;
+  consecutive_failures?: number;
+  max_consecutive_failures?: number;
 }
 
 export interface BroadcastRecipient {
@@ -507,6 +536,28 @@ export interface BroadcastRecipient {
   template_params?: string[] | null;
   created_at: string;
   contact?: Contact;
+  attempts?: number;
+  last_attempt_at?: string | null;
+}
+
+export interface BroadcastEvent {
+  id: string;
+  broadcast_id: string;
+  account_id?: string;
+  event_type:
+    | 'started'
+    | 'paused'
+    | 'resumed'
+    | 'cancelled'
+    | 'batch_pause'
+    | 'auto_pause_safety'
+    | 'rate_limit'
+    | 'message_sent'
+    | 'message_failed'
+    | string;
+  message: string;
+  details?: Record<string, unknown> | null;
+  created_at: string;
 }
 
 // ============================================================

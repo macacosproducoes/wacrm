@@ -43,7 +43,7 @@ import {
   Plus,
   Upload,
   ListPlus,
-  Tag,
+  Tag as TagIcon,
   MoreHorizontal,
   Pencil,
   Trash2,
@@ -65,8 +65,10 @@ import { ContactForm } from '@/components/contacts/contact-form';
 import { ContactDetailView } from '@/components/contacts/contact-detail-view';
 import { ImportModal } from '@/components/contacts/import-modal';
 import { BulkImportModal } from '@/components/contacts/bulk-import-modal';
+import { RenameTemplateModal } from '@/components/contacts/rename-template-modal';
 import { CustomFieldsManager } from '@/components/contacts/custom-fields-manager';
 import { useCan } from '@/hooks/use-can';
+import { useAuth } from '@/hooks/use-auth';
 import { GatedButton } from '@/components/ui/gated-button';
 import { useTranslations } from 'next-intl';
 
@@ -81,6 +83,7 @@ export default function ContactsPage() {
   const supabase = createClient();
   const canEdit = useCan('send-messages');
   const canEditSettings = useCan('edit-settings');
+  const { accountId } = useAuth();
 
   const [contacts, setContacts] = useState<ContactWithTags[]>([]);
   const [loading, setLoading] = useState(true);
@@ -98,6 +101,7 @@ export default function ContactsPage() {
   const [detailContactId, setDetailContactId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [bulkImportOpen, setBulkImportOpen] = useState(false);
+  const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [isTaggingLeads, setIsTaggingLeads] = useState(false);
   const [customFieldsOpen, setCustomFieldsOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -803,7 +807,7 @@ export default function ContactsPage() {
               {isTaggingLeads ? (
                 <Loader2 className="size-4 animate-spin mr-1" />
               ) : (
-                <Tag className="size-4 mr-1 text-emerald-600 dark:text-emerald-400" />
+                <TagIcon className="size-4 mr-1 text-emerald-600 dark:text-emerald-400" />
               )}
               Marcar como &quot;leads disparo&quot;
             </Button>
@@ -839,7 +843,7 @@ export default function ContactsPage() {
               <TableHead className="text-muted-foreground">{t('tableColumns.phone')}</TableHead>
               <TableHead className="text-muted-foreground hidden md:table-cell">{t('tableColumns.email')}</TableHead>
               <TableHead className="text-muted-foreground hidden lg:table-cell">{t('tableColumns.company')}</TableHead>
-              <TableHead className="text-muted-foreground hidden md:table-cell">{t('tableColumns.tags')}</TableHead>
+              <TableHead className="text-muted-foreground font-semibold">{t('tableColumns.tags')}</TableHead>
               <TableHead className="text-muted-foreground hidden lg:table-cell">{t('tableColumns.createdAt')}</TableHead>
               <TableHead className="text-muted-foreground w-12" />
             </TableRow>

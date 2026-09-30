@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import { Broadcast, BroadcastRecipient, RecipientStatus } from '@/types';
+import { Broadcast, BroadcastRecipient, BroadcastEvent, RecipientStatus } from '@/types';
 import { Button } from '@/components/ui/button';
 import {
   Table,
@@ -20,6 +20,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
   ArrowLeft,
   Loader2,
   Users,
@@ -32,8 +40,19 @@ import {
   Download,
   ChevronDown,
   Trash2,
-  PlayCircle,
   RotateCcw,
+  Play,
+  Pause,
+  XCircle,
+  AlertTriangle,
+  Clock,
+  Layers,
+  ShieldCheck,
+  ShieldAlert,
+  Activity,
+  History,
+  CheckCircle2,
+  RefreshCw,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -53,7 +72,7 @@ interface StatCardProps {
 function StatCard({ label, value, total, icon, color }: StatCardProps) {
   const pct = total > 0 ? Math.round((value / total) * 100) : 0;
   return (
-    <div className="rounded-xl border border-border bg-card p-4">
+    <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
       <div className="flex items-center justify-between">
         <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${color}`}>
           {icon}
@@ -72,16 +91,11 @@ interface FunnelStep {
   color: string;
 }
 
-/**
- * Pure-CSS funnel chart: decreasing-width rounded bars.
- * Width is relative to the largest step (typically Sent) so we
- * always render a full bar at the top and proportional tails.
- */
 function FunnelChart({ steps }: { steps: FunnelStep[] }) {
   const max = Math.max(...steps.map((s) => s.value), 1);
   return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <h3 className="mb-4 text-sm font-medium text-foreground">Funnel</h3>
+    <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
+      <h3 className="mb-4 text-sm font-medium text-foreground">Funil de Conversão</h3>
       <div className="space-y-2">
         {steps.map((step) => {
           const pctOfMax = Math.max(5, Math.round((step.value / max) * 100));
@@ -116,17 +130,15 @@ function FunnelChart({ steps }: { steps: FunnelStep[] }) {
 
 const RECIPIENT_STATUSES: readonly RecipientStatus[] = [
   'pending',
+  'processing',
   'sent',
   'delivered',
   'read',
   'replied',
   'failed',
+  'cancelled',
 ];
 
-/**
- * CSV export helper — RFC 4180 quoting. Quote every field so
- * commas/newlines/quotes round-trip cleanly.
- */
 function toCsv(rows: string[][]): string {
   const escape = (v: string) => `"${v.replace(/"/g, '""')}"`;
   return rows.map((r) => r.map(escape).join(',')).join('\n');
@@ -153,18 +165,23 @@ export default function BroadcastDetailPage() {
 
   const [broadcast, setBroadcast] = useState<Broadcast | null>(null);
   const [recipients, setRecipients] = useState<BroadcastRecipient[]>([]);
+  const [events, setEvents] = useState<BroadcastEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<RecipientStatus | 'all'>(
-    'all',
-  );
+  const [statusFilter, setStatusFilter] = useState<RecipientStatus | 'all'>('all');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [resumingScope, setResumingScope] = useState<
-    'pending' | 'failed' | null
-  >(null);
+  const [resumingScope, setResumingScope] = useState<'pending' | 'failed' | null>(null);
 
-  const fetchData = useCallback(async () => {
+  // Control actions dialog states
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [confirmPauseDialog, setConfirmPauseDialog] = useState(false);
+  const [confirmResumeDialog, setConfirmResumeDialog] = useState(false);
+  const [confirmCancelDialog, setConfirmCancelDialog] = useState(false);
+  const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null);
+  const [countdownLabel, setCountdownLabel] = useState<string>('');
+
+  const fetchData = useCallback(async (silent = false) => {
     try {
       const supabase = createClient();
 
@@ -185,10 +202,22 @@ export default function BroadcastDetailPage() {
 
       if (recsError) throw recsError;
       setRecipients(recs ?? []);
+
+      // Fetch recent timeline events
+      const { data: evts } = await supabase
+        .from('broadcast_events')
+        .select('*')
+        .eq('broadcast_id', broadcastId)
+        .order('created_at', { ascending: false })
+        .limit(25);
+
+      setEvents(evts ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('notFound'));
+      if (!silent) {
+        setError(err instanceof Error ? err.message : t('notFound'));
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [broadcastId, t]);
 
@@ -196,6 +225,102 @@ export default function BroadcastDetailPage() {
     fetchData();
   }, [fetchData]);
 
+  // Live countdown timer calculation
+  useEffect(() => {
+    if (!broadcast) return;
+
+    const interval = setInterval(() => {
+      if (broadcast.status === 'paused') {
+        setCountdownSeconds(null);
+        setCountdownLabel('Campanha pausada');
+        return;
+      }
+
+      if (broadcast.status !== 'sending') {
+        setCountdownSeconds(null);
+        setCountdownLabel('');
+        return;
+      }
+
+      // Check batch pause (next_run_at)
+      if (broadcast.next_run_at) {
+        const target = new Date(broadcast.next_run_at).getTime();
+        const diffMs = target - Date.now();
+        if (diffMs > 0) {
+          const secs = Math.ceil(diffMs / 1000);
+          setCountdownSeconds(secs);
+          setCountdownLabel(`Pausa do lote: retomando em ${secs}s`);
+          return;
+        }
+      }
+
+      // Live queue sending tick
+      const cooldownSec = broadcast.cooldown_interval_seconds ?? 5;
+      setCountdownLabel(`Fila ativa: envio a cada ${cooldownSec}s`);
+      setCountdownSeconds(null);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [broadcast]);
+
+  // Autonomous background heartbeat & polling while sending
+  useEffect(() => {
+    if (!broadcast || broadcast.status !== 'sending') return;
+
+    const pollTimer = setInterval(async () => {
+      await fetchData(true);
+      // Heartbeat queue tick trigger
+      try {
+        await fetch(`/api/whatsapp/broadcast/${broadcastId}/tick`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ maxMessages: 5 }),
+        });
+      } catch {
+        // Ignored
+      }
+    }, 4000);
+
+    return () => clearInterval(pollTimer);
+  }, [broadcast, broadcastId, fetchData]);
+
+  // Control Actions handler
+  async function handleControlAction(action: 'start' | 'pause' | 'resume' | 'cancel', reason?: string) {
+    setActionLoading(action);
+    try {
+      const res = await fetch(`/api/whatsapp/broadcast/${broadcastId}/control`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, reason }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Falha ao executar ação de controle.');
+      }
+
+      toast.success(
+        action === 'pause'
+          ? 'Campanha pausada com sucesso.'
+          : action === 'resume'
+            ? 'Campanha retomada com sucesso.'
+            : action === 'cancel'
+              ? 'Campanha cancelada.'
+              : 'Campanha iniciada com sucesso.'
+      );
+
+      await fetchData(true);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Erro ao controlar envio';
+      toast.error(msg);
+    } finally {
+      setActionLoading(null);
+      setConfirmPauseDialog(false);
+      setConfirmResumeDialog(false);
+      setConfirmCancelDialog(false);
+    }
+  }
+
+  // Filtered recipients
   const filteredRecipients = useMemo(
     () =>
       statusFilter === 'all'
@@ -204,12 +329,43 @@ export default function BroadcastDetailPage() {
     [recipients, statusFilter],
   );
 
+  const pendingCount = useMemo(
+    () => recipients.filter((r) => r.status === 'pending' || r.status === 'processing').length,
+    [recipients]
+  );
+
+  const retryableCount = useMemo(
+    () => recipients.filter((r) => r.status === 'failed').length,
+    [recipients]
+  );
+
+  // Remaining ETA Calculation
+  const remainingEtaText = useMemo(() => {
+    if (!broadcast || pendingCount <= 0) return 'Concluído';
+    const cooldown = Math.max(1, broadcast.cooldown_interval_seconds ?? 5);
+    const batchSize = Math.max(1, broadcast.batch_size ?? 20);
+    const batchPause = Math.max(1, broadcast.batch_pause_seconds ?? 60);
+
+    const remainingBatches = Math.ceil(pendingCount / batchSize);
+    const remainingPauses = Math.max(0, remainingBatches - 1);
+    const totalSec = pendingCount * cooldown + remainingPauses * batchPause;
+
+    if (totalSec < 60) return `~${totalSec}s restantes`;
+    const mins = Math.floor(totalSec / 60);
+    const secs = totalSec % 60;
+    if (mins < 60) return secs > 0 ? `~${mins}m ${secs}s restantes` : `~${mins}m restantes`;
+    const hrs = Math.floor(mins / 60);
+    const rm = mins % 60;
+    return `~${hrs}h ${rm}m restantes`;
+  }, [broadcast, pendingCount]);
+
   function handleExport() {
     if (!broadcast) return;
     const header = [
       t('table.contact'),
       t('table.phone'),
       t('table.status'),
+      'Tentativas',
       t('table.sent'),
       t('table.delivered'),
       t('table.read'),
@@ -219,6 +375,7 @@ export default function BroadcastDetailPage() {
       r.contact?.name ?? '',
       r.contact?.phone ?? '',
       r.status,
+      String(r.attempts ?? 0),
       r.sent_at ?? '',
       r.delivered_at ?? '',
       r.read_at ?? '',
@@ -229,15 +386,7 @@ export default function BroadcastDetailPage() {
     downloadBlob(`broadcast-${safeName}-${broadcastId.slice(0, 8)}.csv`, csv);
   }
 
-  /**
-   * Hand the leftovers to the server (issue #472).
-   *
-   * The wizard's send loop lives in the tab that started the campaign,
-   * so navigating away strands the rest as 'pending' with the broadcast
-   * stuck 'sending'. This is the recovery, and the same call retries
-   * failed recipients.
-   */
-  async function handleResume(scope: 'pending' | 'failed') {
+  async function handleResumeLegacy(scope: 'pending' | 'failed') {
     setResumingScope(scope);
     try {
       const res = await fetch(`/api/whatsapp/broadcast/${broadcastId}/resume`, {
@@ -245,34 +394,12 @@ export default function BroadcastDetailPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scope }),
       });
-      const payload = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        toast.error(
-          t('toastResumeFailed', {
-            error: payload?.error || `HTTP ${res.status}`,
-          }),
-        );
-        return;
-      }
-
-      toast.success(
-        payload.remaining > 0
-          ? t('toastResumeStartedCapped', {
-              count: payload.resuming,
-              remaining: payload.remaining,
-            })
-          : t('toastResumeStarted', { count: payload.resuming }),
-      );
-      // Delivery runs server-side after the 202, so the counts here are
-      // a snapshot — reload to pick up the first of it.
-      await fetchData();
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Falha ao reprocessar.');
+      toast.success('Reprocessamento iniciado.');
+      await fetchData(true);
     } catch (err) {
-      toast.error(
-        t('toastResumeFailed', {
-          error: err instanceof Error ? err.message : 'Unknown error',
-        }),
-      );
+      toast.error(err instanceof Error ? err.message : 'Erro ao reprocessar');
     } finally {
       setResumingScope(null);
     }
@@ -280,183 +407,332 @@ export default function BroadcastDetailPage() {
 
   async function handleDelete() {
     setDeleting(true);
-    const supabase = createClient();
-    // broadcast_recipients cascades on broadcasts.id (migration 001), so a
-    // single delete is sufficient — the aggregate trigger in migration 003
-    // is defined on broadcast_recipients but fires only on its own row
-    // changes, not on a cascaded drop of the parent row.
-    const { error: delErr } = await supabase
-      .from('broadcasts')
-      .delete()
-      .eq('id', broadcastId);
-    setDeleting(false);
-    if (delErr) {
-      toast.error(t('toastFailedDelete', { error: delErr.message }));
-      return;
+    try {
+      const supabase = createClient();
+      const { error: delError } = await supabase
+        .from('broadcasts')
+        .delete()
+        .eq('id', broadcastId);
+
+      if (delError) throw delError;
+      toast.success(t('deleteSuccess'));
+      router.push('/broadcasts');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('deleteFailed'));
+      setDeleting(false);
+      setConfirmDelete(false);
     }
-    toast.success(t('toastDeleted'));
-    router.push('/broadcasts');
   }
 
   if (loading) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+      <div className="flex h-96 items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </div>
     );
   }
 
   if (error || !broadcast) {
     return (
-      <div className="flex h-64 flex-col items-center justify-center gap-2">
-        <p className="text-sm text-red-400">{error ?? t('notFound')}</p>
+      <div className="flex h-96 flex-col items-center justify-center gap-4">
+        <p className="text-muted-foreground">{error ?? t('notFound')}</p>
         <Button variant="outline" onClick={() => router.push('/broadcasts')}>
-          {t('backToBroadcasts')}
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          {t('back')}
         </Button>
       </div>
     );
   }
 
-  const status = getBroadcastStatus(broadcast.status);
-
-  const pendingCount = recipients.filter((r) => r.status === 'pending').length;
-  const retryableCount = recipients.filter((r) => r.status === 'failed').length;
-  // A campaign whose tab went away sits in 'sending' with recipients
-  // still pending and nothing left to move them. Name that state rather
-  // than leaving a permanently pulsing "sending" badge.
-  const isStalled = broadcast.status === 'sending' && pendingCount > 0;
+  const bStatus = getBroadcastStatus(broadcast.status);
+  const total = broadcast.total_recipients || recipients.length || 1;
+  const processed = broadcast.sent_count + broadcast.failed_count;
+  const progressPct = Math.min(100, Math.round((processed / total) * 100));
 
   const funnelSteps: FunnelStep[] = [
-    { label: t('stats.sent'), value: broadcast.sent_count, color: 'bg-primary' },
-    { label: t('stats.delivered'), value: broadcast.delivered_count, color: 'bg-teal-500' },
-    { label: t('stats.read'), value: broadcast.read_count, color: 'bg-blue-500' },
-    { label: t('stats.replied'), value: broadcast.replied_count, color: 'bg-indigo-500' },
+    { label: t('funnel.sent'), value: broadcast.sent_count, color: 'bg-primary' },
+    { label: t('funnel.delivered'), value: broadcast.delivered_count, color: 'bg-teal-500' },
+    { label: t('funnel.read'), value: broadcast.read_count, color: 'bg-blue-500' },
+    { label: t('funnel.replied'), value: broadcast.replied_count, color: 'bg-indigo-500' },
   ];
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex items-center gap-4">
+      {/* Header Bar */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
           <Button
-            variant="outline"
+            variant="ghost"
             size="icon"
             onClick={() => router.push('/broadcasts')}
-            className="border-border"
+            className="h-9 w-9 text-muted-foreground hover:bg-muted"
           >
-            <ArrowLeft className="h-4 w-4" />
+            <ArrowLeft className="h-5 w-5" />
           </Button>
           <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold text-foreground">{broadcast.name}</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-bold text-foreground">{broadcast.name}</h1>
               <span
-                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${status.classes}`}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium ${bStatus.classes}`}
               >
-                {tStatus(status.label)}
+                {bStatus.pulse && (
+                  <span className="relative flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-yellow-400 opacity-75" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-yellow-500" />
+                  </span>
+                )}
+                {broadcast.status === 'paused' && '⏸️ Pausada'}
+                {broadcast.status === 'sending' && '🟢 Enviando (Fila Ativa)'}
+                {broadcast.status === 'sent' && '✅ Concluída'}
+                {broadcast.status === 'cancelled' && '⏹️ Cancelada'}
+                {broadcast.status === 'failed' && '❌ Falhou'}
+                {broadcast.status === 'draft' && '📝 Rascunho'}
+                {broadcast.status === 'scheduled' && '📅 Agendada'}
               </span>
             </div>
-            <div className="mt-1 flex items-center gap-3 text-sm text-muted-foreground">
-              <span>{t('template', { name: broadcast.template_name })}</span>
-              <span>-</span>
-              <span>
-                {t('createdAt', { date: new Date(broadcast.created_at).toLocaleDateString() })}
-              </span>
-            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Template: <span className="font-medium text-foreground">{broadcast.template_name}</span> • Criado em{' '}
+              {new Date(broadcast.created_at).toLocaleString('pt-BR')}
+            </p>
           </div>
         </div>
 
-        {/* Delete — inline-confirm pattern matches the pipeline-settings
-            "Delete Pipeline" flow. Mid-send broadcasts can't be deleted
-            because orphaning in-flight Meta messages would leave the
-            funnel inconsistent. */}
-        {confirmDelete ? (
-          <div className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-sm">
-            <span className="text-red-300">{t('deletePrompt')}</span>
+        {/* Action Control Buttons */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Iniciar (if draft or scheduled) */}
+          {(broadcast.status === 'draft' || broadcast.status === 'scheduled') && (
+            <Button
+              size="sm"
+              onClick={() => handleControlAction('start')}
+              disabled={actionLoading !== null}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              {actionLoading === 'start' ? (
+                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4 mr-1.5 fill-current" />
+              )}
+              Iniciar Fila
+            </Button>
+          )}
+
+          {/* Pausar (if sending) */}
+          {broadcast.status === 'sending' && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setConfirmPauseDialog(true)}
+              disabled={actionLoading !== null}
+              className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
+            >
+              {actionLoading === 'pause' ? (
+                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+              ) : (
+                <Pause className="h-4 w-4 mr-1.5 fill-current" />
+              )}
+              Pausar
+            </Button>
+          )}
+
+          {/* Retomar (if paused) */}
+          {broadcast.status === 'paused' && (
+            <Button
+              size="sm"
+              onClick={() => setConfirmResumeDialog(true)}
+              disabled={actionLoading !== null}
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              {actionLoading === 'resume' ? (
+                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4 mr-1.5 fill-current" />
+              )}
+              Retomar Disparo
+            </Button>
+          )}
+
+          {/* Cancelar (if sending or paused) */}
+          {(broadcast.status === 'sending' || broadcast.status === 'paused') && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setConfirmCancelDialog(true)}
+              disabled={actionLoading !== null}
+              className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+            >
+              <XCircle className="h-4 w-4 mr-1.5" />
+              Cancelar
+            </Button>
+          )}
+
+          {/* Reenviar falhas */}
+          {retryableCount > 0 && broadcast.status !== 'sending' && (
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setConfirmDelete(false)}
-              disabled={deleting}
-              className="h-7 border-border bg-transparent text-muted-foreground hover:bg-muted"
+              onClick={() => handleResumeLegacy('failed')}
+              disabled={resumingScope !== null}
+              className="border-border text-muted-foreground hover:bg-muted"
             >
-              {t('cancel')}
+              {resumingScope === 'failed' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+              ) : (
+                <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+              )}
+              Reenviar Falhas ({retryableCount})
             </Button>
+          )}
+
+          {/* Delete Dialog */}
+          <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
             <Button
-              size="sm"
-              onClick={handleDelete}
-              disabled={deleting}
-              className="h-7 bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+              variant="outline"
+              size="icon"
+              onClick={() => setConfirmDelete(true)}
+              className="border-border text-muted-foreground hover:bg-muted hover:text-red-400"
             >
-              {deleting ? t('deleting') : t('confirm')}
+              <Trash2 className="h-4 w-4" />
             </Button>
-          </div>
-        ) : (
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={broadcast.status === 'sending'}
-            onClick={() => setConfirmDelete(true)}
-            title={
-              broadcast.status === 'sending'
-                ? t('cannotDeleteSending')
-                : t('deleteHover')
-            }
-            className="border-red-500/30 bg-transparent text-red-400 hover:bg-red-500/10 disabled:opacity-40"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            {t('delete')}
-          </Button>
-        )}
+            <DialogContent className="border-border bg-popover sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle className="text-popover-foreground">{t('deleteConfirmTitle')}</DialogTitle>
+                <DialogDescription className="text-muted-foreground">
+                  {t('deleteConfirmDescription')}
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setConfirmDelete(false)}
+                  className="border-border text-muted-foreground"
+                >
+                  {t('cancel')}
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={handleDelete}
+                  disabled={deleting}
+                >
+                  {deleting ? (
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  ) : null}
+                  {t('delete')}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
-      {/* Resume / retry (issue #472). Only rendered when there is
-          actually something outstanding. */}
-      {(pendingCount > 0 || retryableCount > 0) && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
-          <div className="text-sm">
-            <p className="font-medium text-foreground">
-              {isStalled ? t('resumeStalledTitle') : t('resumeTitle')}
-            </p>
-            <p className="mt-0.5 text-muted-foreground">
-              {isStalled
-                ? t('resumeStalledHint', { count: pendingCount })
-                : t('resumeHint', { count: retryableCount })}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {pendingCount > 0 && (
-              <Button
-                size="sm"
-                onClick={() => handleResume('pending')}
-                disabled={resumingScope !== null}
-              >
-                {resumingScope === 'pending' ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <PlayCircle className="h-3.5 w-3.5" />
-                )}
-                {t('resumePending', { count: pendingCount })}
-              </Button>
-            )}
-            {retryableCount > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleResume('failed')}
-                disabled={resumingScope !== null}
-                className="border-border text-muted-foreground hover:bg-muted"
-              >
-                {resumingScope === 'failed' ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <RotateCcw className="h-3.5 w-3.5" />
-                )}
-                {t('retryFailed', { count: retryableCount })}
-              </Button>
-            )}
+      {/* Safety Pause Banner (Shown when Paused) */}
+      {broadcast.status === 'paused' && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 shadow-sm space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/20 text-amber-400">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-foreground">Campanha Pausada por Segurança</h3>
+                <p className="text-xs text-amber-200/90 mt-1">
+                  <strong>Motivo:</strong> {broadcast.paused_reason || 'Pausado manualmente pelo administrador.'}
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  O sistema de fila de segurança interrompeu os disparos para prevenir sanções ou bloqueios adicionais. Verifique a qualidade do template e a conexão do WhatsApp antes de retomar.
+                </p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => setConfirmResumeDialog(true)}
+              className="bg-primary text-primary-foreground hover:bg-primary/90 shrink-0"
+            >
+              <Play className="h-3.5 w-3.5 mr-1.5 fill-current" />
+              Retomar Envio
+            </Button>
           </div>
         </div>
       )}
+
+      {/* Queue & Cooldown Dashboard Card */}
+      <div className="rounded-xl border border-border bg-card p-5 space-y-4 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-3">
+          <div>
+            <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+              <Activity className="h-4 w-4 text-primary" />
+              Painel de Controle da Fila & Cooldown
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              Monitoramento em tempo real do processamento sequencial e limites
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 text-xs">
+            {broadcast.status === 'sending' && (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-emerald-400 font-medium">
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                </span>
+                {countdownLabel || 'Fila em Execução'}
+              </span>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => fetchData(false)}
+              className="h-8 border-border text-muted-foreground hover:bg-muted"
+            >
+              <RefreshCw className="h-3.5 w-3.5 mr-1" />
+              Atualizar
+            </Button>
+          </div>
+        </div>
+
+        {/* Progress Bar & Countdown Banner */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-medium text-foreground">
+              Progresso Geral: <span className="text-primary">{progressPct}%</span> ({processed} de {total} contatos)
+            </span>
+            <span className="text-muted-foreground">
+              {pendingCount > 0 ? (
+                <>Tempo Estimado: <strong className="text-foreground">{remainingEtaText}</strong></>
+              ) : (
+                <span className="text-emerald-400 font-medium flex items-center gap-1">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> Fila Concluída
+                </span>
+              )}
+            </span>
+          </div>
+          <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-full rounded-full bg-primary transition-all duration-500"
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Parameters Chips */}
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground pt-1">
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-1 text-foreground">
+            <Clock className="h-3.5 w-3.5 text-primary" />
+            Cooldown: <strong>{broadcast.cooldown_interval_seconds ?? 5}s</strong>
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-1 text-foreground">
+            <Layers className="h-3.5 w-3.5 text-primary" />
+            Lote: <strong>{broadcast.batch_size ?? 20} msgs</strong> (Pausa de {broadcast.batch_pause_seconds ?? 60}s)
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-1 text-foreground">
+            <ShieldCheck className="h-3.5 w-3.5 text-primary" />
+            Limite Diário: <strong>{broadcast.daily_limit ?? 1000}</strong>
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-1 text-foreground">
+            <ShieldAlert className="h-3.5 w-3.5 text-primary" />
+            Janela: <strong>{broadcast.window_start_time ?? '08:00'} - {broadcast.window_end_time ?? '20:00'}</strong> ({broadcast.timezone ?? 'America/Sao_Paulo'})
+          </span>
+        </div>
+      </div>
 
       {/* Stats — 6 cards: Total / Sent / Delivered / Read / Replied / Failed */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -506,8 +782,61 @@ export default function BroadcastDetailPage() {
 
       <FunnelChart steps={funnelSteps} />
 
+      {/* Timeline de Eventos & Histórico de Erros */}
+      <div className="rounded-xl border border-border bg-card p-4 shadow-sm space-y-3">
+        <div className="flex items-center justify-between border-b border-border pb-2.5">
+          <div className="flex items-center gap-2">
+            <History className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-semibold text-foreground">Histórico de Eventos & Erros</h2>
+          </div>
+          <span className="text-xs text-muted-foreground">{events.length} eventos registrados</span>
+        </div>
+
+        {events.length === 0 ? (
+          <p className="text-xs text-muted-foreground py-3 text-center">Nenhum evento registrado ainda.</p>
+        ) : (
+          <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
+            {events.map((ev) => (
+              <div
+                key={ev.id}
+                className="flex items-start justify-between gap-3 rounded-lg border border-border/60 bg-muted/20 p-2.5 text-xs"
+              >
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                        ev.event_type === 'auto_pause_safety'
+                          ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                          : ev.event_type === 'paused'
+                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                            : ev.event_type === 'batch_pause'
+                              ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                              : ev.event_type === 'resumed'
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                : 'bg-muted text-muted-foreground'
+                      }`}
+                    >
+                      {ev.event_type}
+                    </span>
+                    <span className="text-foreground font-medium">{ev.message}</span>
+                  </div>
+                  {ev.details && Object.keys(ev.details).length > 0 && (
+                    <p className="text-[11px] text-muted-foreground truncate max-w-xl">
+                      {JSON.stringify(ev.details)}
+                    </p>
+                  )}
+                </div>
+                <span className="text-[10px] text-muted-foreground shrink-0">
+                  {new Date(ev.created_at).toLocaleTimeString('pt-BR')}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Recipients Table */}
-      <div className="rounded-xl border border-border bg-card">
+      <div className="rounded-xl border border-border bg-card shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
           <h2 className="text-sm font-medium text-foreground">
             {statusFilter !== 'all'
@@ -525,18 +854,16 @@ export default function BroadcastDetailPage() {
                   />
                 }
               >
-                <Filter className="h-3.5 w-3.5" />
+                <Filter className="h-3.5 w-3.5 mr-1.5" />
                 {statusFilter === 'all'
                   ? t('allStatuses')
                   : tStatus(getRecipientStatus(statusFilter).label)}
-                <ChevronDown className="h-3 w-3" />
+                <ChevronDown className="h-3 w-3 ml-1.5" />
               </DropdownMenuTrigger>
               <DropdownMenuContent className="border-border bg-popover">
                 <DropdownMenuItem
                   onClick={() => setStatusFilter('all')}
-                  className={
-                    statusFilter === 'all' ? 'text-primary' : 'text-popover-foreground'
-                  }
+                  className={statusFilter === 'all' ? 'text-primary' : 'text-popover-foreground'}
                 >
                   {t('allStatuses')}
                 </DropdownMenuItem>
@@ -544,11 +871,7 @@ export default function BroadcastDetailPage() {
                   <DropdownMenuItem
                     key={s}
                     onClick={() => setStatusFilter(s)}
-                    className={
-                      statusFilter === s
-                        ? 'text-primary'
-                        : 'text-popover-foreground'
-                    }
+                    className={statusFilter === s ? 'text-primary' : 'text-popover-foreground'}
                   >
                     {tStatus(getRecipientStatus(s).label)}
                   </DropdownMenuItem>
@@ -563,7 +886,7 @@ export default function BroadcastDetailPage() {
               disabled={recipients.length === 0}
               className="border-border text-muted-foreground hover:bg-muted"
             >
-              <Download className="h-3.5 w-3.5" />
+              <Download className="h-3.5 w-3.5 mr-1.5" />
               {t('exportCsv')}
             </Button>
           </div>
@@ -572,9 +895,7 @@ export default function BroadcastDetailPage() {
         {filteredRecipients.length === 0 ? (
           <div className="flex h-32 items-center justify-center">
             <p className="text-sm text-muted-foreground">
-              {recipients.length === 0
-                ? t('noRecipients')
-                : t('noRecipientsFilter')}
+              {recipients.length === 0 ? t('noRecipients') : t('noRecipientsFilter')}
             </p>
           </div>
         ) : (
@@ -585,6 +906,7 @@ export default function BroadcastDetailPage() {
                   <TableHead className="text-muted-foreground">{t('table.contact')}</TableHead>
                   <TableHead className="text-muted-foreground">{t('table.phone')}</TableHead>
                   <TableHead className="text-muted-foreground">{t('table.status')}</TableHead>
+                  <TableHead className="text-muted-foreground">Tentativas</TableHead>
                   <TableHead className="text-muted-foreground">{t('table.sent')}</TableHead>
                   <TableHead className="text-muted-foreground">{t('table.delivered')}</TableHead>
                   <TableHead className="text-muted-foreground">{t('table.read')}</TableHead>
@@ -597,7 +919,7 @@ export default function BroadcastDetailPage() {
                   return (
                     <TableRow key={recipient.id} className="border-border">
                       <TableCell className="font-medium text-foreground">
-                        {recipient.contact?.name ?? 'Unknown'}
+                        {recipient.contact?.name ?? 'Desconhecido'}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {recipient.contact?.phone ?? '-'}
@@ -610,18 +932,21 @@ export default function BroadcastDetailPage() {
                         </span>
                       </TableCell>
                       <TableCell className="text-muted-foreground">
+                        {recipient.attempts ?? 0}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
                         {recipient.sent_at
-                          ? new Date(recipient.sent_at).toLocaleString()
+                          ? new Date(recipient.sent_at).toLocaleTimeString('pt-BR')
                           : '-'}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {recipient.delivered_at
-                          ? new Date(recipient.delivered_at).toLocaleString()
+                          ? new Date(recipient.delivered_at).toLocaleTimeString('pt-BR')
                           : '-'}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {recipient.read_at
-                          ? new Date(recipient.read_at).toLocaleString()
+                          ? new Date(recipient.read_at).toLocaleTimeString('pt-BR')
                           : '-'}
                       </TableCell>
                       <TableCell className="max-w-xs truncate text-xs text-red-400">
@@ -635,6 +960,94 @@ export default function BroadcastDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Confirmation Dialog: Pausar */}
+      <Dialog open={confirmPauseDialog} onOpenChange={setConfirmPauseDialog}>
+        <DialogContent className="border-border bg-popover sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-popover-foreground">Pausar Campanha</DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              Deseja realmente pausar a fila de envios? O processamento será imediatamente interrompido e nenhuma nova mensagem será enviada até que você clique em Retomar.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setConfirmPauseDialog(false)}
+              className="border-border text-muted-foreground"
+            >
+              Voltar
+            </Button>
+            <Button
+              onClick={() => handleControlAction('pause', 'Pausado manualmente pelo administrador')}
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+            >
+              Confirmar Pausa
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirmation Dialog: Retomar (Exigência do administrador) */}
+      <Dialog open={confirmResumeDialog} onOpenChange={setConfirmResumeDialog}>
+        <DialogContent className="border-border bg-popover sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-popover-foreground">Retomar Disparo da Fila</DialogTitle>
+            <DialogDescription className="text-muted-foreground space-y-2 pt-1">
+              <p>
+                Confirma a retomada dos envios para os <strong>{pendingCount}</strong> contatos restantes na fila?
+              </p>
+              <div className="rounded-lg border border-border bg-muted/40 p-2.5 text-xs text-foreground">
+                <p>✓ Cooldown de {broadcast.cooldown_interval_seconds ?? 5}s aplicado entre mensagens</p>
+                <p>✓ Pausa de lote de {broadcast.batch_pause_seconds ?? 60}s a cada {broadcast.batch_size ?? 20} envios</p>
+                <p>✓ Bloqueios de spam e limite de taxa monitorados em tempo real</p>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setConfirmResumeDialog(false)}
+              className="border-border text-muted-foreground"
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => handleControlAction('resume')}
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              Confirmar e Retomar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirmation Dialog: Cancelar */}
+      <Dialog open={confirmCancelDialog} onOpenChange={setConfirmCancelDialog}>
+        <DialogContent className="border-border bg-popover sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-popover-foreground">Cancelar Campanha Definitivamente</DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              Esta ação cancelará todos os <strong>{pendingCount}</strong> contatos pendentes restantes na fila. Esta operação não poderá ser desfeita.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setConfirmCancelDialog(false)}
+              className="border-border text-muted-foreground"
+            >
+              Voltar
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => handleControlAction('cancel', 'Cancelado pelo administrador')}
+            >
+              Confirmar Cancelamento
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
