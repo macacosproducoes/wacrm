@@ -123,14 +123,25 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
   useEffect(() => {
     async function fetchTemplates() {
       try {
+        const res = await fetch('/api/whatsapp/templates');
+        if (res.ok) {
+          const json = await res.json();
+          if (Array.isArray(json.templates) && json.templates.length > 0) {
+            setTemplates(json.templates);
+            if (!selectedTemplate) {
+              onSelect(json.templates[0]);
+            }
+            return;
+          }
+        }
+        // Fallback to supabase direct
         const supabase = createClient();
-        const { data, error: fetchError } = await supabase
+        const { data } = await supabase
           .from('message_templates')
           .select('*')
           .in('status', ['APPROVED', 'DRAFT'])
           .order('created_at', { ascending: false });
 
-        if (fetchError) throw fetchError;
         const loaded = data && data.length > 0 ? (data as MessageTemplate[]) : DEFAULT_BROADCAST_TEMPLATES;
         setTemplates(loaded);
         if (!selectedTemplate && loaded.length > 0) {
@@ -202,59 +213,39 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
 
     setSavingTemplate(true);
     try {
-      const supabase = createClient();
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const user = session?.user;
-
-      const templatePayload: Partial<MessageTemplate> = {
-        name: editName.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_'),
+      const templatePayload = {
+        id: editingTemplate?.id,
+        name: editName.trim(),
         category: editCategory,
         language: 'pt_BR',
         body_text: mainBody,
         variations: cleanedVariations,
-        header_type: editHeader.trim() ? ('text' as const) : undefined,
         header_content: editHeader.trim() || undefined,
         footer_text: editFooter.trim() || undefined,
-        status: 'APPROVED',
       };
 
-      let savedTemplate: MessageTemplate;
+      const res = await fetch('/api/whatsapp/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(templatePayload),
+      });
 
-      if (editingTemplate && !editingTemplate.id.startsWith('default-')) {
-        const { data, error } = await supabase
-          .from('message_templates')
-          .update(templatePayload)
-          .eq('id', editingTemplate.id)
-          .select()
-          .single();
-
-        if (error) throw error;
-        savedTemplate = data as MessageTemplate;
-        setTemplates((prev) => prev.map((t) => (t.id === savedTemplate.id ? savedTemplate : t)));
-      } else {
-        const { data, error } = await supabase
-          .from('message_templates')
-          .insert({
-            ...templatePayload,
-            user_id: user?.id,
-          })
-          .select()
-          .single();
-
-        if (error) {
-          // If insert fails due to constraint or mock ID, create a local working template
-          savedTemplate = {
-            id: 'tpl-' + Date.now(),
-            created_at: new Date().toISOString(),
-            ...templatePayload,
-          } as MessageTemplate;
-        } else {
-          savedTemplate = data as MessageTemplate;
-        }
-        setTemplates((prev) => [savedTemplate, ...prev.filter((p) => p.id !== editingTemplate?.id)]);
+      const resData = await res.json().catch(() => ({}));
+      if (!res.ok || !resData.success) {
+        throw new Error(resData.error || 'Falha ao salvar template no servidor.');
       }
+
+      const savedTemplate = resData.template as MessageTemplate;
+
+      setTemplates((prev) => {
+        const exists = prev.some((t) => t.id === savedTemplate.id || t.name === savedTemplate.name);
+        if (exists) {
+          return prev.map((t) =>
+            t.id === savedTemplate.id || t.name === savedTemplate.name ? savedTemplate : t
+          );
+        }
+        return [savedTemplate, ...prev];
+      });
 
       onSelect(savedTemplate);
       toast.success(
@@ -265,7 +256,8 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
       setEditorOpen(false);
     } catch (err) {
       console.error('Error saving template:', err);
-      toast.error('Erro ao salvar template.');
+      const msg = err instanceof Error ? err.message : 'Erro ao salvar template.';
+      toast.error(msg);
     } finally {
       setSavingTemplate(false);
     }
