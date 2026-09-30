@@ -111,6 +111,23 @@ export function Step4ScheduleSend({
     }
   }
 
+    const [tagNames, setTagNames] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (audience.type === 'tags' && audience.tagIds && audience.tagIds.length > 0) {
+      const supabase = createClient();
+      supabase
+        .from('tags')
+        .select('name')
+        .in('id', audience.tagIds)
+        .then(({ data }) => {
+          if (data) setTagNames(data.map((t) => t.name));
+        });
+    } else {
+      setTagNames([]);
+    }
+  }, [audience.type, audience.tagIds]);
+
   useEffect(() => {
     async function calculateReach() {
       setLoadingReach(true);
@@ -214,7 +231,24 @@ export function Step4ScheduleSend({
           </div>
           <div>
             <p className="text-xs text-muted-foreground">{t('scheduleSend.audience')}</p>
-            <p className="font-medium text-foreground">{audienceLabel}</p>
+            <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+              {audience.type === 'tags' && tagNames.length > 0 ? (
+                tagNames.map((tName) => (
+                  <span
+                    key={tName}
+                    className="inline-flex items-center gap-1 rounded-md bg-emerald-500/20 border border-emerald-500/30 px-2 py-0.5 text-xs font-bold text-emerald-300"
+                  >
+                    🏷️ {tName}
+                  </span>
+                ))
+              ) : audience.type === 'all' ? (
+                <span className="rounded-md bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 text-xs font-bold text-amber-300">
+                  ⚠️ Todos os Contatos
+                </span>
+              ) : (
+                <p className="font-medium text-foreground">{audienceLabel}</p>
+              )}
+            </div>
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Alcance Estimado</p>

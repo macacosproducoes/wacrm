@@ -39,7 +39,7 @@ export default function NewBroadcastPage() {
     };
     csvContacts?: { phone: string; name?: string }[];
     excludeTagIds?: string[];
-  }>({ type: 'all' });
+  }>({ type: 'tags', tagIds: [] });
   const [variables, setVariables] = useState<
     Record<string, { type: 'static' | 'field' | 'custom_field'; value: string }>
   >({});
