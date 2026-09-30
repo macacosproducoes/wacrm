@@ -28,6 +28,7 @@ import {
   X,
   Zap,
   Palette,
+  Heart,
 } from "lucide-react";
 import type { AccountRole } from "@/lib/auth/roles";
 
@@ -309,6 +310,24 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
           </ul>
 
           <div className="my-4 border-t border-border" />
+
+          {/* Mimos Edgar Katsumi quick link */}
+          <Link
+            href="/edgar-katsumi/mimos"
+            target="_blank"
+            className={cn(
+              "mb-3 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors lg:py-2",
+              pathname.startsWith("/edgar-katsumi")
+                ? "bg-pink-500/10 text-pink-400"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground",
+            )}
+          >
+            <Heart className="h-4 w-4 text-pink-500" />
+            <span className="flex-1">Mimos API</span>
+            <span className="rounded-full border border-pink-500/40 bg-pink-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-pink-300">
+              Edgar
+            </span>
+          </Link>
 
           <ul className="flex flex-col gap-1">
             {bottomNavItems.map((item) => {

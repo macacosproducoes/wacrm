@@ -661,7 +661,33 @@ export async function processBroadcastQueueTick(
           }
           const baseUrl = normalizeBaseUrl(uazConfig.base_url);
 
-          let text = templateRow?.body_text || b.template_name;
+          // Build list of message variations (Var 1 principal + up to 3 extra variations = total 4)
+          const allVariations: string[] = [];
+          if (templateRow?.body_text && templateRow.body_text.trim()) {
+            allVariations.push(templateRow.body_text.trim());
+          }
+          if (Array.isArray(templateRow?.variations)) {
+            for (const v of templateRow.variations) {
+              if (typeof v === 'string' && v.trim() && !allVariations.includes(v.trim())) {
+                allVariations.push(v.trim());
+              }
+            }
+          }
+          const extraVars = (b.template_variables as Record<string, unknown> | null)?._variations;
+          if (Array.isArray(extraVars)) {
+            for (const v of extraVars) {
+              if (typeof v === 'string' && v.trim() && !allVariations.includes(v.trim())) {
+                allVariations.push(v.trim());
+              }
+            }
+          }
+
+          // Rotate variations sequentially per contact to bypass spam patterns
+          const chosenBody = allVariations.length > 0
+            ? allVariations[(b.sent_count + sentCount + failedCount) % allVariations.length]
+            : (templateRow?.body_text || b.template_name);
+
+          let text = chosenBody;
           params.forEach((val, idx) => {
             text = text.replaceAll(`{{${idx + 1}}}`, val);
           });

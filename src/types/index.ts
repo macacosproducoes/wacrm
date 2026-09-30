@@ -394,6 +394,7 @@ export interface MessageTemplate {
   header_handle?: string;
   header_media_url?: string;
   body_text: string;
+  variations?: string[];
   footer_text?: string;
   buttons?: TemplateButton[];
   sample_values?: TemplateSampleValues;

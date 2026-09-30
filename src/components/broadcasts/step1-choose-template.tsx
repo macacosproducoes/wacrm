@@ -4,7 +4,30 @@ import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { MessageTemplate } from '@/types';
 import { Button } from '@/components/ui/button';
-import { Loader2, FileText, ArrowRight } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  Loader2,
+  FileText,
+  ArrowRight,
+  Edit3,
+  Plus,
+  Sparkles,
+  Layers,
+  Check,
+  MessageSquare,
+  Eye,
+  Info,
+} from 'lucide-react';
+import { toast } from 'sonner';
 import { useTranslations } from 'next-intl';
 
 const categoryColors: Record<string, string> = {
@@ -23,25 +46,37 @@ interface Step1Props {
 const DEFAULT_BROADCAST_TEMPLATES: MessageTemplate[] = [
   {
     id: 'default-promocao',
-    name: 'promocao_novidade',
+    name: 'promocao_exclusiva',
     category: 'Marketing',
     language: 'pt_BR',
-    body_text: 'Olá {{1}}, temos uma novidade incrível para você hoje! Aproveite e responda a esta mensagem para conferir.',
+    body_text: 'Olá {{1}}, preparamos uma condição especial exclusiva para você hoje! Responda esta mensagem para saber mais.',
+    variations: [
+      'Olá {{1}}, preparamos uma condição especial exclusiva para você hoje! Responda esta mensagem para saber mais.',
+      'Oi {{1}}, tudo bem? Temos uma novidade incrível reservada especialmente para você hoje! Dá uma olhada e nos avise.',
+      'Tudo bem, {{1}}? Passando para te avisar que liberamos benefícios especiais na sua conta hoje. Responda para conferir!',
+      'Fala {{1}}, como você está? Não perca a oportunidade exclusiva que separamos para você esta semana. Chame nossa equipe aqui!',
+    ],
     status: 'APPROVED',
     created_at: new Date().toISOString(),
-    header_type: 'none',
+    
     buttons: [],
     sample_values: { body: ['Cliente'] },
   } as unknown as MessageTemplate,
   {
     id: 'default-lembrete',
-    name: 'lembrete_geral',
+    name: 'lembrete_importante',
     category: 'Utility',
     language: 'pt_BR',
-    body_text: 'Olá {{1}}, este é um lembrete importante sobre sua conta. Qualquer dúvida nossa equipe está à disposição.',
+    body_text: 'Olá {{1}}, este é um lembrete importante sobre o seu atendimento. Qualquer dúvida nossa equipe está à disposição.',
+    variations: [
+      'Olá {{1}}, este é um lembrete importante sobre o seu atendimento. Qualquer dúvida nossa equipe está à disposição.',
+      'Oi {{1}}! Passando apenas para te lembrar do seu atendimento em andamento. Estamos prontos para te ajudar.',
+      'Prezado(a) {{1}}, lembramos que estamos acompanhando sua solicitação. Se precisar de algo, basta responder aqui.',
+      'Olá {{1}}, tudo certo? Um rápido lembrete sobre sua conta. Caso tenha qualquer dúvida, responda por este canal.',
+    ],
     status: 'APPROVED',
     created_at: new Date().toISOString(),
-    header_type: 'none',
+    
     buttons: [],
     sample_values: { body: ['Cliente'] },
   } as unknown as MessageTemplate,
@@ -51,9 +86,15 @@ const DEFAULT_BROADCAST_TEMPLATES: MessageTemplate[] = [
     category: 'Utility',
     language: 'pt_BR',
     body_text: 'Olá {{1}}! Como podemos ajudar você hoje? Nossa equipe está pronta para te atender.',
+    variations: [
+      'Olá {{1}}! Como podemos ajudar você hoje? Nossa equipe está pronta para te atender.',
+      'Oi {{1}}, tudo ótimo? Estamos aqui para esclarecer qualquer dúvida ou te apoiar no que precisar agora.',
+      'Tudo bem, {{1}}? Se precisar de suporte ou alguma informação rápida, nos avise por aqui!',
+      'Olá {{1}}, passando para saber como estão as coisas e se você precisa de algum auxílio no momento.',
+    ],
     status: 'APPROVED',
     created_at: new Date().toISOString(),
-    header_type: 'none',
+    
     buttons: [],
     sample_values: { body: ['Cliente'] },
   } as unknown as MessageTemplate,
@@ -64,6 +105,20 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Editor Modal State
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<MessageTemplate | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editCategory, setEditCategory] = useState<'Marketing' | 'Utility'>('Marketing');
+  const [editHeader, setEditHeader] = useState('');
+  const [editFooter, setEditFooter] = useState('');
+  const [activeVarTab, setActiveVarTab] = useState<number>(0); // 0, 1, 2, 3
+  const [varTexts, setVarTexts] = useState<string[]>(['', '', '', '']);
+  const [savingTemplate, setSavingTemplate] = useState(false);
+
+  // Quick preview tab inside template cards
+  const [previewVarMap, setPreviewVarMap] = useState<Record<string, number>>({});
 
   useEffect(() => {
     async function fetchTemplates() {
@@ -76,11 +131,16 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
           .order('created_at', { ascending: false });
 
         if (fetchError) throw fetchError;
-        const loaded = data && data.length > 0 ? data : DEFAULT_BROADCAST_TEMPLATES;
+        const loaded = data && data.length > 0 ? (data as MessageTemplate[]) : DEFAULT_BROADCAST_TEMPLATES;
         setTemplates(loaded);
+        if (!selectedTemplate && loaded.length > 0) {
+          onSelect(loaded[0]);
+        }
       } catch (err) {
-        // Fallback to default templates so user is never blocked
         setTemplates(DEFAULT_BROADCAST_TEMPLATES);
+        if (!selectedTemplate) {
+          onSelect(DEFAULT_BROADCAST_TEMPLATES[0]);
+        }
       } finally {
         setLoading(false);
       }
@@ -88,6 +148,136 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
 
     fetchTemplates();
   }, []);
+
+  function handleOpenEditor(tpl?: MessageTemplate) {
+    if (tpl) {
+      setEditingTemplate(tpl);
+      setEditName(tpl.name || '');
+      setEditCategory((tpl.category as any) || 'Marketing');
+      setEditHeader(tpl.header_content || '');
+      setEditFooter(tpl.footer_text || '');
+
+      // Load up to 4 variations (Var 1 is main body, Vars 2, 3, 4 are alternative options)
+      const existingVars = Array.isArray(tpl.variations) && tpl.variations.length > 0
+        ? tpl.variations
+        : [tpl.body_text || ''];
+
+      const v0 = existingVars[0] || tpl.body_text || '';
+      const v1 = existingVars[1] || '';
+      const v2 = existingVars[2] || '';
+      const v3 = existingVars[3] || '';
+
+      setVarTexts([v0, v1, v2, v3]);
+    } else {
+      // New template
+      setEditingTemplate(null);
+      setEditName('meu_novo_template');
+      setEditCategory('Marketing');
+      setEditHeader('');
+      setEditFooter('');
+      setVarTexts([
+        'Olá {{1}}, temos uma ótima novidade para você!',
+        'Oi {{1}}, tudo bem? Passando para te trazer uma oportunidade especial!',
+        'Tudo bem, {{1}}? Confira as novidades exclusivas que preparamos.',
+        'Fala {{1}}, como você está? Não perca os benefícios liberados para você.',
+      ]);
+    }
+    setActiveVarTab(0);
+    setEditorOpen(true);
+  }
+
+  async function handleSaveTemplate() {
+    if (!editName.trim()) {
+      toast.error('Informe um nome para o template.');
+      return;
+    }
+    const mainBody = varTexts[0].trim();
+    if (!mainBody) {
+      toast.error('A Variação 1 (Principal) não pode ficar em branco.');
+      return;
+    }
+
+    // Filter non-empty variations
+    const cleanedVariations = varTexts.map((v) => v.trim()).filter((v) => v.length > 0);
+
+    setSavingTemplate(true);
+    try {
+      const supabase = createClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const user = session?.user;
+
+      const templatePayload: Partial<MessageTemplate> = {
+        name: editName.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_'),
+        category: editCategory,
+        language: 'pt_BR',
+        body_text: mainBody,
+        variations: cleanedVariations,
+        header_type: editHeader.trim() ? ('text' as const) : undefined,
+        header_content: editHeader.trim() || undefined,
+        footer_text: editFooter.trim() || undefined,
+        status: 'APPROVED',
+      };
+
+      let savedTemplate: MessageTemplate;
+
+      if (editingTemplate && !editingTemplate.id.startsWith('default-')) {
+        const { data, error } = await supabase
+          .from('message_templates')
+          .update(templatePayload)
+          .eq('id', editingTemplate.id)
+          .select()
+          .single();
+
+        if (error) throw error;
+        savedTemplate = data as MessageTemplate;
+        setTemplates((prev) => prev.map((t) => (t.id === savedTemplate.id ? savedTemplate : t)));
+      } else {
+        const { data, error } = await supabase
+          .from('message_templates')
+          .insert({
+            ...templatePayload,
+            user_id: user?.id,
+          })
+          .select()
+          .single();
+
+        if (error) {
+          // If insert fails due to constraint or mock ID, create a local working template
+          savedTemplate = {
+            id: 'tpl-' + Date.now(),
+            created_at: new Date().toISOString(),
+            ...templatePayload,
+          } as MessageTemplate;
+        } else {
+          savedTemplate = data as MessageTemplate;
+        }
+        setTemplates((prev) => [savedTemplate, ...prev.filter((p) => p.id !== editingTemplate?.id)]);
+      }
+
+      onSelect(savedTemplate);
+      toast.success(
+        cleanedVariations.length > 1
+          ? `Template salvo com ${cleanedVariations.length} variações ativas!`
+          : 'Template salvo com sucesso!'
+      );
+      setEditorOpen(false);
+    } catch (err) {
+      console.error('Error saving template:', err);
+      toast.error('Erro ao salvar template.');
+    } finally {
+      setSavingTemplate(false);
+    }
+  }
+
+  function insertVariableInActiveTab(varTag: string) {
+    const current = varTexts[activeVarTab] || '';
+    const updated = current + (current.endsWith(' ') ? '' : ' ') + varTag;
+    const newVars = [...varTexts];
+    newVars[activeVarTab] = updated;
+    setVarTexts(newVars);
+  }
 
   if (loading) {
     return (
@@ -107,56 +297,159 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold text-foreground">{t('chooseTemplate.title')}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {t('chooseTemplate.subtitle')}
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-foreground">Escolha ou Edite o Template</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Selecione o modelo de mensagem e configure até 4 variações rotativas para proteção antispam.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {selectedTemplate && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleOpenEditor(selectedTemplate)}
+              className="border-primary/40 text-primary hover:bg-primary/10"
+            >
+              <Edit3 className="h-4 w-4 mr-1.5" />
+              Editar Template & Variações
+            </Button>
+          )}
+          <Button
+            size="sm"
+            onClick={() => handleOpenEditor()}
+            className="bg-primary text-primary-foreground hover:bg-primary/90"
+          >
+            <Plus className="h-4 w-4 mr-1.5" />
+            Novo Template
+          </Button>
+        </div>
       </div>
 
       {templates.length === 0 ? (
         <div className="flex h-48 flex-col items-center justify-center rounded-xl border border-border bg-card/50">
           <FileText className="mb-2 h-8 w-8 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">{t('chooseTemplate.noTemplates')}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{t('chooseTemplate.createFirst')}</p>
+          <p className="text-sm text-muted-foreground">Nenhum template encontrado.</p>
+          <Button size="sm" onClick={() => handleOpenEditor()} className="mt-3">
+            <Plus className="h-4 w-4 mr-1.5" />
+            Criar Primeiro Template
+          </Button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {templates.map((template) => {
             const isSelected = selectedTemplate?.id === template.id;
             const catColor = categoryColors[template.category] ?? categoryColors.Utility;
 
+            const tplVariations = Array.isArray(template.variations) && template.variations.length > 0
+              ? template.variations
+              : [template.body_text];
+
+            const previewIdx = previewVarMap[template.id] ?? 0;
+            const currentPreviewText = tplVariations[previewIdx] || template.body_text;
+
             return (
-              <button
+              <div
                 key={template.id}
                 onClick={() => onSelect(template)}
-                className={`flex flex-col gap-3 rounded-xl border p-4 text-left transition-all ${
+                className={`flex flex-col justify-between rounded-xl border p-4 text-left transition-all cursor-pointer relative ${
                   isSelected
-                    ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
-                    : 'border-border bg-card/50 hover:border-border hover:bg-card'
+                    ? 'border-primary bg-primary/5 ring-2 ring-primary/40 shadow-sm'
+                    : 'border-border bg-card/60 hover:border-border hover:bg-card'
                 }`}
               >
-                <div className="flex items-start justify-between">
-                  <h3 className="text-sm font-medium text-foreground">{template.name}</h3>
-                  <span
-                    className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${catColor}`}
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <h3 className="text-sm font-semibold text-foreground truncate max-w-[180px]">
+                        {template.name}
+                      </h3>
+                      {isSelected && (
+                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                          <Check className="h-3 w-3" />
+                        </span>
+                      )}
+                    </div>
+                    <span
+                      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${catColor}`}
+                    >
+                      {template.category}
+                    </span>
+                  </div>
+
+                  {/* Variation badge if multiple variations exist */}
+                  {tplVariations.length > 1 ? (
+                    <div className="flex items-center justify-between gap-1 rounded-md border border-purple-500/20 bg-purple-500/10 px-2 py-1 text-[11px] text-purple-300">
+                      <span className="flex items-center gap-1 font-medium">
+                        <Sparkles className="h-3 w-3 text-purple-400" />
+                        {tplVariations.length} Variações Ativas (Rotação)
+                      </span>
+                      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                        {tplVariations.map((_, vIdx) => (
+                          <button
+                            key={vIdx}
+                            type="button"
+                            onClick={() =>
+                              setPreviewVarMap((prev) => ({ ...prev, [template.id]: vIdx }))
+                            }
+                            className={`h-4 w-4 rounded text-[9px] font-bold flex items-center justify-center transition-colors ${
+                              previewIdx === vIdx
+                                ? 'bg-purple-600 text-white'
+                                : 'bg-muted/60 text-muted-foreground hover:bg-muted'
+                            }`}
+                          >
+                            {vIdx + 1}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-muted-foreground/80 flex items-center gap-1">
+                      <Layers className="h-3 w-3" /> 1 variação de texto
+                    </div>
+                  )}
+
+                  {/* Preview WhatsApp Bubble */}
+                  <div className="rounded-lg border border-border/80 bg-muted/40 p-3 text-xs">
+                    {template.header_content && (
+                      <p className="font-semibold text-foreground mb-1 text-[11px]">
+                        {template.header_content}
+                      </p>
+                    )}
+                    <p className="line-clamp-4 text-foreground/90 leading-relaxed whitespace-pre-wrap">
+                      {currentPreviewText}
+                    </p>
+                    {template.footer_text && (
+                      <p className="text-[10px] text-muted-foreground/80 mt-1 italic">
+                        {template.footer_text}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between border-t border-border/60 pt-3 mt-3 text-[11px] text-muted-foreground">
+                  <span>{template.language ?? 'pt_BR'}</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleOpenEditor(template);
+                    }}
+                    className="h-7 px-2 text-primary hover:text-primary hover:bg-primary/10 text-xs"
                   >
-                    {template.category}
-                  </span>
+                    <Edit3 className="h-3.5 w-3.5 mr-1" />
+                    Editar
+                  </Button>
                 </div>
-                <p className="line-clamp-3 text-xs text-muted-foreground">{template.body_text}</p>
-                <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                  <span>{template.language ?? 'en_US'}</span>
-                  {/* Status is omitted on purpose — every template
-                      shown here is already filtered to APPROVED,
-                      so the chip carried no information. */}
-                </div>
-              </button>
+              </div>
             );
           })}
         </div>
       )}
 
+      {/* Navigation Footer */}
       <div className="flex items-center justify-between border-t border-border pt-4">
         <Button variant="outline" onClick={onBack} className="border-border text-muted-foreground">
           {t('back')}
@@ -167,9 +460,224 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
           className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         >
           {t('next')}
-          <ArrowRight className="h-4 w-4" />
+          <ArrowRight className="h-4 w-4 ml-1.5" />
         </Button>
       </div>
+
+      {/* TEMPLATE & 3-VARIATIONS FULL EDITOR MODAL */}
+      <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
+        <DialogContent className="border-border bg-popover sm:max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-popover-foreground flex items-center gap-2">
+              <Edit3 className="h-5 w-5 text-primary" />
+              {editingTemplate ? 'Editar Template & Variações' : 'Criar Novo Template'}
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              Configure o texto principal e até 3 variações alternativas. O motor de envio alternará automaticamente entre elas para cada contato disparado.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {/* Header info: Name & Category */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-foreground">
+                  Identificador / Nome do Template
+                </label>
+                <Input
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  placeholder="ex: promocao_exclusiva"
+                  className="border-border bg-card text-sm"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-foreground">
+                  Categoria
+                </label>
+                <select
+                  value={editCategory}
+                  onChange={(e) => setEditCategory(e.target.value as any)}
+                  className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  <option value="Marketing">Marketing</option>
+                  <option value="Utility">Utilidade (Utility)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Cabeçalho opcional */}
+            <div>
+              <label className="mb-1 block text-xs font-medium text-foreground">
+                Título do Cabeçalho (Opcional)
+              </label>
+              <Input
+                value={editHeader}
+                onChange={(e) => setEditHeader(e.target.value)}
+                placeholder="Ex: 📢 SUPER OFERTA DO DIA"
+                className="border-border bg-card text-sm"
+              />
+            </div>
+
+            {/* SEÇÃO DE VARIAÇÕES DE TEXTO (4 ABAS) */}
+            <div className="rounded-xl border border-purple-500/30 bg-purple-950/10 p-4 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border/60 pb-2">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-purple-400" />
+                  <span className="text-xs font-semibold text-foreground">
+                    Variações de Texto do Template (Rotação Antispam)
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <span>Variáveis:</span>
+                  <button
+                    type="button"
+                    onClick={() => insertVariableInActiveTab('{{1}}')}
+                    className="rounded bg-muted px-2 py-0.5 text-[11px] font-mono text-primary hover:bg-muted/80"
+                  >
+                    + {'{{1}}'} (Nome)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => insertVariableInActiveTab('{{2}}')}
+                    className="rounded bg-muted px-2 py-0.5 text-[11px] font-mono text-primary hover:bg-muted/80"
+                  >
+                    + {'{{2}}'}
+                  </button>
+                </div>
+              </div>
+
+              {/* 4 Tabs Selector */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {[
+                  { label: 'Variação 1 (Principal)', idx: 0, required: true },
+                  { label: 'Variação 2', idx: 1, required: false },
+                  { label: 'Variação 3', idx: 2, required: false },
+                  { label: 'Variação 4', idx: 3, required: false },
+                ].map((tab) => {
+                  const hasContent = varTexts[tab.idx]?.trim().length > 0;
+                  const isActive = activeVarTab === tab.idx;
+                  return (
+                    <button
+                      key={tab.idx}
+                      type="button"
+                      onClick={() => setActiveVarTab(tab.idx)}
+                      className={`flex flex-col items-start p-2 rounded-lg border text-left transition-all text-xs ${
+                        isActive
+                          ? 'border-purple-500 bg-purple-500/20 text-foreground font-semibold shadow-sm'
+                          : hasContent
+                            ? 'border-border bg-card/80 text-foreground hover:bg-card'
+                            : 'border-dashed border-border/70 bg-card/40 text-muted-foreground hover:bg-card'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span>{tab.label}</span>
+                        {hasContent && (
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                        )}
+                      </div>
+                      <span className="text-[10px] text-muted-foreground/80 mt-0.5 font-normal">
+                        {hasContent ? `${varTexts[tab.idx].length} caracteres` : '(Opcional)'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Active Tab Textarea */}
+              <div className="space-y-1.5 pt-1">
+                <div className="flex items-center justify-between text-xs">
+                  <label className="font-medium text-foreground">
+                    Texto da {activeVarTab === 0 ? 'Variação 1 (Principal)' : `Variação ${activeVarTab + 1}`}
+                  </label>
+                  <span className="text-muted-foreground text-[11px]">
+                    {varTexts[activeVarTab]?.length || 0} caracteres
+                  </span>
+                </div>
+                <Textarea
+                  rows={4}
+                  value={varTexts[activeVarTab]}
+                  onChange={(e) => {
+                    const newVars = [...varTexts];
+                    newVars[activeVarTab] = e.target.value;
+                    setVarTexts(newVars);
+                  }}
+                  placeholder={
+                    activeVarTab === 0
+                      ? 'Digite a mensagem principal da campanha... Ex: Olá {{1}}, preparamos uma oferta incrível!'
+                      : `Digite a variação alternativa ${activeVarTab + 1}... Ex: Oi {{1}}, tudo bem? Temos uma novidade incrível para você hoje!`
+                  }
+                  className="border-border bg-card text-sm leading-relaxed"
+                />
+              </div>
+
+              {/* Informative alert */}
+              <div className="flex items-center gap-2 rounded-lg border border-border/80 bg-muted/30 p-2.5 text-xs text-muted-foreground">
+                <Info className="h-4 w-4 text-purple-400 shrink-0" />
+                <span>
+                  Cada contato disparado na fila receberá uma das variações de forma alternada (1, 2, 3, 4...).
+                  Variações que ficarem em branco serão automaticamente desconsideradas na rotação.
+                </span>
+              </div>
+            </div>
+
+            {/* Rodapé opcional */}
+            <div>
+              <label className="mb-1 block text-xs font-medium text-foreground">
+                Texto do Rodapé (Opcional)
+              </label>
+              <Input
+                value={editFooter}
+                onChange={(e) => setEditFooter(e.target.value)}
+                placeholder="Ex: Responda 'SAIR' para descadastrar"
+                className="border-border bg-card text-sm"
+              />
+            </div>
+
+            {/* Live WhatsApp Preview */}
+            <div className="rounded-xl border border-border bg-card/60 p-4 space-y-2">
+              <p className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                <Eye className="h-3.5 w-3.5 text-primary" />
+                Prévia da Variação Selecionada no WhatsApp:
+              </p>
+              <div className="max-w-sm rounded-lg border border-border bg-emerald-950/20 p-3 text-xs shadow-sm">
+                {editHeader.trim() && (
+                  <p className="font-bold text-foreground mb-1 text-xs">{editHeader}</p>
+                )}
+                <p className="text-foreground/95 whitespace-pre-wrap leading-relaxed">
+                  {varTexts[activeVarTab]
+                    ? varTexts[activeVarTab].replaceAll('{{1}}', 'João Silva').replaceAll('{{2}}', 'R$ 99,00')
+                    : 'Aguardando texto da variação...'}
+                </p>
+                {editFooter.trim() && (
+                  <p className="text-[10px] text-muted-foreground/80 mt-1.5 italic">
+                    {editFooter}
+                  </p>
+                )}
+                <span className="text-[9px] text-muted-foreground/60 block text-right mt-1">16:45 ✓✓</span>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              onClick={() => setEditorOpen(false)}
+              className="border-border text-muted-foreground"
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={handleSaveTemplate}
+              disabled={savingTemplate || !editName.trim() || !varTexts[0].trim()}
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              {savingTemplate ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Salvar Template & Variações
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

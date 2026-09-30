@@ -387,7 +387,10 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
           name: payload.name,
           template_name: payload.template.name,
           template_language: payload.template.language ?? 'en_US',
-          template_variables: payload.variables,
+          template_variables: {
+            ...payload.variables,
+            _variations: payload.template.variations || [],
+          },
           audience_filter: {
             type: payload.audience.type,
             tagIds: payload.audience.tagIds,

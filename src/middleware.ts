@@ -40,11 +40,15 @@ async function getUserWithTimeout(
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  // 1. Immediate bypass for webhooks, cron jobs, and health check endpoints
+  // 1. Immediate bypass for webhooks, cron jobs, health check, public pages,
+  //    and BuckPay payment endpoints
   if (
     pathname.startsWith('/api/whatsapp/webhook') ||
     pathname.startsWith('/api/whatsapp/uazapi/webhook') ||
     pathname.startsWith('/api/automations/cron') ||
+    pathname.startsWith('/api/mimos') ||
+    pathname.startsWith('/api/webhooks/buckpay') ||
+    pathname.startsWith('/edgar-katsumi') ||
     pathname === '/api/health'
   ) {
     return NextResponse.next()

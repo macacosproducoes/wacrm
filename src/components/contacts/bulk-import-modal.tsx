@@ -74,6 +74,8 @@ export function BulkImportModal({
   // Step 1: Input text & Tag configuration
   const [rawText, setRawText] = useState('');
   const [tagName, setTagName] = useState(DEFAULT_TAG_NAME);
+  const [nameTemplate, setNameTemplate] = useState('Lead Disparo');
+  const [startNumber, setStartNumber] = useState(1);
   const [tagExistingInCrm, setTagExistingInCrm] = useState(true);
   const [isValidating, setIsValidating] = useState(false);
 
@@ -117,6 +119,8 @@ export function BulkImportModal({
   function resetState() {
     setRawText('');
     setTagName(DEFAULT_TAG_NAME);
+    setNameTemplate('Lead Disparo');
+    setStartNumber(1);
     setTagExistingInCrm(true);
     setIsValidating(false);
     setHasValidated(false);
@@ -364,12 +368,18 @@ export function BulkImportModal({
         const chunk = validToImport.slice(i, i + chunkSize);
         const currentChunkNum = Math.floor(i / chunkSize) + 1;
 
-        const rows = chunk.map((item) => ({
-          user_id: user.id,
-          account_id: accountId,
-          phone: item.normalized,
-          name: item.normalized,
-        }));
+        const rows = chunk.map((item, idx) => {
+          const globalIdx = i + idx;
+          const contactName = nameTemplate.trim()
+            ? `${nameTemplate.trim()} ${startNumber + globalIdx}`
+            : item.normalized;
+          return {
+            user_id: user.id,
+            account_id: accountId,
+            phone: item.normalized,
+            name: contactName,
+          };
+        });
 
         const { data, error } = await supabase
           .from('contacts')
@@ -531,22 +541,55 @@ export function BulkImportModal({
             {/* STEP 1: TEXTAREA INPUT */}
             {!hasValidated ? (
               <div className="flex-1 flex flex-col space-y-3 overflow-hidden">
-                {/* Tag config header */}
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 p-2.5 rounded-lg border bg-muted/30 text-xs">
-                  <div className="flex items-center gap-2">
-                    <Tag className="size-4 text-emerald-600 dark:text-emerald-400" />
-                    <span className="font-medium text-foreground">Salvar contatos com a etiqueta:</span>
+                {/* Configuration header: Tag and Name Template */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 p-3 rounded-lg border bg-muted/30 text-xs">
+                  {/* Tag config */}
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1.5 font-medium text-foreground">
+                      <Tag className="size-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>Etiqueta dos contatos:</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={tagName}
+                        onChange={(e) => setTagName(e.target.value)}
+                        placeholder="Nome da etiqueta"
+                        className="h-8 text-xs font-medium"
+                      />
+                      <Badge className="bg-emerald-600 text-white hover:bg-emerald-700 h-7 shrink-0 text-[11px]">
+                        Disparo
+                      </Badge>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 w-full sm:w-auto">
-                    <Input
-                      value={tagName}
-                      onChange={(e) => setTagName(e.target.value)}
-                      placeholder="Nome da etiqueta"
-                      className="h-7 text-xs w-44 font-medium"
-                    />
-                    <Badge className="bg-emerald-600 text-white hover:bg-emerald-700 h-6 shrink-0">
-                      Disparo
-                    </Badge>
+
+                  {/* Name Template config */}
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between font-medium text-foreground">
+                      <span className="flex items-center gap-1.5">
+                        <Sparkles className="size-3.5 text-blue-500" />
+                        <span>Modelo de nome (Template):</span>
+                      </span>
+                      <span className="text-[10px] text-muted-foreground font-mono">Início: #{startNumber}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={nameTemplate}
+                        onChange={(e) => setNameTemplate(e.target.value)}
+                        placeholder="Ex: Lead Disparo"
+                        className="h-8 text-xs font-medium flex-1"
+                      />
+                      <Input
+                        type="number"
+                        min={1}
+                        value={startNumber}
+                        onChange={(e) => setStartNumber(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="h-8 w-16 text-xs text-center font-mono"
+                        title="Número inicial"
+                      />
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      Salvará: <strong className="text-foreground">{nameTemplate.trim() || 'Nome'} {startNumber}</strong>, <strong className="text-foreground">{nameTemplate.trim() || 'Nome'} {startNumber + 1}</strong>...
+                    </p>
                   </div>
                 </div>
 

@@ -188,7 +188,23 @@ export async function POST(request: Request) {
         }
 
         try {
-          let text = templateRow?.body_text || template_name
+          const allVariations: string[] = []
+          if (templateRow?.body_text && templateRow.body_text.trim()) {
+            allVariations.push(templateRow.body_text.trim())
+          }
+          if (Array.isArray(templateRow?.variations)) {
+            for (const v of templateRow.variations) {
+              if (typeof v === 'string' && v.trim() && !allVariations.includes(v.trim())) {
+                allVariations.push(v.trim())
+              }
+            }
+          }
+
+          const chosenBody = allVariations.length > 0
+            ? allVariations[(sentCount + failedCount) % allVariations.length]
+            : (templateRow?.body_text || template_name)
+
+          let text = chosenBody
           const paramsList = recipient.messageParams?.body || recipient.params || []
           paramsList.forEach((val, idx) => {
             text = text.replaceAll(`{{${idx + 1}}}`, val)

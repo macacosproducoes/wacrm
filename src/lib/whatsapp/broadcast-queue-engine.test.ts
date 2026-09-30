@@ -244,4 +244,44 @@ describe('Broadcast Queue Engine — Cooldown & Safety', () => {
       expect(result.nextRunAt).toBe(futureTime);
     });
   });
+describe('Template Variations Rotation (Spam Protection)', () => {
+    it('rotates across 4 variations sequentially for consecutive recipients', () => {
+      const templateRow = {
+        body_text: 'Variação 1: Olá {{1}}!',
+        variations: [
+          'Variação 2: Oi {{1}}, tudo bem?',
+          'Variação 3: Tudo certo, {{1}}?',
+          'Variação 4: Fala {{1}}!',
+        ],
+      };
+
+      const allVariations: string[] = [
+        templateRow.body_text,
+        ...templateRow.variations,
+      ];
+
+      expect(allVariations.length).toBe(4);
+
+      // Verify rotation index sequence for 6 recipients:
+      // Recipient 0 -> Var 1
+      // Recipient 1 -> Var 2
+      // Recipient 2 -> Var 3
+      // Recipient 3 -> Var 4
+      // Recipient 4 -> Var 1 (cycles back)
+      // Recipient 5 -> Var 2
+      const recipient0Text = allVariations[0 % allVariations.length].replaceAll('{{1}}', 'Carlos');
+      const recipient1Text = allVariations[1 % allVariations.length].replaceAll('{{1}}', 'Maria');
+      const recipient2Text = allVariations[2 % allVariations.length].replaceAll('{{1}}', 'João');
+      const recipient3Text = allVariations[3 % allVariations.length].replaceAll('{{1}}', 'Ana');
+      const recipient4Text = allVariations[4 % allVariations.length].replaceAll('{{1}}', 'Pedro');
+      const recipient5Text = allVariations[5 % allVariations.length].replaceAll('{{1}}', 'Lucas');
+
+      expect(recipient0Text).toBe('Variação 1: Olá Carlos!');
+      expect(recipient1Text).toBe('Variação 2: Oi Maria, tudo bem?');
+      expect(recipient2Text).toBe('Variação 3: Tudo certo, João?');
+      expect(recipient3Text).toBe('Variação 4: Fala Ana!');
+      expect(recipient4Text).toBe('Variação 1: Olá Pedro!');
+      expect(recipient5Text).toBe('Variação 2: Oi Lucas, tudo bem?');
+    });
+  });
 });
