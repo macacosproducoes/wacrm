@@ -142,7 +142,7 @@ async function fetchCustomValueIndex(
 
   // Supabase PostgREST caps the .in(...) IN-clause roughly at 1000
   // values. Page through to stay safe.
-  const PAGE = 500;
+  const PAGE = 100;
   for (let i = 0; i < contactIds.length; i += PAGE) {
     const slice = contactIds.slice(i, i + PAGE);
     const { data } = await supabase
@@ -190,12 +190,19 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
         const uniqueContactIds = [
           ...new Set(contactTags.map((ct) => ct.contact_id)),
         ];
-        const { data, error } = await supabase
-          .from('contacts')
-          .select('*')
-          .in('id', uniqueContactIds);
-        if (error) throw new Error(`Failed to fetch contacts: ${error.message}`);
-        contacts = data ?? [];
+
+        contacts = [];
+        const CHUNK_SIZE = 100;
+        for (let i = 0; i < uniqueContactIds.length; i += CHUNK_SIZE) {
+          const chunk = uniqueContactIds.slice(i, i + CHUNK_SIZE);
+          const { data, error } = await supabase
+            .from('contacts')
+            .select('*')
+            .in('id', chunk);
+
+          if (error) throw new Error(`Failed to fetch contacts: ${error.message}`);
+          if (data) contacts.push(...data);
+        }
       }
     } else if (audience.type === 'custom_field' && audience.customField) {
       contacts = await resolveCustomFieldAudience(supabase, audience.customField);
@@ -264,19 +271,22 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
     // Scoping to `user_id` missed rows a teammate created on a shared
     // account, so those numbers looked new and their inserts collided
     // with the account-wide unique index.
-    const { data: existing, error: lookupErr } = await supabase
-      .from('contacts')
-      .select('*')
-      .eq('account_id', accountId)
-      .in('phone_normalized', keys);
-    if (lookupErr) {
-      throw new Error(`Failed to look up CSV contacts: ${lookupErr.message}`);
-    }
-
     const byKey = new Map<string, Contact>();
-    for (const c of (existing ?? []) as Contact[]) {
-      const key = normalizeKey(c.phone ?? '');
-      if (key) byKey.set(key, c);
+    const LOOKUP_CHUNK = 100;
+    for (let i = 0; i < keys.length; i += LOOKUP_CHUNK) {
+      const slice = keys.slice(i, i + LOOKUP_CHUNK);
+      const { data: existing, error: lookupErr } = await supabase
+        .from('contacts')
+        .select('*')
+        .eq('account_id', accountId)
+        .in('phone_normalized', slice);
+      if (lookupErr) {
+        throw new Error(`Failed to look up CSV contacts: ${lookupErr.message}`);
+      }
+      for (const c of (existing ?? []) as Contact[]) {
+        const key = normalizeKey(c.phone ?? '');
+        if (key) byKey.set(key, c);
+      }
     }
 
     // Insert only missing contacts, in one batch per 200 rows (PostgREST
@@ -338,12 +348,19 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
     const contactIds = [...new Set((matches ?? []).map((m) => m.contact_id))];
     if (contactIds.length === 0) return [];
 
-    const { data, error } = await supabase
-      .from('contacts')
-      .select('*')
-      .in('id', contactIds);
-    if (error) throw new Error(`Failed to fetch contacts: ${error.message}`);
-    return data ?? [];
+    const resultContacts: Contact[] = [];
+    const CHUNK_SIZE = 100;
+    for (let i = 0; i < contactIds.length; i += CHUNK_SIZE) {
+      const chunk = contactIds.slice(i, i + CHUNK_SIZE);
+      const { data, error } = await supabase
+        .from('contacts')
+        .select('*')
+        .in('id', chunk);
+
+      if (error) throw new Error(`Failed to fetch contacts: ${error.message}`);
+      if (data) resultContacts.push(...data);
+    }
+    return resultContacts;
   }
 
   async function createAndSendBroadcast(payload: BroadcastPayload): Promise<string> {
