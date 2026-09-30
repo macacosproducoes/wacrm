@@ -42,6 +42,8 @@ import {
   Search,
   Plus,
   Upload,
+  ListPlus,
+  Tag,
   MoreHorizontal,
   Pencil,
   Trash2,
@@ -54,11 +56,15 @@ import {
   X,
   UserCheck,
   Sparkles,
+  FileText,
+  Copy,
+  Download,
 } from 'lucide-react';
 
 import { ContactForm } from '@/components/contacts/contact-form';
 import { ContactDetailView } from '@/components/contacts/contact-detail-view';
 import { ImportModal } from '@/components/contacts/import-modal';
+import { BulkImportModal } from '@/components/contacts/bulk-import-modal';
 import { CustomFieldsManager } from '@/components/contacts/custom-fields-manager';
 import { useCan } from '@/hooks/use-can';
 import { GatedButton } from '@/components/ui/gated-button';
@@ -91,6 +97,8 @@ export default function ContactsPage() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailContactId, setDetailContactId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [bulkImportOpen, setBulkImportOpen] = useState(false);
+  const [isTaggingLeads, setIsTaggingLeads] = useState(false);
   const [customFieldsOpen, setCustomFieldsOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Contact | null>(null);
@@ -362,6 +370,63 @@ export default function ContactsPage() {
     });
   }
 
+
+  async function handleTagSelectedAsLeadsDisparo() {
+    if (selected.size === 0 || !accountId) return;
+    setIsTaggingLeads(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
+      if (!user) throw new Error('Não autenticado.');
+
+      const { data: existingTags } = await supabase
+        .from('tags')
+        .select('id, name')
+        .eq('account_id', accountId);
+
+      let tagId = (existingTags ?? []).find(
+        (t) => t.name.trim().toLowerCase() === 'leads disparo'
+      )?.id;
+
+      if (!tagId) {
+        const { data: newTag, error: tagErr } = await supabase
+          .from('tags')
+          .insert({
+            user_id: user.id,
+            account_id: accountId,
+            name: 'leads disparo',
+            color: '#10b981',
+          })
+          .select('id')
+          .single();
+        if (tagErr || !newTag) throw new Error('Erro ao criar etiqueta "leads disparo".');
+        tagId = newTag.id;
+      }
+
+      const contactIds = Array.from(selected);
+      const rows = contactIds.map((cid) => ({
+        contact_id: cid,
+        tag_id: tagId,
+      }));
+
+      const { error: ctErr } = await supabase
+        .from('contact_tags')
+        .upsert(rows, { onConflict: 'contact_id,tag_id', ignoreDuplicates: true });
+
+      if (ctErr) throw ctErr;
+
+      toast.success(`${contactIds.length} contatos etiquetados como "leads disparo"!`);
+      setSelected(new Set());
+      fetchContacts();
+      fetchTags();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Falha ao etiquetar contatos.';
+      toast.error(msg);
+    } finally {
+      setIsTaggingLeads(false);
+    }
+  }
+
   async function handleBulkDelete() {
     const ids = [...selected];
     if (ids.length === 0) return;
@@ -406,6 +471,87 @@ export default function ContactsPage() {
     setPage(0);
   }
 
+  const handleExportTxt = async () => {
+    try {
+      let phonesToExport: string[] = [];
+
+      if (selected.size > 0) {
+        phonesToExport = contacts
+          .filter((c) => selected.has(c.id))
+          .map((c) => c.phone)
+          .filter(Boolean);
+      } else {
+        const term = search.trim();
+        let query = supabase.from('contacts').select('phone').order('created_at', { ascending: false });
+
+        if (term) {
+          const like = `%${term}%`;
+          query = query.or(`name.ilike.${like},phone.ilike.${like},email.ilike.${like}`);
+        }
+
+        const { data, error } = await query;
+        if (error) throw error;
+        phonesToExport = (data ?? []).map((c) => c.phone).filter(Boolean);
+      }
+
+      if (phonesToExport.length === 0) {
+        toast.error('Nenhum telefone encontrado para exportar.');
+        return;
+      }
+
+      const txtContent = phonesToExport.join('\n');
+      const blob = new Blob([txtContent], { type: 'text/plain;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `telefones_contatos_${new Date().toISOString().split('T')[0]}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast.success(`${phonesToExport.length} telefones baixados em TXT!`);
+    } catch {
+      toast.error('Erro ao exportar telefones em TXT');
+    }
+  };
+
+  const handleCopyPhones = async () => {
+    try {
+      let phonesToCopy: string[] = [];
+
+      if (selected.size > 0) {
+        phonesToCopy = contacts
+          .filter((c) => selected.has(c.id))
+          .map((c) => c.phone)
+          .filter(Boolean);
+      } else {
+        const term = search.trim();
+        let query = supabase.from('contacts').select('phone').order('created_at', { ascending: false });
+
+        if (term) {
+          const like = `%${term}%`;
+          query = query.or(`name.ilike.${like},phone.ilike.${like},email.ilike.${like}`);
+        }
+
+        const { data, error } = await query;
+        if (error) throw error;
+        phonesToCopy = (data ?? []).map((c) => c.phone).filter(Boolean);
+      }
+
+      if (phonesToCopy.length === 0) {
+        toast.error('Nenhum telefone encontrado para copiar.');
+        return;
+      }
+
+      const txtContent = phonesToCopy.join('\n');
+      await navigator.clipboard.writeText(txtContent);
+      toast.success(`${phonesToCopy.length} telefones copiados para a área de transferência!`);
+    } catch {
+      toast.error('Erro ao copiar telefones');
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -416,7 +562,7 @@ export default function ContactsPage() {
             {totalCount > 0 ? t('subtitle', { count: totalCount }) : t('subtitleZero')}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
           {canEditSettings && (
             <Button
               variant="outline"
@@ -464,6 +610,36 @@ export default function ContactsPage() {
             </Button>
           </div>
 
+          <Button
+            variant="outline"
+            onClick={handleExportTxt}
+            className="border-border text-muted-foreground hover:bg-muted gap-1.5"
+            title="Baixar lista completa de telefones em arquivo TXT (um por linha)"
+          >
+            <FileText className="size-4" />
+            <span className="hidden sm:inline">Baixar TXT</span>
+          </Button>
+
+          <Button
+            variant="outline"
+            onClick={handleCopyPhones}
+            className="border-border text-muted-foreground hover:bg-muted gap-1.5"
+            title="Copiar todos os telefones diretamente para a área de transferência"
+          >
+            <Copy className="size-4" />
+            <span className="hidden sm:inline">Copiar Telefones</span>
+          </Button>
+
+                    <GatedButton
+            variant="outline"
+            canAct={canEdit}
+            gateReason="add or import contacts"
+            onClick={() => setBulkImportOpen(true)}
+            className="border-border text-muted-foreground hover:bg-muted"
+          >
+            <ListPlus className="size-4" />
+            Importar contatos em massa
+          </GatedButton>
           <GatedButton
             variant="outline"
             canAct={canEdit}
@@ -471,7 +647,6 @@ export default function ContactsPage() {
             onClick={() => setImportOpen(true)}
             className="border-border text-muted-foreground hover:bg-muted"
           >
-
             <Upload className="size-4" />
             {t('importBtn')}
           </GatedButton>
@@ -617,6 +792,20 @@ export default function ContactsPage() {
               className="text-muted-foreground hover:text-foreground"
             >
               {t('clearSelection')}
+            </Button>
+                        <Button
+              variant="outline"
+              size="sm"
+              onClick={handleTagSelectedAsLeadsDisparo}
+              disabled={isTaggingLeads}
+              className="border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
+            >
+              {isTaggingLeads ? (
+                <Loader2 className="size-4 animate-spin mr-1" />
+              ) : (
+                <Tag className="size-4 mr-1 text-emerald-600 dark:text-emerald-400" />
+              )}
+              Marcar como &quot;leads disparo&quot;
             </Button>
             <GatedButton
               variant="destructive"
@@ -865,6 +1054,13 @@ export default function ContactsPage() {
         onOpenChange={setDetailOpen}
         contactId={detailContactId}
         onUpdated={fetchContacts}
+      />
+
+      {/* Bulk Import Modal */}
+      <BulkImportModal
+        open={bulkImportOpen}
+        onOpenChange={setBulkImportOpen}
+        onImported={fetchContacts}
       />
 
       {/* Import Modal */}
