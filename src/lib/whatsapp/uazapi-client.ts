@@ -34,6 +34,14 @@ export interface UazApiSendResult {
 /**
  * Normalise base URL (strip trailing slashes).
  */
+/**
+ * Automatically rewrites legacy / paused Supabase URLs to the active Supabase project URL.
+ */
+export function normalizeMediaUrl(url?: string | null): string {
+  if (!url || typeof url !== 'string') return '';
+  return url.trim().replace(/kzhvkfunvrhjvghhhart\.supabase\.co/gi, 'zwdpytqizoodlcrhryvg.supabase.co');
+}
+
 export function normalizeBaseUrl(url?: string | null): string {
   if (!url || !url.trim()) return 'https://free.uazapi.com';
   return url.trim().replace(/\/+$/, '');
@@ -352,7 +360,7 @@ export async function sendUazApiMedia(
   const formattedNumber = formatUazApiNumber(opts.number);
   const endpoint = `${normalized}/send/media`;
 
-  const mediaUrl = opts.url.trim();
+  const mediaUrl = normalizeMediaUrl(opts.url);
 
   // UazAPI media endpoints accept 'file', 'url', 'media', 'mediaUrl'.
   // Providing all primary & alias keys ensures 100% compatibility across
