@@ -336,8 +336,8 @@ export function QuickReplyTopBar({
         onSelectText(textToSend);
       }
     } else if (qr.kind === "audio") {
-      // 🎙️ Humanized Audio sending: simulate "Gravando áudio..." before delivery
-      onSelectAudio(qr, true);
+      // 🎙️ Guaranteed audio delivery: direct send with waveform bubble & native PTT
+      onSelectAudio(qr, false);
     } else if (qr.kind === "sequence") {
       onSelectSequence(qr);
     } else if (["image", "video", "document", "media"].includes(qr.kind)) {

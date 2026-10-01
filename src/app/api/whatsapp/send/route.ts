@@ -248,7 +248,10 @@ export async function POST(request: Request) {
             presence: 'paused',
           }).catch(() => {});
 
-          // Persist message in database
+          // Persist message in database with expressive audio/media labels
+          const effectiveContentText = content_text || (message_type === 'audio' ? (filename || '[Áudio]') : '[Mensagem]');
+          const summaryText = content_text || (message_type === 'audio' ? '🎙️ [Áudio]' : (message_type === 'image' ? '📷 [Imagem]' : (message_type === 'video' ? '🎥 [Vídeo]' : '[Mensagem]')));
+
           const { data: newMsg } = await admin
             .from('messages')
             .insert({
@@ -256,7 +259,7 @@ export async function POST(request: Request) {
               sender_type: 'agent',
               sender_id: userId,
               content_type: message_type === 'template' ? 'text' : message_type,
-              content_text: content_text || '[Mensagem]',
+              content_text: effectiveContentText,
               media_url: media_url || null,
               message_id: sendRes.messageId,
               status: 'sent',
@@ -268,7 +271,7 @@ export async function POST(request: Request) {
           // Update conversation summary
           await updateConversationWithMessage(admin, {
             conversationId,
-            messageText: content_text || '[Mensagem]',
+            messageText: summaryText,
             messageTimestamp: new Date().toISOString(),
             isInbound: false,
             senderType: 'agent',

@@ -1014,9 +1014,55 @@ export function MessageThread({
     toast.info("Texto inserido no campo de mensagem para revisão.");
   }, []);
 
-  const handleSelectAudioFromTopBar = useCallback((qr: QuickReply, simulateRecording: boolean) => {
-    setExternalAudioAction({ qr, simulate: simulateRecording, id: Date.now() });
-  }, []);
+  const handleSelectAudioFromTopBar = useCallback((qr: QuickReply, simulateRecording = false) => {
+    if (!qr.media_url) {
+      toast.error("Este áudio não possui arquivo de mídia configurado.");
+      return;
+    }
+
+    if (simulateRecording) {
+      setExternalAudioAction({ qr, simulate: true, id: Date.now() });
+      return;
+    }
+
+    // Direct guaranteed delivery: renders immediate optimistic audio bubble in the thread,
+    // while backend handles live WhatsApp recording presence and native PTT delivery!
+    handleSendMedia({
+      kind: "audio",
+      mediaUrl: qr.media_url,
+      path: "",
+      caption: undefined,
+      filename: qr.title,
+    });
+    toast.success(`🎙️ Enviando áudio "${qr.title}"...`);
+  }, [handleSendMedia]);
+
+  // Sync thread whenever an audio recording finishes externally (FloatingAudioRecorder)
+  useEffect(() => {
+    const onAudioDelivered = (e: Event) => {
+      const custom = e as CustomEvent<{
+        conversationId: string;
+        messageId: string;
+        mediaUrl: string;
+        title: string;
+      }>;
+      if (custom.detail?.conversationId === conversation?.id) {
+        const newMsg: Message = {
+          id: custom.detail.messageId,
+          conversation_id: conversation.id,
+          sender_type: "agent",
+          content_type: "audio",
+          content_text: custom.detail.title || "[Áudio]",
+          media_url: custom.detail.mediaUrl,
+          status: "sent",
+          created_at: new Date().toISOString(),
+        };
+        onNewMessage(newMsg);
+      }
+    };
+    window.addEventListener("wacrm:audio-delivered", onAudioDelivered);
+    return () => window.removeEventListener("wacrm:audio-delivered", onAudioDelivered);
+  }, [conversation?.id, onNewMessage]);
 
   const handleSelectMediaFromTopBar = useCallback((qr: QuickReply) => {
     if (!qr.media_url) return;

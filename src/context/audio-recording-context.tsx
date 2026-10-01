@@ -84,6 +84,22 @@ export function AudioRecordingProvider({ children }: { children: React.ReactNode
         throw new Error(err.error || `HTTP ${res.status}`);
       }
 
+      const data = await res.json().catch(() => ({}));
+
+      // Immediately notify open conversation thread so the audio bubble appears right away
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("wacrm:audio-delivered", {
+            detail: {
+              conversationId: rec.conversationId,
+              messageId: data.message_id || `audio-${Date.now()}`,
+              mediaUrl: rec.mediaUrl,
+              title: rec.audioTitle,
+            },
+          })
+        );
+      }
+
       toast.success(`🎙️ Áudio "${rec.audioTitle}" enviado com sucesso para ${rec.recipientName}!`);
     } catch (err: any) {
       console.error("[AudioRecordingProvider] Delivery failed:", err);
