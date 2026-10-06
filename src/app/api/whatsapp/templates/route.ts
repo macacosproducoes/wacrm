@@ -41,6 +41,8 @@ export async function POST(request: Request) {
       variations = [],
       header_content,
       footer_text,
+      header_type: inputHeaderType,
+      header_media_url,
     } = body;
 
     if (!name || typeof name !== 'string' || !name.trim()) {
@@ -79,10 +81,21 @@ export async function POST(request: Request) {
       ? category
       : 'Marketing';
 
-    const headerType =
-      header_content && typeof header_content === 'string' && header_content.trim()
-        ? 'text'
+    const effectiveMediaUrl =
+      typeof header_media_url === 'string' && header_media_url.trim()
+        ? header_media_url.trim()
         : null;
+
+    let headerType: string | null = null;
+    if (effectiveMediaUrl) {
+      headerType = (inputHeaderType === 'video' || inputHeaderType === 'document')
+        ? inputHeaderType
+        : 'image';
+    } else if (header_content && typeof header_content === 'string' && header_content.trim()) {
+      headerType = 'text';
+    } else if (inputHeaderType && ['image', 'video', 'document'].includes(inputHeaderType)) {
+      headerType = inputHeaderType;
+    }
 
     let savedTemplate: MessageTemplate | null = null;
 
@@ -105,6 +118,7 @@ export async function POST(request: Request) {
           variations: cleanedVariations,
           header_type: headerType,
           header_content: header_content?.trim() || null,
+          header_media_url: effectiveMediaUrl,
           footer_text: footer_text?.trim() || null,
           status: 'APPROVED',
           updated_at: new Date().toISOString(),
@@ -165,6 +179,7 @@ export async function POST(request: Request) {
           variations: cleanedVariations,
           header_type: headerType,
           header_content: header_content?.trim() || null,
+          header_media_url: effectiveMediaUrl,
           footer_text: footer_text?.trim() || null,
           status: 'APPROVED',
         })

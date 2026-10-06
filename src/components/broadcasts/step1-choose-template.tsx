@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { MessageTemplate } from '@/types';
 import { Button } from '@/components/ui/button';
@@ -26,7 +26,13 @@ import {
   MessageSquare,
   Eye,
   Info,
+  ImageIcon,
+  Upload,
+  Trash2,
+  Link as LinkIcon,
+  CheckCircle2,
 } from 'lucide-react';
+import { uploadAccountMedia, CHAT_MEDIA_BUCKET } from '@/lib/storage/upload-media';
 import { toast } from 'sonner';
 import { useTranslations } from 'next-intl';
 
@@ -117,6 +123,60 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
   const [varTexts, setVarTexts] = useState<string[]>(['', '', '', '']);
   const [savingTemplate, setSavingTemplate] = useState(false);
 
+  // Template Photo state
+  const [editMediaUrl, setEditMediaUrl] = useState('');
+  const [uploadingTemplatePhoto, setUploadingTemplatePhoto] = useState(false);
+  const [templatePhotoMode, setTemplatePhotoMode] = useState<'upload' | 'url'>('upload');
+  const templateFileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleTemplatePhotoUpload(file: File) {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast.error('Selecione um arquivo de imagem (PNG, JPG, WEBP).');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('A imagem não pode ultrapassar 10MB.');
+      return;
+    }
+
+    setUploadingTemplatePhoto(true);
+    try {
+      let publicUrl: string | null = null;
+      try {
+        const res = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
+        if (res?.publicUrl) publicUrl = res.publicUrl;
+      } catch (clientErr) {
+        console.warn('[TemplatePhoto] Direct upload fallback:', clientErr);
+      }
+
+      if (!publicUrl) {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch('/api/whatsapp/media/upload', {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await res.json();
+        if (data.publicUrl) {
+          publicUrl = data.publicUrl;
+        } else {
+          throw new Error(data.error || 'Falha no upload da foto');
+        }
+      }
+
+      if (publicUrl) {
+        setEditMediaUrl(publicUrl);
+        toast.success('Foto do template anexada com sucesso!');
+      }
+    } catch (err: any) {
+      console.error('[TemplatePhoto] Error:', err);
+      toast.error('Erro no upload: ' + (err.message || 'Tente novamente'));
+    } finally {
+      setUploadingTemplatePhoto(false);
+    }
+  }
+
   // Quick preview tab inside template cards
   const [previewVarMap, setPreviewVarMap] = useState<Record<string, number>>({});
 
@@ -167,6 +227,7 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
       setEditCategory((tpl.category as any) || 'Marketing');
       setEditHeader(tpl.header_content || '');
       setEditFooter(tpl.footer_text || '');
+      setEditMediaUrl(tpl.header_media_url || '');
 
       // Load up to 4 variations (Var 1 is main body, Vars 2, 3, 4 are alternative options)
       const existingVars = Array.isArray(tpl.variations) && tpl.variations.length > 0
@@ -186,6 +247,7 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
       setEditCategory('Marketing');
       setEditHeader('');
       setEditFooter('');
+      setEditMediaUrl('');
       setVarTexts([
         'Olá {{1}}, temos uma ótima novidade para você!',
         'Oi {{1}}, tudo bem? Passando para te trazer uma oportunidade especial!',
@@ -221,6 +283,8 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
         body_text: mainBody,
         variations: cleanedVariations,
         header_content: editHeader.trim() || undefined,
+        header_type: editMediaUrl.trim() ? 'image' : (editHeader.trim() ? 'text' : undefined),
+        header_media_url: editMediaUrl.trim() || undefined,
         footer_text: editFooter.trim() || undefined,
       };
 
@@ -340,6 +404,7 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
 
             const previewIdx = previewVarMap[template.id] ?? 0;
             const currentPreviewText = tplVariations[previewIdx] || template.body_text;
+            const hasPhoto = Boolean(template.header_media_url && template.header_media_url.trim());
 
             return (
               <div
@@ -352,6 +417,19 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
                 }`}
               >
                 <div className="space-y-3">
+                  {hasPhoto && (
+                    <div className="relative w-full aspect-video max-h-36 rounded-lg overflow-hidden bg-black/40 border border-white/10 mb-2">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={template.header_media_url!}
+                        alt={template.name}
+                        className="h-full w-full object-cover"
+                      />
+                      <span className="absolute top-2 right-2 rounded-md bg-black/75 backdrop-blur-sm px-2 py-0.5 text-[10px] font-medium text-emerald-400 flex items-center gap-1 border border-emerald-500/30">
+                        <ImageIcon className="h-3 w-3" /> Foto Anexada
+                      </span>
+                    </div>
+                  )}
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-1.5">
                       <h3 className="text-sm font-semibold text-foreground truncate max-w-[180px]">
@@ -632,7 +710,14 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
                 <Eye className="h-3.5 w-3.5 text-primary" />
                 Prévia da Variação Selecionada no WhatsApp:
               </p>
-              <div className="max-w-sm rounded-lg border border-border bg-emerald-950/20 p-3 text-xs shadow-sm">
+              <div className="max-w-sm rounded-lg border border-border bg-emerald-950/20 overflow-hidden text-xs shadow-sm">
+                {editMediaUrl.trim() && (
+                  <div className="relative w-full aspect-video max-h-36 bg-black/40 border-b border-white/10">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={editMediaUrl.trim()} alt="Preview" className="h-full w-full object-cover" />
+                  </div>
+                )}
+                <div className="p-3">
                 {editHeader.trim() && (
                   <p className="font-bold text-foreground mb-1 text-xs">{editHeader}</p>
                 )}
@@ -647,6 +732,7 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
                   </p>
                 )}
                 <span className="text-[9px] text-muted-foreground/60 block text-right mt-1">16:45 ✓✓</span>
+                </div>
               </div>
             </div>
           </div>

@@ -158,11 +158,11 @@ export function Step3Personalize({
 
   // Seed with template header_media_url if provided
   useEffect(() => {
-    if (mediaHeaderType && !headerMediaUrl && template.header_media_url) {
+    if (!headerMediaUrl && template.header_media_url) {
       onHeaderMediaUrlChange(template.header_media_url);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaHeaderType, template.header_media_url]);
+  }, [template.header_media_url]);
 
   const headerMediaError = useMemo<'missing' | 'invalid' | null>(() => {
     // If the template strictly requires media (Meta Cloud API template)
