@@ -5,11 +5,11 @@ import { createClient } from '@/lib/supabase/client';
 import { parseBroadcastCsv } from '@/lib/broadcast-csv';
 import { CustomField, Tag } from '@/types';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import {
   Users,
   Tags,
-  Filter,
   Upload,
   FileText,
   Loader2,
@@ -17,12 +17,11 @@ import {
   ArrowLeft,
   X,
   Check,
-  AlertTriangle,
-  Sparkles,
-  ShieldCheck,
-  Flame,
+  Search,
+  Filter,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { useAuth } from '@/hooks/use-auth';
 
 type AudienceType = 'all' | 'tags' | 'custom_field' | 'csv';
 type CustomFieldOperator = 'is' | 'is_not' | 'contains';
@@ -48,8 +47,6 @@ interface Step2Props {
   onBack: () => void;
 }
 
-const DISPARO_TAG_NAME = 'DISPAROAGORAVAI';
-
 export function Step2SelectAudience({
   audience,
   onUpdate,
@@ -57,69 +54,77 @@ export function Step2SelectAudience({
   onBack,
 }: Step2Props) {
   const t = useTranslations('Broadcasts.wizard');
+  const { accountId, account } = useAuth();
 
   const [tags, setTags] = useState<Tag[]>([]);
   const [tagCounts, setTagCounts] = useState<Record<string, number>>({});
-  const [customFields, setCustomFields] = useState<CustomField[]>([]);
+  const [totalAccountContacts, setTotalAccountContacts] = useState<number>(0);
   const [loadingTags, setLoadingTags] = useState(false);
-  const [loadingFields, setLoadingFields] = useState(false);
+  const [tagSearch, setTagSearch] = useState('');
   const [estimatedCount, setEstimatedCount] = useState<number | null>(null);
   const [loadingCount, setLoadingCount] = useState(false);
   const [pickedCsvName, setPickedCsvName] = useState<string | null>(null);
-  const [showOtherOptions, setShowOtherOptions] = useState(false);
   const [showExcludeList, setShowExcludeList] = useState(false);
 
   const csvInputRef = useRef<HTMLInputElement>(null);
   const csvCount = audience.csvContacts?.length ?? 0;
   const csvFileName = csvCount > 0 ? pickedCsvName : null;
 
-  // Find DISPAROAGORAVAI tag
-  const disparoTag = useMemo(() => {
-    return tags.find(
-      (t) => t.name.toUpperCase() === DISPARO_TAG_NAME || t.name.toLowerCase().includes('disparo')
-    );
-  }, [tags]);
-
-  const disparoTagCount = disparoTag ? (tagCounts[disparoTag.id] ?? 705) : 705;
-
-  // Is strictly configured to DISPAROAGORAVAI?
-  const isExclusiveDisparoSelected = useMemo(() => {
-    if (audience.type !== 'tags' || !audience.tagIds || audience.tagIds.length === 0) {
-      return false;
-    }
-    if (disparoTag) {
-      return audience.tagIds.length === 1 && audience.tagIds[0] === disparoTag.id;
-    }
-    return false;
-  }, [audience.type, audience.tagIds, disparoTag]);
-
-  // Load tags and lead counts
+  // Load tags and counts for active account
   useEffect(() => {
     async function fetchTagsAndCounts() {
       setLoadingTags(true);
       try {
         const supabase = createClient();
-        const { data: tagsData } = await supabase.from('tags').select('*').order('name');
+
+        // 1. Fetch tags for this account
+        let query = supabase.from('tags').select('*').order('name');
+        if (accountId) {
+          query = query.eq('account_id', accountId);
+        }
+        const { data: tagsData } = await query;
         const loadedTags = tagsData ?? [];
         setTags(loadedTags);
 
-        const { data: ctData } = await supabase.from('contact_tags').select('tag_id');
-        if (ctData) {
+        // 2. Fetch total contacts for this account
+        let countQuery = supabase.from('contacts').select('*', { count: 'exact', head: true });
+        if (accountId) {
+          countQuery = countQuery.eq('account_id', accountId);
+        }
+        const { count: totalContacts } = await countQuery;
+        setTotalAccountContacts(totalContacts ?? 0);
+
+        // 3. Count contacts per tag
+        if (loadedTags.length > 0) {
           const counts: Record<string, number> = {};
-          for (const row of ctData) {
-            counts[row.tag_id] = (counts[row.tag_id] || 0) + 1;
+          const CHUNK = 50;
+          for (let i = 0; i < loadedTags.length; i += CHUNK) {
+            const chunk = loadedTags.slice(i, i + CHUNK);
+            const { data: ctData } = await supabase
+              .from('contact_tags')
+              .select('tag_id')
+              .in('tag_id', chunk.map((t) => t.id));
+
+            for (const row of ctData ?? []) {
+              counts[row.tag_id] = (counts[row.tag_id] || 0) + 1;
+            }
           }
           setTagCounts(counts);
-        }
 
-        // Auto-select DISPAROAGORAVAI tag if found and not yet configured
-        const target = loadedTags.find((t) => t.name.toUpperCase() === DISPARO_TAG_NAME);
-        if (target && (!audience.tagIds || audience.tagIds.length === 0 || audience.type === 'all')) {
-          onUpdate({
-            type: 'tags',
-            tagIds: [target.id],
-            excludeTagIds: [],
-          });
+          // Auto-select 'Leads' or 'Lead' tag if no tag is selected yet
+          if (!audience.tagIds || audience.tagIds.length === 0) {
+            const defaultLeadTag = loadedTags.find(
+              (t) => t.name.toLowerCase() === 'leads' || t.name.toLowerCase() === 'lead'
+            );
+            if (defaultLeadTag) {
+              onUpdate({
+                ...audience,
+                type: 'tags',
+                tagIds: [defaultLeadTag.id],
+                excludeTagIds: audience.excludeTagIds ?? [],
+              });
+            }
+          }
         }
       } catch (err) {
         console.error('Error fetching tags:', err);
@@ -127,8 +132,9 @@ export function Step2SelectAudience({
         setLoadingTags(false);
       }
     }
+
     fetchTagsAndCounts();
-  }, []);
+  }, [accountId]);
 
   // Calculate estimated reach
   const fetchEstimatedCount = useCallback(async () => {
@@ -141,9 +147,9 @@ export function Step2SelectAudience({
           .from('contact_tags')
           .select('contact_id')
           .in('tag_id', audience.tagIds);
-        
+
         const uniqueContacts = new Set((data ?? []).map((r) => r.contact_id));
-        
+
         // Remove excludes if any
         if (audience.excludeTagIds && audience.excludeTagIds.length > 0) {
           const { data: excludeRows } = await supabase
@@ -156,31 +162,23 @@ export function Step2SelectAudience({
         }
         setEstimatedCount(uniqueContacts.size);
       } else if (audience.type === 'all') {
-        const { count } = await supabase.from('contacts').select('*', { count: 'exact', head: true });
+        let q = supabase.from('contacts').select('*', { count: 'exact', head: true });
+        if (accountId) q = q.eq('account_id', accountId);
+        const { count } = await q;
         setEstimatedCount(count ?? 0);
       } else if (audience.type === 'csv' && audience.csvContacts) {
         setEstimatedCount(audience.csvContacts.length);
       } else {
-        setEstimatedCount(null);
+        setEstimatedCount(0);
       }
     } finally {
       setLoadingCount(false);
     }
-  }, [audience.type, audience.tagIds, audience.excludeTagIds, audience.csvContacts]);
+  }, [audience.type, audience.tagIds, audience.excludeTagIds, audience.csvContacts, accountId]);
 
   useEffect(() => {
     fetchEstimatedCount();
   }, [fetchEstimatedCount]);
-
-  function selectExclusiveDisparoTag() {
-    if (!disparoTag) return;
-    onUpdate({
-      type: 'tags',
-      tagIds: [disparoTag.id],
-      excludeTagIds: [],
-    });
-    toast.success('Público travado exclusivamente na tag DISPAROAGORAVAI (705 leads)!');
-  }
 
   function toggleTag(tagId: string) {
     const current = audience.tagIds ?? [];
@@ -213,6 +211,35 @@ export function Step2SelectAudience({
     });
   }
 
+  async function handleCsvUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const parsed = parseBroadcastCsv(text);
+      if (!parsed.ok || parsed.contacts.length === 0) {
+        toast.error(!parsed.ok ? parsed.error : 'O arquivo CSV não contém contatos válidos.');
+        return;
+      }
+      setPickedCsvName(file.name);
+      onUpdate({
+        ...audience,
+        type: 'csv',
+        csvContacts: parsed.contacts,
+      });
+      toast.success(parsed.contacts.length + ' contatos carregados do CSV!');
+    } catch (err: any) {
+      toast.error('Erro ao ler CSV: ' + (err.message || 'Formato inválido'));
+    }
+  }
+
+  const filteredTags = useMemo(() => {
+    if (!tagSearch.trim()) return tags;
+    const term = tagSearch.toLowerCase();
+    return tags.filter((t) => t.name.toLowerCase().includes(term));
+  }, [tags, tagSearch]);
+
   const isValid =
     (audience.type === 'tags' && audience.tagIds && audience.tagIds.length > 0) ||
     audience.type === 'all' ||
@@ -220,219 +247,286 @@ export function Step2SelectAudience({
 
   return (
     <div className="space-y-6">
+      {/* Title Header */}
       <div>
         <h2 className="text-lg font-semibold text-foreground">Seleção do Público-Alvo</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Defina exatamente quem receberá esta transmissão do WhatsApp.
+          {account?.name ? (
+            <span>Conta ativa: <strong className="text-primary">{account.name}</strong>. Defina quem receberá este disparo.</span>
+          ) : (
+            'Defina exatamente quem receberá esta transmissão do WhatsApp.'
+          )}
         </p>
       </div>
 
-      {/* ── 1. OPÇÃO DEDICADA: DISPARO SOMENTE PARA DISPAROAGORAVAI ── */}
-      <div
-        onClick={selectExclusiveDisparoTag}
-        className={`relative cursor-pointer overflow-hidden rounded-2xl border-2 p-5 transition-all shadow-md ${
-          isExclusiveDisparoSelected
-            ? 'border-emerald-500 bg-gradient-to-br from-emerald-500/15 via-emerald-500/5 to-card ring-2 ring-emerald-500/40'
-            : 'border-emerald-500/40 bg-card hover:border-emerald-500/70 hover:bg-emerald-500/5'
-        }`}
-      >
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div className="flex items-start gap-3.5">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-emerald-500 text-white shadow-md">
-              <Flame className="h-6 w-6 animate-pulse" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-base font-bold text-foreground">
-                  DISPARO SOMENTE PARA A TAG DISPAROAGORAVAI
-                </h3>
-                <span className="rounded-full bg-emerald-500/20 border border-emerald-500/40 px-2.5 py-0.5 text-[11px] font-extrabold uppercase tracking-wider text-emerald-400">
-                  Exclusivo
-                </span>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1 max-w-xl leading-relaxed">
-                Dispara <strong>única e exclusivamente para os {disparoTagCount} leads novos</strong> da etiqueta{' '}
-                <strong className="text-emerald-400">DISPAROAGORAVAI</strong>.
-                Todo o restante da sua base de contatos (300+ contatos antigos) fica 100% blindado e de fora do envio.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3 self-end sm:self-center">
-            <div className="text-right">
-              <p className="text-2xl font-black text-emerald-400 tracking-tight">
-                {disparoTagCount}
-              </p>
-              <p className="text-[11px] font-medium text-muted-foreground uppercase">
-                Leads Prontos
-              </p>
-            </div>
-            <div
-              className={`flex h-7 w-7 items-center justify-center rounded-full border-2 transition-all ${
-                isExclusiveDisparoSelected
-                  ? 'border-emerald-500 bg-emerald-500 text-white shadow'
-                  : 'border-muted-foreground/30'
-              }`}
-            >
-              {isExclusiveDisparoSelected && <Check className="h-4 w-4 stroke-[3]" />}
-            </div>
-          </div>
-        </div>
-
-        {isExclusiveDisparoSelected && (
-          <div className="mt-4 pt-3 border-t border-emerald-500/20 flex items-center gap-2 text-xs text-emerald-300 font-medium">
-            <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0" />
-            <span>
-              Filtro ativo e confirmado: alcance limitado exatamente aos <strong>{disparoTagCount} leads de DISPAROAGORAVAI</strong>.
-            </span>
-          </div>
-        )}
-      </div>
-
-      {/* ── BOTÃO PARA REVELAR OUTRAS OPÇÕES SE O USUÁRIO DESEJAR ── */}
-      <div className="pt-1">
+      {/* 3 Audience Type Option Cards */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {/* Option 1: Tags */}
         <button
           type="button"
-          onClick={() => setShowOtherOptions(!showOtherOptions)}
-          className="text-xs font-semibold text-muted-foreground hover:text-foreground flex items-center gap-1.5 transition-colors"
+          onClick={() => onUpdate({ ...audience, type: 'tags' })}
+          className={`flex items-start gap-3 rounded-xl border p-4 text-left transition-all ${
+            audience.type === 'tags'
+              ? 'border-primary bg-primary/10 ring-2 ring-primary/40 shadow-sm'
+              : 'border-border bg-card/60 hover:border-border hover:bg-card'
+          }`}
         >
-          <span>{showOtherOptions ? '▲ Recolher outras opções de público' : '⚙️ Ver outras opções de público (Manual, Toda Base, CSV)'}</span>
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary">
+            <Tags className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-foreground">Por Etiquetas (Tags)</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Filtrar por grupos como <strong>Leads</strong> ou clientes específicos.
+            </p>
+          </div>
+        </button>
+
+        {/* Option 2: All Contacts */}
+        <button
+          type="button"
+          onClick={() => onUpdate({ ...audience, type: 'all', tagIds: undefined })}
+          className={`flex items-start gap-3 rounded-xl border p-4 text-left transition-all ${
+            audience.type === 'all'
+              ? 'border-primary bg-primary/10 ring-2 ring-primary/40 shadow-sm'
+              : 'border-border bg-card/60 hover:border-border hover:bg-card'
+          }`}
+        >
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-500/15 text-blue-400">
+            <Users className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-foreground">
+              Toda a Base ({totalAccountContacts})
+            </p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Disparar para todos os contatos cadastrados nesta conta.
+            </p>
+          </div>
+        </button>
+
+        {/* Option 3: CSV */}
+        <button
+          type="button"
+          onClick={() => onUpdate({ ...audience, type: 'csv', tagIds: undefined })}
+          className={`flex items-start gap-3 rounded-xl border p-4 text-left transition-all ${
+            audience.type === 'csv'
+              ? 'border-primary bg-primary/10 ring-2 ring-primary/40 shadow-sm'
+              : 'border-border bg-card/60 hover:border-border hover:bg-card'
+          }`}
+        >
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-purple-500/15 text-purple-400">
+            <Upload className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-foreground">Importar CSV</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {csvCount > 0 ? `${csvCount} contatos carregados` : 'Carregar planilha externa com telefones.'}
+            </p>
+          </div>
         </button>
       </div>
 
-      {/* ── SEÇÃO EXPANDÍVEL COM OUTRAS OPÇÕES ── */}
-      {showOtherOptions && (
-        <div className="space-y-4 pt-2 border-t border-border/80">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <button
-              type="button"
-              onClick={() => onUpdate({ ...audience, type: 'tags' })}
-              className={`flex items-start gap-3 rounded-xl border p-3.5 text-left text-xs transition-all ${
-                audience.type === 'tags' && !isExclusiveDisparoSelected
-                  ? 'border-primary bg-primary/10 ring-1 ring-primary/40'
-                  : 'border-border bg-card/40 hover:bg-card'
-              }`}
-            >
-              <Tags className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-              <div>
-                <p className="font-semibold text-foreground">Múltiplas Etiquetas</p>
-                <p className="text-muted-foreground text-[11px] mt-0.5">Combinar mais de uma tag de envio.</p>
-              </div>
-            </button>
+      {/* --- TAGS AUDIENCE SECTION --- */}
+      {audience.type === 'tags' && (
+        <div className="rounded-xl border border-border bg-card/80 p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <Tags className="h-4 w-4 text-primary" />
+                Selecione as Etiquetas para o Disparo
+              </h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Clique nas tags para incluir no alcance da campanha.
+              </p>
+            </div>
 
-            <button
-              type="button"
-              onClick={() => onUpdate({ ...audience, type: 'all', tagIds: undefined })}
-              className={`flex items-start gap-3 rounded-xl border p-3.5 text-left text-xs transition-all ${
-                audience.type === 'all'
-                  ? 'border-amber-500/50 bg-amber-500/10 ring-1 ring-amber-500/40'
-                  : 'border-border bg-card/40 hover:bg-card'
-              }`}
-            >
-              <Users className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-semibold text-foreground">Todos os Contatos (1.024)</p>
-                <p className="text-muted-foreground text-[11px] mt-0.5">Disparar para a base completa do CRM.</p>
+            {tags.length > 5 && (
+              <div className="relative w-full sm:w-56">
+                <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  value={tagSearch}
+                  onChange={(e) => setTagSearch(e.target.value)}
+                  placeholder="Buscar etiqueta..."
+                  className="h-8 pl-8 text-xs border-border bg-muted/40"
+                />
               </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => onUpdate({ ...audience, type: 'csv', tagIds: undefined })}
-              className={`flex items-start gap-3 rounded-xl border p-3.5 text-left text-xs transition-all ${
-                audience.type === 'csv'
-                  ? 'border-primary bg-primary/10 ring-1 ring-primary/40'
-                  : 'border-border bg-card/40 hover:bg-card'
-              }`}
-            >
-              <Upload className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-              <div>
-                <p className="font-semibold text-foreground">Upload de Planilha CSV</p>
-                <p className="text-muted-foreground text-[11px] mt-0.5">Carregar arquivo externo com telefones.</p>
-              </div>
-            </button>
+            )}
           </div>
 
-          {/* Warning when ALL is clicked in other options */}
-          {audience.type === 'all' && (
-            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs text-amber-200 flex items-start gap-2.5">
-              <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
-              <div>
-                <strong className="text-amber-300">Atenção Máxima: Toda a base selecionada (1.024 contatos)!</strong>
-                <p className="mt-0.5 text-amber-200/90 leading-relaxed">
-                  Para não disparar para contatos antigos, clique no card verde do topo <strong>"DISPARO SOMENTE PARA A TAG DISPAROAGORAVAI"</strong>.
-                </p>
-              </div>
+          {loadingTags ? (
+            <div className="flex items-center justify-center py-8 text-muted-foreground text-xs gap-2">
+              <Loader2 className="h-4 w-4 animate-spin text-primary" />
+              Carregando etiquetas da conta...
+            </div>
+          ) : filteredTags.length === 0 ? (
+            <div className="text-center py-6 text-xs text-muted-foreground border border-dashed border-border rounded-lg">
+              Nenhuma etiqueta encontrada para esta conta.
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2.5">
+              {filteredTags.map((tag) => {
+                const isSelected = audience.tagIds?.includes(tag.id);
+                const count = tagCounts[tag.id] ?? 0;
+                return (
+                  <button
+                    key={tag.id}
+                    type="button"
+                    onClick={() => toggleTag(tag.id)}
+                    className={`inline-flex items-center gap-2 rounded-xl border px-3.5 py-2 text-xs font-medium transition-all shadow-2xs ${
+                      isSelected
+                        ? 'border-primary bg-primary/20 text-primary font-bold ring-1 ring-primary/50'
+                        : 'border-border bg-muted/40 text-foreground hover:border-border hover:bg-muted/70'
+                    }`}
+                  >
+                    <span
+                      className="h-2.5 w-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: tag.color || '#10B981' }}
+                    />
+                    <span>{tag.name}</span>
+                    <span className={`text-[11px] px-1.5 py-0.2 rounded-full font-mono ${
+                      isSelected ? 'bg-primary/30 text-primary' : 'bg-muted text-muted-foreground'
+                    }`}>{count}</span>
+                    {isSelected && <Check className="h-3.5 w-3.5 stroke-[2.5]" />}
+                  </button>
+                );
+              })}
             </div>
           )}
 
-          {/* TAGS LIST IF MULTIPLE TAGS CHOSEN */}
-          {audience.type === 'tags' && !isExclusiveDisparoSelected && (
-            <div className="rounded-xl border border-border bg-card/50 p-4 space-y-2">
-              <p className="text-xs font-semibold text-foreground">Marque as etiquetas desejadas:</p>
-              <div className="flex flex-wrap gap-2">
-                {tags.map((tag) => {
-                  const isSelected = audience.tagIds?.includes(tag.id);
-                  const count = tagCounts[tag.id] ?? 0;
-                  return (
-                    <button
-                      key={tag.id}
-                      type="button"
-                      onClick={() => toggleTag(tag.id)}
-                      className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all ${
-                        isSelected
-                          ? 'border-primary bg-primary/20 text-primary font-bold'
-                          : 'border-border bg-muted/60 text-muted-foreground hover:border-border'
-                      }`}
-                    >
-                      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: tag.color }} />
-                      <span>{tag.name}</span>
-                      <span className="text-[10px] opacity-70">({count})</span>
-                      {isSelected && <Check className="h-3 w-3" />}
-                    </button>
-                  );
-                })}
-              </div>
+          {/* Exclude Tags Accordion */}
+          {tags.length > 1 && (
+            <div className="pt-2 border-t border-border/60">
+              <button
+                type="button"
+                onClick={() => setShowExcludeList(!showExcludeList)}
+                className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1.5 transition-colors"
+              >
+                <Filter className="h-3.5 w-3.5" />
+                <span>
+                  {showExcludeList
+                    ? 'Ocultar exclusão de etiquetas'
+                    : 'Excluir contatos de alguma etiqueta (Opcional)'}
+                </span>
+                {(audience.excludeTagIds?.length ?? 0) > 0 && (
+                  <span className="ml-1 rounded-full bg-red-500/20 text-red-400 px-1.5 py-0.2 text-[10px] font-bold">
+                    {audience.excludeTagIds?.length} excluída(s)
+                  </span>
+                )}
+              </button>
+
+              {showExcludeList && (
+                <div className="mt-3 p-3 rounded-lg border border-red-500/20 bg-red-950/10 space-y-2">
+                  <p className="text-[11px] text-red-300 font-medium">
+                    Contatos marcados com as etiquetas abaixo serão ignorados no disparo:
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {tags.map((tag) => {
+                      const isExcluded = audience.excludeTagIds?.includes(tag.id);
+                      return (
+                        <button
+                          key={tag.id}
+                          type="button"
+                          onClick={() => toggleExcludeTag(tag.id)}
+                          className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition-all ${
+                            isExcluded
+                              ? 'border-red-500 bg-red-500/20 text-red-300 font-bold'
+                              : 'border-border bg-card/60 text-muted-foreground hover:text-foreground'
+                          }`}
+                        >
+                          <span>{tag.name}</span>
+                          {isExcluded && <X className="h-3 w-3 text-red-400" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
       )}
 
-      {/* ── RESUMO CONFIRMADO DO PÚBLICO (ALCANCE ESTIMADO) ── */}
-      <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div className="space-y-1">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+      {/* --- CSV AUDIENCE SECTION --- */}
+      {audience.type === 'csv' && (
+        <div className="rounded-xl border border-border bg-card/80 p-5 space-y-3">
+          <input
+            ref={csvInputRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            onChange={handleCsvUpload}
+          />
+          {csvCount > 0 ? (
+            <div className="flex items-center justify-between rounded-lg border border-purple-500/30 bg-purple-950/20 p-4">
+              <div className="flex items-center gap-3">
+                <FileText className="h-6 w-6 text-purple-400" />
+                <div>
+                  <p className="text-sm font-semibold text-foreground">{csvFileName}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {csvCount} contatos válidos prontos para o disparo
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => csvInputRef.current?.click()}
+                className="border-border text-xs"
+              >
+                Trocar Arquivo
+              </Button>
+            </div>
+          ) : (
+            <div
+              onClick={() => csvInputRef.current?.click()}
+              className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-border p-6 text-center cursor-pointer hover:border-primary/50 hover:bg-muted/30 transition-all"
+            >
+              <Upload className="h-8 w-8 text-primary mb-2" />
+              <p className="text-sm font-semibold text-foreground">
+                Clique para selecionar sua planilha CSV
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                A planilha deve conter colunas como "telefone" / "phone" e "nome" / "name".
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* --- ESTIMATED REACH CONFIRMATION BAR --- */}
+      <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold text-emerald-400 uppercase tracking-wider">
             Alcance Estimado Confirmado
           </p>
-          <div className="flex items-center gap-2 text-foreground font-black text-xl">
-            <Users className="h-5 w-5 text-primary" />
+          <div className="flex items-center gap-2 text-foreground font-black text-xl mt-0.5">
+            <Users className="h-5 w-5 text-emerald-400" />
             {loadingCount ? (
               <span className="text-sm font-normal text-muted-foreground flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                <Loader2 className="h-4 w-4 animate-spin text-emerald-400" />
                 Calculando leads...
               </span>
             ) : (
-              <span className="text-primary font-black">
-                {estimatedCount !== null ? `${estimatedCount.toLocaleString()} contatos` : 'Nenhum contato'}
+              <span className="text-emerald-400 font-extrabold text-2xl">
+                {estimatedCount !== null ? `${estimatedCount.toLocaleString()} contatos` : '0 contatos'}
               </span>
             )}
           </div>
         </div>
 
-        {isExclusiveDisparoSelected && (
-          <div className="flex items-center gap-2 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-3 py-1.5 text-xs font-bold text-emerald-300">
-            <Check className="h-4 w-4" />
-            <span>Exclusivo para {disparoTagCount} Leads de DISPAROAGORAVAI</span>
-          </div>
-        )}
+        <p className="text-xs text-muted-foreground max-w-xs leading-relaxed">
+          {audience.type === 'tags'
+            ? 'Apenas os contatos com as etiquetas selecionadas receberão a mensagem.'
+            : audience.type === 'all'
+            ? 'Todos os contatos da conta ativa serão incluídos.'
+            : 'Apenas os contatos da lista CSV carregada serão incluídos.'}
+        </p>
       </div>
 
+      {/* Navigation Footer */}
       <div className="flex items-center justify-between border-t border-border pt-4">
-        <Button
-          variant="outline"
-          onClick={onBack}
-          className="border-border text-muted-foreground"
-        >
+        <Button variant="outline" onClick={onBack} className="border-border text-muted-foreground">
           <ArrowLeft className="h-4 w-4 mr-1.5" />
           {t('back')}
         </Button>

@@ -170,7 +170,9 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
     let contacts: Contact[] = [];
 
     if (audience.type === 'all') {
-      const { data, error } = await supabase.from('contacts').select('*');
+      let q = supabase.from('contacts').select('*');
+      if (accountId) q = q.eq('account_id', accountId);
+      const { data, error } = await q;
       if (error) throw new Error(`Failed to fetch contacts: ${error.message}`);
       contacts = data ?? [];
     } else if (
@@ -195,10 +197,12 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
         const CHUNK_SIZE = 100;
         for (let i = 0; i < uniqueContactIds.length; i += CHUNK_SIZE) {
           const chunk = uniqueContactIds.slice(i, i + CHUNK_SIZE);
-          const { data, error } = await supabase
+          let q = supabase
             .from('contacts')
             .select('*')
             .in('id', chunk);
+          if (accountId) q = q.eq('account_id', accountId);
+          const { data, error } = await q;
 
           if (error) throw new Error(`Failed to fetch contacts: ${error.message}`);
           if (data) contacts.push(...data);
