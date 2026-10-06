@@ -198,9 +198,7 @@ export default function NewBroadcastPage() {
               selectedTemplate={template}
               onSelect={(tpl) => {
                 setTemplate(tpl);
-                if (tpl?.header_media_url) {
-                  setHeaderMediaUrl(tpl.header_media_url);
-                }
+                setHeaderMediaUrl(tpl?.header_media_url || '');
               }}
               onNext={() => setCurrentStep(1)}
               onBack={() => router.push('/broadcasts')}

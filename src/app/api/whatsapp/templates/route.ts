@@ -151,6 +151,7 @@ export async function POST(request: Request) {
             variations: cleanedVariations,
             header_type: headerType,
             header_content: header_content?.trim() || null,
+            header_media_url: effectiveMediaUrl,
             footer_text: footer_text?.trim() || null,
             status: 'APPROVED',
             updated_at: new Date().toISOString(),

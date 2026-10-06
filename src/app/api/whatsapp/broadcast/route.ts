@@ -364,7 +364,11 @@ export async function POST(request: Request) {
             templateName: template_name,
             language: resolvedTemplate.language,
             template: templateRow ?? undefined,
-            messageParams: recipient.messageParams,
+            messageParams: recipient.messageParams ?? (
+              (globalHeaderMediaUrl || templateRow?.header_media_url)
+                ? { headerMediaUrl: globalHeaderMediaUrl || templateRow?.header_media_url }
+                : undefined
+            ),
             params: recipient.params ?? [],
           })
           sentMessageId = result.messageId
