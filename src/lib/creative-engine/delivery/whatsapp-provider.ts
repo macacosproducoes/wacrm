@@ -114,20 +114,6 @@ export class WhatsAppDeliveryProvider implements DeliveryProvider {
         });
         providerMessageId = sendRes.messageId;
 
-        // UazAPI media endpoint may omit caption rendering on some WhatsApp builds.
-        // Send the companion confirmation text message so the customer always receives the full order breakdown.
-        if (caption && caption.trim().length > 0) {
-          try {
-            const textRes = await sendUazApiText(baseUrl, token, {
-              number: formattedPhone,
-              text: caption.trim(),
-            });
-            console.log(`[Creative Engine:WhatsApp] Companion confirmation text message delivered: ${textRes.messageId}`);
-          } catch (textErr) {
-            console.warn(`[Creative Engine:WhatsApp] Failed to send companion caption text:`, textErr);
-          }
-        }
-
         if (traceId) {
           TraceLogger.log(traceId, 'T13', 'UAZAPI SEND ACCEPTED', {
             messageId: providerMessageId,
@@ -177,18 +163,6 @@ export class WhatsAppDeliveryProvider implements DeliveryProvider {
           status: 'sent',
           created_at: new Date().toISOString(),
         });
-
-        if (caption && caption.trim().length > 0) {
-          await supabase.from('messages').insert({
-            conversation_id: conversationId,
-            sender_type: 'agent',
-            content_type: 'text',
-            content_text: caption.trim(),
-            message_id: `msg_txt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-            status: 'sent',
-            created_at: new Date(Date.now() + 100).toISOString(),
-          });
-        }
 
         await updateConversationWithMessage(supabase, {
           conversationId,

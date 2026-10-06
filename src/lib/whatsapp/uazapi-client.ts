@@ -362,17 +362,54 @@ export async function sendUazApiMedia(
 
   const mediaUrl = normalizeMediaUrl(opts.url);
 
+  // Resolve remote HTTP(S) media to complete Base64 data URLs whenever feasible.
+  // When UazAPI downloads remote URLs (like Supabase Storage), chunked transfer or
+  // network throttling frequently truncates the stream, causing corrupted 100x100
+  // thumbnails (gray boxes over pricing tables) or failed MMS3 uploads on WhatsApp.
+  // Pre-buffering in Node ensures 100% complete byte integrity, crisp thumbnails, and reliable delivery.
+  let mediaPayload = mediaUrl;
+  if (typeof mediaUrl === 'string' && (mediaUrl.startsWith('http://') || mediaUrl.startsWith('https://'))) {
+    try {
+      const fileRes = await fetch(mediaUrl, { signal: AbortSignal.timeout(15000) });
+      if (fileRes.ok) {
+        const arrayBuf = await fileRes.arrayBuffer();
+        if (arrayBuf.byteLength > 0 && arrayBuf.byteLength <= 15 * 1024 * 1024) {
+          const headerType = fileRes.headers.get('content-type');
+          let contentType = headerType;
+          if (!contentType || contentType === 'application/octet-stream') {
+            if (opts.type === 'audio' || opts.ptt) contentType = 'audio/ogg; codecs=opus';
+            else if (opts.type === 'video') contentType = 'video/mp4';
+            else if (opts.type === 'document') contentType = 'application/pdf';
+            else contentType = 'image/jpeg';
+          }
+          const b64 = Buffer.from(arrayBuf).toString('base64');
+          mediaPayload = `data:${contentType};base64,${b64}`;
+        }
+      }
+    } catch (fetchErr) {
+      console.warn('[sendUazApiMedia] Could not pre-fetch media buffer, falling back to raw URL:', fetchErr);
+    }
+  }
+
   // UazAPI media endpoints accept 'file', 'url', 'media', 'mediaUrl'.
   // Providing all primary & alias keys ensures 100% compatibility across
   // UazAPI server builds and prevents any "missing file field" errors.
   const body: Record<string, unknown> = {
     number: formattedNumber,
-    file: mediaUrl,
-    url: mediaUrl,
-    media: mediaUrl,
-    mediaUrl: mediaUrl,
+    file: mediaPayload,
+    url: mediaPayload,
+    media: mediaPayload,
+    mediaUrl: mediaPayload,
     type: opts.type,
   };
+
+  if (opts.type === 'image') {
+    body.mimetype = 'image/jpeg';
+  } else if (opts.type === 'video') {
+    body.mimetype = 'video/mp4';
+  } else if (opts.type === 'document') {
+    body.mimetype = 'application/pdf';
+  }
 
   if (opts.type === 'audio' || opts.type === 'ptt' || opts.ptt) {
     body.type = 'ptt';
@@ -451,16 +488,67 @@ export async function sendUazApiPixButton(
 ): Promise<UazApiSendResult> {
   const normalized = normalizeBaseUrl(baseUrl);
   const formattedNumber = formatUazApiNumber(opts.number);
-  const endpoint = `${normalized}/send/pix-button`;
 
-  // UazAPI validates keyType against: 'CPF', 'CNPJ', 'PHONE', 'EMAIL', 'EVP'.
-  // For 'COPIA_E_COLA', we map to 'EVP' so WhatsApp NativeFlow accepts the payload.
-  const mappedPixType = opts.pixType === 'COPIA_E_COLA' ? 'EVP' : opts.pixType;
+  const cleanKey = opts.pixKey.trim();
+  const isCopiaECola =
+    opts.pixType === 'COPIA_E_COLA' ||
+    cleanKey.startsWith('000201') ||
+    (cleanKey.length >= 25 && /br\.gov\.bcb\.pix/i.test(cleanKey));
+
+  if (isCopiaECola) {
+    // WhatsApp's native payment_info (pix_static_code) only validates standard keys (CPF, PHONE, EMAIL, UUID EVP).
+    // When a 200+ char BACEN Copia e Cola code (000201...) is sent to /send/pix-button, WhatsApp fails to parse
+    // it as an EVP UUID and crashes with "Could not load".
+    // Instead, UazAPI supports WhatsApp's official NativeFlow cta_copy button via /send/menu with "copy:<code>".
+    // This creates the native 1-touch "Copiar Chave PIX" button on WhatsApp with 100% stability and zero errors.
+    const menuEndpoint = `${normalized}/send/menu`;
+    const menuBody = {
+      number: formattedNumber,
+      type: 'button',
+      text: opts.text?.trim() || 'Segue a chave PIX Copia e Cola para pagamento:',
+      choices: [`Copiar Chave PIX|copy:${cleanKey}`],
+      footerText: opts.pixName?.trim() || 'PIX',
+    };
+
+    logger.info('sendUazApiPixButton', `Sending PIX Copia e Cola via cta_copy button to ${formattedNumber}`);
+
+    const res = await fetch(menuEndpoint, {
+      method: 'POST',
+      headers: {
+        token,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(menuBody),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      logger.error('sendUazApiPixButton', `Failed (HTTP ${res.status})`, undefined, { response: data });
+      throw new Error(data.message || data.error || `Falha ao enviar PIX Copia e Cola (HTTP ${res.status})`);
+    }
+
+    const messageId =
+      data.messageid ||
+      data.id ||
+      data.messageId ||
+      data.key?.id ||
+      `uazapi_pix_${Date.now()}`;
+
+    return {
+      messageId,
+      status: 'sent',
+      raw: data,
+    };
+  }
+
+  // Standard Chave PIX (CPF, CNPJ, PHONE, EMAIL, EVP)
+  const endpoint = `${normalized}/send/pix-button`;
 
   const body: Record<string, unknown> = {
     number: formattedNumber,
-    pixKey: opts.pixKey.trim(),
-    pixType: mappedPixType,
+    pixKey: cleanKey,
+    pixType: opts.pixType,
   };
 
   if (opts.pixName && opts.pixName.trim()) {

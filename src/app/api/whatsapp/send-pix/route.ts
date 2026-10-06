@@ -25,7 +25,12 @@ export async function POST(request: Request) {
     const customName = body.merchantName || body.merchant_name ? String(body.merchantName || body.merchant_name).trim() : undefined;
     const customCity = body.merchantCity || body.merchant_city ? String(body.merchantCity || body.merchant_city).trim() : undefined;
     const customAmount = body.amount !== undefined && body.amount !== null && body.amount !== '' ? body.amount : undefined;
-    const sendMode = (body.sendMode || body.send_mode || 'both') as 'button' | 'copia_e_cola' | 'both';
+    const sendMode = (body.sendMode || body.send_mode || 'button') as 'button' | 'copia_e_cola' | 'both';
+    const followUpEnabled = body.followUpEnabled !== undefined ? Boolean(body.followUpEnabled) : undefined;
+    const followUpType = body.followUpType as 'text' | 'audio' | undefined;
+    const followUpContent = body.followUpContent !== undefined ? String(body.followUpContent) : undefined;
+    const followUpMediaUrl = body.followUpMediaUrl !== undefined ? String(body.followUpMediaUrl) : undefined;
+    const followUpDelaySeconds = body.followUpDelaySeconds !== undefined ? Number(body.followUpDelaySeconds) : undefined;
 
     const result = await sendPixMessage({
       accountId: ctx.accountId,
@@ -38,6 +43,11 @@ export async function POST(request: Request) {
       amount: customAmount,
       text: customText,
       sendMode,
+      followUpEnabled,
+      followUpType,
+      followUpContent,
+      followUpMediaUrl,
+      followUpDelaySeconds,
     });
 
     return NextResponse.json({

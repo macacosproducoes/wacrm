@@ -127,14 +127,25 @@ export async function GET(request: Request) {
         }
       });
 
-      // 2. Keepalive heartbeat every 15s to prevent timeouts
+      // 2. Keepalive heartbeat every 10s to prevent timeouts
       heartbeatTimer = setInterval(() => {
         try {
           controller.enqueue(encoder.encode(': ping\n\n'));
         } catch {
           if (heartbeatTimer) clearInterval(heartbeatTimer);
         }
-      }, 15000);
+      }, 10000);
+
+      // 3. Gracefully close after 25 seconds to respect Vercel Serverless Function limits
+      // This prevents persistent lambdas from consuming execution duration quotas 24/7.
+      const maxDurationTimeout = setTimeout(() => {
+        try {
+          controller.close();
+        } catch {}
+      }, 25000);
+
+      // Clean up maxDurationTimeout on cancel
+      const origCancel = unsubscribeBus;
     },
     cancel() {
       if (unsubscribeBus) {

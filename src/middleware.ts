@@ -45,6 +45,10 @@ export async function middleware(request: NextRequest) {
   if (
     pathname.startsWith('/api/whatsapp/webhook') ||
     pathname.startsWith('/api/whatsapp/uazapi/webhook') ||
+    pathname.startsWith('/api/whatsapp/uazapi/sse') ||
+    pathname.startsWith('/api/whatsapp/uazapi/sync-realtime') ||
+    pathname.startsWith('/api/whatsapp/presence') ||
+    pathname.startsWith('/api/follow-ups/cron') ||
     pathname.startsWith('/api/automations/cron') ||
     pathname.startsWith('/api/mimos') ||
     pathname.startsWith('/api/webhooks/buckpay') ||

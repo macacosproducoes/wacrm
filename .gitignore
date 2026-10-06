@@ -53,3 +53,9 @@ scripts/*.sqlite
 scripts/*.txt
 scripts/*.json
 scripts/*.ts
+
+# Temporary test scripts
+*.txt
+test-*.js
+setup-new-vercel.mjs
+tmp/

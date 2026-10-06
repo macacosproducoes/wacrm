@@ -276,9 +276,54 @@ export function MessageComposer({
     el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
   }, []);
 
+  const isPixCopiaECola = useMemo(() => {
+    const trimmed = text.trim();
+    return trimmed.startsWith("000201") || (trimmed.length >= 25 && /br\.gov\.bcb\.pix/i.test(trimmed));
+  }, [text]);
+
+  const handleSendPixDirect = useCallback(async () => {
+    const trimmed = text.trim();
+    if (!trimmed || sending) return;
+
+    setSending(true);
+    try {
+      const res = await fetch("/api/whatsapp/send-pix", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversationId,
+          pixKey: trimmed,
+          pixKeyType: "COPIA_E_COLA",
+          sendMode: "button",
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Falha ao enviar chave PIX.");
+      }
+
+      toast.success("✅ PIX enviado com botão nativo com sucesso!");
+      setText("");
+      if (textareaRef.current) {
+        textareaRef.current.style.height = "auto";
+      }
+    } catch (err: any) {
+      console.error("[Composer:PIX] Error:", err);
+      toast.error(err?.message || "Erro ao enviar PIX.");
+    } finally {
+      setSending(false);
+    }
+  }, [text, sending, conversationId]);
+
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
     if (!trimmed || sending || effectivelyExpired) return;
+
+    if (trimmed.startsWith("000201") || (trimmed.length >= 25 && /br\.gov\.bcb\.pix/i.test(trimmed))) {
+      await handleSendPixDirect();
+      return;
+    }
 
     setSending(true);
     try {
@@ -291,7 +336,7 @@ export function MessageComposer({
     } finally {
       setSending(false);
     }
-  }, [text, sending, effectivelyExpired, onSend, replyTo?.id]);
+  }, [text, sending, effectivelyExpired, onSend, replyTo?.id, handleSendPixDirect]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1060,7 +1105,38 @@ export function MessageComposer({
           </Button>
         </div>
       ) : (
-        <div className="flex items-end gap-2">
+        <>
+          {/* Smart PIX Copia e Cola Auto-Detection Banner */}
+          {isPixCopiaECola && !draft && !recording && (
+            <div className="mb-2 flex items-center justify-between rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs animate-in fade-in slide-in-from-bottom-1">
+              <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-semibold">
+                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-emerald-500/20 text-emerald-600 dark:text-emerald-400">
+                  <QrCode className="h-3.5 w-3.5" />
+                </div>
+                <div>
+                  <span className="block font-bold">Chave PIX Copia e Cola detectada!</span>
+                  <span className="block text-[10px] text-muted-foreground font-normal">
+                    Será enviada no formato da função PIX com botão nativo automaticamente.
+                  </span>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                type="button"
+                disabled={sending}
+                onClick={handleSendPixDirect}
+                className="h-7 px-2.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5 font-semibold shadow-xs cursor-pointer shrink-0"
+              >
+                {sending ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Send className="h-3 w-3" />
+                )}
+                <span>Enviar PIX com Botão</span>
+              </Button>
+            </div>
+          )}
+          <div className="flex items-end gap-2">
           {/* Attach menu */}
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -1212,6 +1288,7 @@ export function MessageComposer({
             <Send className="h-4 w-4" />
           </GatedButton>
         </div>
+        </>
       )}
 
       {!draft && !recording && (

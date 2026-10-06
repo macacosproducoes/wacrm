@@ -90,6 +90,81 @@ async function generateKie(args: ProviderArgs): Promise<ProviderResult> {
   // Keep last 16 turns max to preserve complete conversation history
   const trimmed = merged.slice(-16)
 
+  // PATH 1: DeepSeek on Kie.ai (uses /openai/v1/responses endpoint)
+  const isDeepSeek = cleanModel.toLowerCase().includes('deepseek')
+  if (isDeepSeek) {
+    const input: Array<{ role: 'system' | 'user' | 'assistant'; content: Array<{ type: 'input_text' | 'output_text'; text: string }> }> = []
+    if (systemPrompt?.trim()) {
+      input.push({
+        role: 'system',
+        content: [{ type: 'input_text', text: systemPrompt.trim() }],
+      })
+    }
+    for (const m of trimmed) {
+      if (m.role === 'assistant') {
+        input.push({
+          role: 'assistant',
+          content: [{ type: 'output_text', text: m.content }],
+        })
+      } else {
+        input.push({
+          role: 'user',
+          content: [{ type: 'input_text', text: m.content }],
+        })
+      }
+    }
+
+    try {
+      const res = await fetch('https://api.kie.ai/openai/v1/responses', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey.trim()}`,
+        },
+        body: JSON.stringify({
+          model: 'deepseek-v4-1-flash',
+          stream: false,
+          input,
+        }),
+        signal: AbortSignal.timeout(Math.min(timeoutMs, 25000)),
+      })
+
+      if (!res?.ok) {
+        if (res?.status === 401) {
+          throw new AiError('Chave de API Kie.ai inválida ou não autorizada.', { code: 'invalid_key', status: 401 })
+        }
+        throw await providerHttpError('Kie.ai (DeepSeek)', res)
+      }
+
+      const data = await res.json().catch(() => null)
+      if (data?.code && data.code !== 200) {
+        if (data.code === 401) {
+          throw new AiError('Chave de API Kie.ai inválida ou não autorizada.', { code: 'invalid_key', status: 401 })
+        }
+        throw new AiError(data.msg || `Kie.ai error: ${data.code}`, { code: 'provider_error', status: 500 })
+      }
+
+      const assistantMsg = data?.output?.find((o: any) => o.role === 'assistant' || o.type === 'message')
+      const text = assistantMsg?.content?.map((c: any) => c.text || '').join('').trim()
+
+      if (!text) {
+        throw new AiError('Kie.ai (DeepSeek) retornou uma resposta vazia.', { code: 'empty_response' })
+      }
+
+      return {
+        text,
+        usage: normalizeUsage({
+          prompt: data?.usage?.input_tokens,
+          completion: data?.usage?.output_tokens,
+          total: data?.usage?.total_tokens,
+        }),
+      }
+    } catch (err) {
+      if (err instanceof AiError) throw err
+      throw toNetworkError(err)
+    }
+  }
+
   const formattedMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = []
   if (systemPrompt?.trim()) {
     formattedMessages.push({ role: 'system', content: systemPrompt.trim() })

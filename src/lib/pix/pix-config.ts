@@ -5,6 +5,12 @@ export interface PixConfig {
   pix_key: string;
   pix_key_type: PixKeyType;
   pix_merchant_name: string;
+  pix_follow_up_enabled?: boolean;
+  pix_follow_up_type?: 'text' | 'audio';
+  pix_follow_up_quick_reply_id?: string | null;
+  pix_follow_up_content?: string;
+  pix_follow_up_media_url?: string | null;
+  pix_follow_up_delay_seconds?: number;
 }
 
 /**
@@ -13,11 +19,16 @@ export interface PixConfig {
 export async function getPixConfig(accountId: string): Promise<PixConfig | null> {
   const admin = supabaseAdmin();
 
-  const { data: conns } = await admin
+  const query = admin
     .from('whatsapp_connections')
     .select('id, provider_config, is_active')
-    .eq('account_id', accountId)
-    .order('is_active', { ascending: false });
+    .eq('account_id', accountId);
+
+  const res = typeof (query as any)?.order === 'function'
+    ? await (query as any).order('is_active', { ascending: false })
+    : await query;
+
+  const conns = res?.data;
 
   if (!conns || conns.length === 0) return null;
 
@@ -29,6 +40,12 @@ export async function getPixConfig(accountId: string): Promise<PixConfig | null>
         pix_key: String(cfg.pix_key).trim(),
         pix_key_type: String(cfg.pix_key_type).toUpperCase() as PixKeyType,
         pix_merchant_name: String(cfg.pix_merchant_name || 'Pix').trim(),
+        pix_follow_up_enabled: Boolean(cfg.pix_follow_up_enabled),
+        pix_follow_up_type: cfg.pix_follow_up_type === 'audio' ? 'audio' : 'text',
+        pix_follow_up_quick_reply_id: cfg.pix_follow_up_quick_reply_id || null,
+        pix_follow_up_content: cfg.pix_follow_up_content || '',
+        pix_follow_up_media_url: cfg.pix_follow_up_media_url || null,
+        pix_follow_up_delay_seconds: typeof cfg.pix_follow_up_delay_seconds === 'number' ? cfg.pix_follow_up_delay_seconds : 5,
       };
     }
   }
@@ -45,6 +62,12 @@ export async function savePixConfig(
     pix_key: string;
     pix_key_type: PixKeyType;
     pix_merchant_name: string;
+    pix_follow_up_enabled?: boolean;
+    pix_follow_up_type?: 'text' | 'audio';
+    pix_follow_up_quick_reply_id?: string | null;
+    pix_follow_up_content?: string;
+    pix_follow_up_media_url?: string | null;
+    pix_follow_up_delay_seconds?: number;
   }
 ): Promise<{ success: boolean; error?: string; config?: PixConfig }> {
   // Validate the key first
@@ -80,6 +103,12 @@ export async function savePixConfig(
           pix_key: validation.formattedKey,
           pix_key_type: config.pix_key_type,
           pix_merchant_name: merchantName,
+          pix_follow_up_enabled: Boolean(config.pix_follow_up_enabled),
+          pix_follow_up_type: config.pix_follow_up_type || 'text',
+          pix_follow_up_quick_reply_id: config.pix_follow_up_quick_reply_id || null,
+          pix_follow_up_content: config.pix_follow_up_content || '',
+          pix_follow_up_media_url: config.pix_follow_up_media_url || null,
+          pix_follow_up_delay_seconds: typeof config.pix_follow_up_delay_seconds === 'number' ? config.pix_follow_up_delay_seconds : 5,
         },
         updated_at: new Date().toISOString(),
       })
@@ -92,6 +121,12 @@ export async function savePixConfig(
       pix_key: validation.formattedKey,
       pix_key_type: config.pix_key_type,
       pix_merchant_name: merchantName,
+      pix_follow_up_enabled: Boolean(config.pix_follow_up_enabled),
+      pix_follow_up_type: config.pix_follow_up_type || 'text',
+      pix_follow_up_quick_reply_id: config.pix_follow_up_quick_reply_id || null,
+      pix_follow_up_content: config.pix_follow_up_content || '',
+      pix_follow_up_media_url: config.pix_follow_up_media_url || null,
+      pix_follow_up_delay_seconds: typeof config.pix_follow_up_delay_seconds === 'number' ? config.pix_follow_up_delay_seconds : 5,
     },
   };
 }

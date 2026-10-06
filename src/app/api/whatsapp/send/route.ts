@@ -1,3 +1,4 @@
+import { sendPixMessage } from '@/lib/pix/send-pix-message';
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
@@ -356,6 +357,26 @@ export async function POST(request: Request) {
                 caption: mediaType === 'audio' ? undefined : content_text,
                 ptt: mediaType === 'audio',
               })
+            } else if (
+              message_type === 'text' &&
+              content_text &&
+              (content_text.trim().startsWith('000201') || (content_text.trim().length >= 25 && /br\.gov\.bcb\.pix/i.test(content_text)))
+            ) {
+              // Auto-detect PIX Copia e Cola and send as native PIX Button Card
+              const pixResult = await sendPixMessage({
+                accountId,
+                conversationId,
+                userId,
+                pixKey: content_text.trim(),
+                pixKeyType: 'COPIA_E_COLA',
+                sendMode: 'button',
+              });
+              return NextResponse.json({
+                success: true,
+                message_id: pixResult.dbMessageId,
+                whatsapp_message_id: pixResult.messageId,
+                type: 'pix',
+              });
             } else {
               sendRes = await sendUazApiText(baseUrl, token, {
                 number: contactPhone,

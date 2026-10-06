@@ -73,6 +73,13 @@ export interface ProcessUazApiResult {
     pushName?: string;
     traceId?: string;
   };
+  welcomeDispatchParams?: {
+    accountId: string;
+    conversationId: string;
+    contactId: string;
+    connection: Record<string, unknown>;
+    pushName?: string;
+  };
 }
 
 /**
@@ -975,20 +982,25 @@ export async function processUazApiEvent(
     trimmed.startsWith('[Undecryptable]');
   const isFreshMessage = messageAgeMs < 60 * 60 * 1000;
 
+  let welcomeDispatchParams: ProcessUazApiResult['welcomeDispatchParams'] | undefined;
   if (!fromMe && !isIgnoredText && isFreshMessage) {
-    try {
-      const welcomeResult = await checkAndDispatchWelcomeMessage({
-        accountId: connection.account_id,
-        conversationId,
-        contactId,
-        connection,
-        pushName,
-      });
-      if (welcomeResult.dispatched) {
-        console.log(`[UazAPI Event Processor] Welcome message successfully dispatched for conv ${conversationId}`);
+    welcomeDispatchParams = {
+      accountId: connection.account_id,
+      conversationId,
+      contactId,
+      connection,
+      pushName,
+    };
+    // If skipAiDispatch is false (e.g. tests or synchronous mode), run directly; otherwise delegate to after()
+    if (!options?.skipAiDispatch) {
+      try {
+        const welcomeResult = await checkAndDispatchWelcomeMessage(welcomeDispatchParams);
+        if (welcomeResult.dispatched) {
+          console.log(`[UazAPI Event Processor] Welcome message successfully dispatched for conv ${conversationId}`);
+        }
+      } catch (err) {
+        console.error('[UazAPI Event Processor] Error evaluating welcome message:', err);
       }
-    } catch (err) {
-      console.error('[UazAPI Event Processor] Error evaluating welcome message:', err);
     }
   }
 
@@ -1030,5 +1042,6 @@ export async function processUazApiEvent(
     userId,
     shouldTriggerAi,
     followerOrderParams,
+    welcomeDispatchParams,
   };
 }

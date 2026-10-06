@@ -3,6 +3,7 @@ import { decrypt } from '@/lib/whatsapp/encryption';
 import {
   normalizeBaseUrl,
   sendUazApiPixButton,
+  sendUazApiMedia,
   sendUazApiText,
   formatUazApiNumber,
 } from '@/lib/whatsapp/uazapi-client';
@@ -26,6 +27,11 @@ export interface SendPixMessageParams {
   amount?: number | string;
   text?: string;
   sendMode?: PixSendMode;
+  followUpEnabled?: boolean;
+  followUpType?: 'text' | 'audio';
+  followUpContent?: string;
+  followUpMediaUrl?: string | null;
+  followUpDelaySeconds?: number;
 }
 
 export interface SendPixResult {
@@ -102,6 +108,7 @@ export async function sendPixMessage(params: SendPixMessageParams): Promise<Send
     rawPixKeyType = savedConfig.pix_key_type;
     rawMerchantName = rawMerchantName || savedConfig.pix_merchant_name;
   }
+  let accountPixConfig = await getPixConfig(accountId);
 
   const merchantName = rawMerchantName || 'Pix';
 
@@ -310,6 +317,124 @@ export async function sendPixMessage(params: SendPixMessageParams): Promise<Send
       last_message_at: nowIso,
     },
   });
+
+  // 9. Post-PIX automated follow-up (ZapPlus text or audio with delay)
+  const isFollowUpActive = params.followUpEnabled !== undefined
+    ? params.followUpEnabled
+    : Boolean(accountPixConfig?.pix_follow_up_enabled);
+
+  if (isFollowUpActive) {
+    const fType = params.followUpType || accountPixConfig?.pix_follow_up_type || 'text';
+    const fContent = params.followUpContent !== undefined ? params.followUpContent : (accountPixConfig?.pix_follow_up_content || '');
+    const fMediaUrl = params.followUpMediaUrl !== undefined ? params.followUpMediaUrl : (accountPixConfig?.pix_follow_up_media_url || null);
+    const fDelay = Math.max(1, Math.min(60, params.followUpDelaySeconds ?? accountPixConfig?.pix_follow_up_delay_seconds ?? 5));
+
+    try {
+      if (fDelay > 0) {
+        await new Promise((resolve) => setTimeout(resolve, fDelay * 1000));
+      }
+
+      if (fType === 'audio' && fMediaUrl) {
+        const audioRes = await sendUazApiMedia(baseUrl, token, {
+          number: targetNumber,
+          url: fMediaUrl,
+          type: 'audio',
+          ptt: true,
+        });
+        const followUpTime = new Date().toISOString();
+        const { data: audioMsg } = await admin.from('messages').insert({
+          conversation_id: conversationId,
+          sender_type: 'agent',
+          sender_id: userId || null,
+          content_type: 'audio',
+          content_text: fContent || '[Áudio]',
+          media_url: fMediaUrl,
+          message_id: audioRes.messageId,
+          status: 'sent',
+          created_at: followUpTime,
+        }).select('id').single();
+
+        await updateConversationWithMessage(admin, {
+          conversationId,
+          messageText: '[Áudio]',
+          messageTimestamp: followUpTime,
+          isInbound: false,
+          senderType: 'agent',
+        });
+
+        whatsappBus.emitInboxEvent({
+          accountId,
+          conversationId,
+          eventType: 'INSERT',
+          message: {
+            id: audioMsg?.id || audioRes.messageId,
+            conversation_id: conversationId,
+            sender_type: 'agent',
+            sender_id: userId || null,
+            content_type: 'audio',
+            content_text: fContent || '[Áudio]',
+            media_url: fMediaUrl,
+            message_id: audioRes.messageId,
+            status: 'sent',
+            created_at: followUpTime,
+          },
+          conversation: {
+            id: conversationId,
+            last_message_text: '[Áudio]',
+            last_message_at: followUpTime,
+          },
+        });
+      } else if (fContent && fContent.trim().length > 0) {
+        const textRes = await sendUazApiText(baseUrl, token, {
+          number: targetNumber,
+          text: fContent.trim(),
+        });
+        const followUpTime = new Date().toISOString();
+        const { data: textMsg } = await admin.from('messages').insert({
+          conversation_id: conversationId,
+          sender_type: 'agent',
+          sender_id: userId || null,
+          content_type: 'text',
+          content_text: fContent.trim(),
+          message_id: textRes.messageId,
+          status: 'sent',
+          created_at: followUpTime,
+        }).select('id').single();
+
+        await updateConversationWithMessage(admin, {
+          conversationId,
+          messageText: fContent.trim(),
+          messageTimestamp: followUpTime,
+          isInbound: false,
+          senderType: 'agent',
+        });
+
+        whatsappBus.emitInboxEvent({
+          accountId,
+          conversationId,
+          eventType: 'INSERT',
+          message: {
+            id: textMsg?.id || textRes.messageId,
+            conversation_id: conversationId,
+            sender_type: 'agent',
+            sender_id: userId || null,
+            content_type: 'text',
+            content_text: fContent.trim(),
+            message_id: textRes.messageId,
+            status: 'sent',
+            created_at: followUpTime,
+          },
+          conversation: {
+            id: conversationId,
+            last_message_text: fContent.trim(),
+            last_message_at: followUpTime,
+          },
+        });
+      }
+    } catch (followUpErr) {
+      console.warn('[sendPixMessage] Warning executing post-PIX follow-up:', followUpErr);
+    }
+  }
 
   return {
     success: true,

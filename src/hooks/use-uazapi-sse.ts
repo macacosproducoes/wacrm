@@ -94,8 +94,29 @@ export function useUazApiSse({
 
     void connect();
 
+    // Disconnect EventSource when tab is inactive to preserve Vercel Serverless Function quotas
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        if (eventSourceRef.current) {
+          eventSourceRef.current.close();
+          eventSourceRef.current = null;
+        }
+        if (reconnectTimeoutRef.current) {
+          clearTimeout(reconnectTimeoutRef.current);
+          reconnectTimeoutRef.current = null;
+        }
+      } else {
+        if (!eventSourceRef.current && isMounted) {
+          void connect();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
       isMounted = false;
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;

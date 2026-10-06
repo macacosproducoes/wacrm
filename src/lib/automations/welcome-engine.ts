@@ -9,6 +9,8 @@ import {
 } from '@/lib/whatsapp/uazapi-client';
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
 
+const inFlightWelcomeDispatches = new Set<string>();
+
 function supabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -142,7 +144,15 @@ export async function checkAndDispatchWelcomeMessage(
   const admin = supabaseAdmin();
   if (!admin) return { dispatched: false, reason: 'db_not_ready' };
 
+  const lockKey = `${accountId}:${conversationId}`;
+  if (inFlightWelcomeDispatches.has(lockKey)) {
+    console.log(`[welcome-engine] Lock active for conv ${conversationId}: duplicate inbound burst prevented.`);
+    return { dispatched: false, reason: 'duplicate_inbound_burst_prevented' };
+  }
+  inFlightWelcomeDispatches.add(lockKey);
+
   // 1. Get welcome config
+  try {
   const config = await getWelcomeConfig(accountId);
   if (!config.is_active || !config.response_id) {
     return { dispatched: false, reason: 'welcome_disabled' };
@@ -286,6 +296,17 @@ export async function checkAndDispatchWelcomeMessage(
   const isSequence = effectiveKind === 'sequence';
   const messageCreatedAt = new Date().toISOString();
 
+  // Pre-insert welcome log to establish database lock against concurrent instances
+  const preLogTime = messageCreatedAt;
+  await admin.from('welcome_message_logs').insert({
+    account_id: accountId,
+    conversation_id: conversationId,
+    contact_id: contactId,
+    response_id: replyRow.id,
+    uazapi_message_id: `welcome_lock_${Date.now()}`,
+    sent_at: preLogTime,
+  });
+
   try {
     if (isSequence) {
       const sequenceSteps = ((Array.isArray(replyRow.sequence_items) && replyRow.sequence_items.length > 0
@@ -301,8 +322,9 @@ export async function checkAndDispatchWelcomeMessage(
 
       for (let i = 0; i < sortedSteps.length; i++) {
         const step = sortedSteps[i];
-        if (i > 0 && step.delay_seconds) {
-          await new Promise((resolve) => setTimeout(resolve, Math.min((step.delay_seconds || 0) * 1000, 30000)));
+        const stepDelay = Math.max(0, step.delay_seconds || 0);
+        if (stepDelay > 0) {
+          await new Promise((resolve) => setTimeout(resolve, Math.min(stepDelay * 1000, 30000)));
         }
         const stepText = replaceQuickReplyVariables(step.content || '', {
           name: contactName,
@@ -311,26 +333,30 @@ export async function checkAndDispatchWelcomeMessage(
           date: new Date(),
         });
         let stepMsgId = `welcome_seq_${Date.now()}_${i}`;
-        if (step.type === 'audio' && step.media_url) {
+        const stepType = (step.type || 'text').toLowerCase();
+        const hasMedia = Boolean(step.media_url && typeof step.media_url === 'string' && step.media_url.trim().length > 0);
+
+        if (stepType === 'audio' && hasMedia) {
           const res = await sendUazApiMedia(baseUrl, plainToken, {
             number: phone,
-            url: step.media_url,
+            url: step.media_url!,
             type: 'audio',
             ptt: true,
           });
           if (res?.messageId) stepMsgId = res.messageId;
-        } else if (['image', 'video', 'document'].includes(step.type) && step.media_url) {
+        } else if (['image', 'video', 'document'].includes(stepType) && hasMedia) {
           const res = await sendUazApiMedia(baseUrl, plainToken, {
             number: phone,
-            url: step.media_url,
-            type: step.type as any,
+            url: step.media_url!,
+            type: stepType as any,
             caption: stepText || undefined,
           });
           if (res?.messageId) stepMsgId = res.messageId;
-        } else if (stepText) {
+        } else {
+          // Strictly text: never call media endpoints
           const res = await sendUazApiText(baseUrl, plainToken, {
             number: phone,
-            text: stepText,
+            text: stepText || 'Olá! Seja muito bem-vindo.',
           });
           if (res?.messageId) stepMsgId = res.messageId;
         }
@@ -452,15 +478,14 @@ export async function checkAndDispatchWelcomeMessage(
     });
   }
 
-  // 8. Record in welcome_message_logs for idempotency and history
-  await admin.from('welcome_message_logs').insert({
-    account_id: accountId,
-    conversation_id: conversationId,
-    contact_id: contactId,
-    response_id: replyRow.id,
-    uazapi_message_id: uazapiMessageId,
-    sent_at: messageCreatedAt,
-  });
+  // 8. Update pre-inserted welcome_message_logs record with final message ID
+  try {
+    await admin
+      .from('welcome_message_logs')
+      .update({ uazapi_message_id: uazapiMessageId })
+      .eq('conversation_id', conversationId)
+      .eq('sent_at', preLogTime);
+  } catch {}
 
   // 9. Increment usage counter
   try {
@@ -495,4 +520,7 @@ export async function checkAndDispatchWelcomeMessage(
   }
 
   return { dispatched: true, uazapiMessageId };
+  } finally {
+    inFlightWelcomeDispatches.delete(lockKey);
+  }
 }

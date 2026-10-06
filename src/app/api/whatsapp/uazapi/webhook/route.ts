@@ -160,10 +160,24 @@ export async function POST(request: Request) {
       processResult.accountId &&
       processResult.userId
     );
+    const hasWelcomeTask = Boolean(processResult.welcomeDispatchParams);
 
-    if (hasFollowerOrder || hasAiTask) {
+    // Register serverless-safe after() to run welcome sequences, orders, AI auto-replies, and drain due follow-ups
+    if (hasFollowerOrder || hasAiTask || hasWelcomeTask || true) {
       after(async () => {
         try {
+          // Priority 0: Welcome Message Automation (Runs asynchronously so webhook responds 200 OK immediately)
+          if (processResult.welcomeDispatchParams) {
+            try {
+              const { checkAndDispatchWelcomeMessage } = await import('@/lib/automations/welcome-engine');
+              const welcomeRes = await checkAndDispatchWelcomeMessage(processResult.welcomeDispatchParams);
+              if (welcomeRes.dispatched) {
+                console.log(`[TRACE ${traceId}] Welcome sequence successfully dispatched inside after().`);
+              }
+            } catch (wErr) {
+              console.error(`[TRACE ${traceId}] Error dispatching welcome sequence in after():`, wErr);
+            }
+          }
 
           // Priority 1: Automated Follower Order Workflow (Instagram Resolver -> Creative Job -> UAZAPI Send)
           let followerOrderHandled = false;

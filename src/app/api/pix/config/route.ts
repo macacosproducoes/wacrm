@@ -38,6 +38,12 @@ export async function POST(request: Request) {
     const pix_key = String(body.pix_key || '').trim();
     const pix_key_type = String(body.pix_key_type || 'EVP').toUpperCase() as PixKeyType;
     const pix_merchant_name = String(body.pix_merchant_name || '').trim();
+    const pix_follow_up_enabled = body.pix_follow_up_enabled !== undefined ? Boolean(body.pix_follow_up_enabled) : undefined;
+    const pix_follow_up_type = body.pix_follow_up_type === 'audio' ? 'audio' : 'text';
+    const pix_follow_up_quick_reply_id = body.pix_follow_up_quick_reply_id || null;
+    const pix_follow_up_content = body.pix_follow_up_content ? String(body.pix_follow_up_content) : '';
+    const pix_follow_up_media_url = body.pix_follow_up_media_url ? String(body.pix_follow_up_media_url) : null;
+    const pix_follow_up_delay_seconds = typeof body.pix_follow_up_delay_seconds === 'number' ? Math.max(1, Math.min(60, body.pix_follow_up_delay_seconds)) : 5;
 
     if (!pix_key) {
       return NextResponse.json({ error: 'Chave PIX é obrigatória.' }, { status: 400 });
@@ -47,6 +53,12 @@ export async function POST(request: Request) {
       pix_key,
       pix_key_type,
       pix_merchant_name,
+      pix_follow_up_enabled,
+      pix_follow_up_type,
+      pix_follow_up_quick_reply_id,
+      pix_follow_up_content,
+      pix_follow_up_media_url,
+      pix_follow_up_delay_seconds,
     });
 
     if (!res.success) {

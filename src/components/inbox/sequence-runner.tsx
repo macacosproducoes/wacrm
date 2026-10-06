@@ -128,6 +128,10 @@ export function useSequenceRunner(params: {
       toast.error("Nenhuma conversa selecionada.");
       return;
     }
+    if (execution) {
+      toast.warning("Uma sequência já está em execução.");
+      return;
+    }
 
     // Sort by order ascending
     const sortedSteps = [...rawSteps].sort((a, b) => (a.order || 0) - (b.order || 0));

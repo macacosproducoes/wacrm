@@ -81,6 +81,9 @@ export async function cancelPendingFollowUps(
 
     if (reason === 'client_replied') {
       query = query.eq('cancel_on_client_reply', true);
+      // Grace window: do not cancel follow-ups scheduled less than 90s ago (protects against greeting bursts)
+      const graceCutoff = new Date(Date.now() - 90 * 1000).toISOString();
+      query = query.lte('created_at', graceCutoff);
     } else if (reason === 'agent_replied') {
       query = query.eq('cancel_on_agent_reply', true);
     }
@@ -201,12 +204,14 @@ export async function processDueFollowUps(): Promise<{ processed: number; sent: 
     try {
       // 2. Validate Stop Conditions: Did client send a message since this follow-up was scheduled?
       if (row.cancel_on_client_reply) {
+        // Only evaluate customer messages sent after the 90s initial greeting grace period
+        const checkAfter = new Date(new Date(row.created_at).getTime() + 90 * 1000).toISOString();
         const { data: recentClientMsgs } = await admin
           .from('messages')
           .select('id')
           .eq('conversation_id', row.conversation_id)
           .eq('sender_type', 'customer')
-          .gte('created_at', row.created_at)
+          .gte('created_at', checkAfter)
           .limit(1);
 
         if (recentClientMsgs && recentClientMsgs.length > 0) {
