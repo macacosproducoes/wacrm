@@ -25,6 +25,7 @@ import {
   ShieldCheck,
   Calendar,
   Zap,
+  ImageIcon,
   Info,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
@@ -60,6 +61,7 @@ interface Step4Props {
   onNameChange: (name: string) => void;
   template: MessageTemplate;
   audience: AudienceConfig;
+  headerMediaUrl?: string;
   cooldownSettings?: CooldownSettings;
   onCooldownSettingsChange?: (settings: CooldownSettings) => void;
   onSend: (settings?: CooldownSettings) => void;
@@ -83,6 +85,7 @@ export function Step4ScheduleSend({
   onNameChange,
   template,
   audience,
+  headerMediaUrl,
   cooldownSettings: externalSettings,
   onCooldownSettingsChange,
   onSend,
@@ -268,6 +271,19 @@ export function Step4ScheduleSend({
             <p className="font-medium text-foreground">{template.language ?? 'pt_BR'}</p>
           </div>
         </div>
+        {headerMediaUrl && headerMediaUrl.trim() && (
+          <div className="flex items-center gap-3 rounded-lg border border-emerald-500/30 bg-emerald-950/20 p-2.5 mt-2">
+            <div className="h-12 w-12 rounded-md overflow-hidden bg-black/40 border border-white/10 flex-shrink-0">
+              <img src={headerMediaUrl.trim()} alt="Foto anexada" className="h-full w-full object-cover" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
+                <ImageIcon className="h-3.5 w-3.5" /> Foto Anexada ao Disparo
+              </p>
+              <p className="text-[11px] text-muted-foreground truncate">{headerMediaUrl.trim()}</p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* CONTROLE DE ENVIO (COOLDOWN & FILA SEGURA) */}

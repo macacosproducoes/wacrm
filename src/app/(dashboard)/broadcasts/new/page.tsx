@@ -109,7 +109,10 @@ export default function NewBroadcastPage() {
       name: name.trim(),
       template_name: template.name,
       template_language: template.language ?? 'en_US',
-      template_variables: variables,
+      template_variables: {
+        ...variables,
+        _headerMediaUrl: headerMediaUrl.trim() || undefined,
+      },
       audience_filter: {
         type: audience.type,
         tagIds: audience.tagIds,
@@ -223,6 +226,7 @@ export default function NewBroadcastPage() {
               onNameChange={setName}
               template={template}
               audience={audience}
+              headerMediaUrl={headerMediaUrl}
               cooldownSettings={cooldownSettings}
               onCooldownSettingsChange={setCooldownSettings}
               onSend={(settings) => {

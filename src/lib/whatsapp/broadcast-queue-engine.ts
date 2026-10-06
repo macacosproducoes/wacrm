@@ -650,6 +650,13 @@ export async function processBroadcastQueueTick(
       let sentMessageId: string | null = null;
       let lastError: string | null = null;
 
+      // Resolve optional campaign photo / media URL
+      const campaignVars = b.template_variables as Record<string, any> | null;
+      const mediaUrl =
+        (typeof campaignVars?._headerMediaUrl === 'string' && campaignVars._headerMediaUrl.trim())
+          ? campaignVars._headerMediaUrl.trim()
+          : templateRow?.header_media_url;
+
       try {
         if (provider === 'uazapi' && uazConn) {
           const uazConfig = uazConn.provider_config || {};
@@ -673,9 +680,9 @@ export async function processBroadcastQueueTick(
               }
             }
           }
-          const extraVars = (b.template_variables as Record<string, unknown> | null)?._variations;
-          if (Array.isArray(extraVars)) {
-            for (const v of extraVars) {
+          const variationsList = campaignVars?._variations;
+          if (Array.isArray(variationsList)) {
+            for (const v of variationsList) {
               if (typeof v === 'string' && v.trim() && !allVariations.includes(v.trim())) {
                 allVariations.push(v.trim());
               }
@@ -698,7 +705,6 @@ export async function processBroadcastQueueTick(
             text = `${text}\n\n_${templateRow.footer_text}_`;
           }
 
-          const mediaUrl = templateRow?.header_media_url;
           if (mediaUrl) {
             const res = await sendUazApiMedia(baseUrl, token, {
               number: sanitizedPhone,
@@ -728,6 +734,7 @@ export async function processBroadcastQueueTick(
                 language: b.template_language || 'pt_BR',
                 template: templateRow ?? undefined,
                 params,
+                messageParams: mediaUrl ? { headerMediaUrl: mediaUrl } : undefined,
               });
               sentMessageId = res.messageId;
               lastError = null;

@@ -407,6 +407,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
           template_variables: {
             ...payload.variables,
             _variations: payload.template.variations || [],
+            _headerMediaUrl: payload.headerMediaUrl?.trim() || undefined,
           },
           audience_filter: {
             type: payload.audience.type,

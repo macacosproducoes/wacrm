@@ -96,6 +96,7 @@ export async function POST(request: Request) {
       template_name,
       template_language,
       template_params,
+      headerMediaUrl: globalHeaderMediaUrl,
     } = body
 
     // Normalize to a list of {phone, params} regardless of shape.
@@ -219,6 +220,7 @@ export async function POST(request: Request) {
 
           const mediaUrl =
             recipient.messageParams?.headerMediaUrl ||
+            globalHeaderMediaUrl ||
             templateRow?.header_media_url
 
           let sendRes: { messageId: string; status: string }

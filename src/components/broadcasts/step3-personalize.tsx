@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Contact, CustomField, MessageTemplate } from '@/types';
 import { Button } from '@/components/ui/button';
@@ -12,8 +12,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { ArrowLeft, ArrowRight, Eye, ImageIcon, Loader2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Eye,
+  ImageIcon,
+  Loader2,
+  Upload,
+  Trash2,
+  Link as LinkIcon,
+  CheckCircle2,
+  AlertCircle,
+} from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { uploadAccountMedia, CHAT_MEDIA_BUCKET } from '@/lib/storage/upload-media';
+import { toast } from 'sonner';
 
 type VariableType = 'static' | 'field' | 'custom_field';
 
@@ -26,7 +39,7 @@ interface Step3Props {
   template: MessageTemplate;
   variables: Record<string, VariableMapping>;
   onUpdate: (variables: Record<string, VariableMapping>) => void;
-  /** Media URL for an IMAGE/VIDEO/DOCUMENT header, when the template has one. */
+  /** Media URL for an IMAGE/VIDEO/DOCUMENT header, when the template has one or user attached one. */
   headerMediaUrl: string;
   onHeaderMediaUrlChange: (url: string) => void;
   onNext: () => void;
@@ -59,10 +72,10 @@ const SAMPLE_CONTACT: Contact = {
   id: 'sample',
   user_id: '',
   account_id: '',
-  name: 'John Doe',
-  phone: '+1234567890',
-  email: 'john@example.com',
-  company: 'Acme Corp',
+  name: 'João Silva',
+  phone: '+55 11 98888-7777',
+  email: 'joao@exemplo.com',
+  company: 'Empresa Exemplo',
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
 };
@@ -84,6 +97,11 @@ export function Step3Personalize({
     Map<string, string>
   >(new Map());
   const [loadingPreview, setLoadingPreview] = useState(true);
+
+  // Photo upload state
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [photoMode, setPhotoMode] = useState<'upload' | 'url'>('upload');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load user's custom fields + a representative contact for the
   // live preview. Fall back to sample data if no contacts exist yet.
@@ -134,18 +152,11 @@ export function Step3Personalize({
     return [...new Set(matches)].sort();
   }, [template.body_text]);
 
-  // Templates with an IMAGE/VIDEO/DOCUMENT header need a media URL at
-  // send time — Meta requires the media component on every delivery and
-  // rejects the broadcast without it. The field is hidden for text-only
-  // headers.
   const mediaHeaderType = isMediaHeaderType(template.header_type)
     ? template.header_type
     : null;
 
-  // Seed the field with the template's stored sample URL the first time
-  // we land on a media-header template, so the common "reuse the
-  // approved media" case needs no typing. Only seeds when empty to avoid
-  // clobbering a URL the user already edited.
+  // Seed with template header_media_url if provided
   useEffect(() => {
     if (mediaHeaderType && !headerMediaUrl && template.header_media_url) {
       onHeaderMediaUrlChange(template.header_media_url);
@@ -154,19 +165,19 @@ export function Step3Personalize({
   }, [mediaHeaderType, template.header_media_url]);
 
   const headerMediaError = useMemo<'missing' | 'invalid' | null>(() => {
-    if (!mediaHeaderType) return null;
+    // If the template strictly requires media (Meta Cloud API template)
+    if (mediaHeaderType) {
+      const value = headerMediaUrl.trim();
+      if (!value) return 'missing';
+      if (!isValidHttpUrl(value)) return 'invalid';
+      return null;
+    }
+    // If optional, only check validity if filled
     const value = headerMediaUrl.trim();
-    if (!value) return 'missing';
-    if (!isValidHttpUrl(value)) return 'invalid';
+    if (value && !isValidHttpUrl(value)) return 'invalid';
     return null;
   }, [mediaHeaderType, headerMediaUrl]);
 
-  /**
-   * A placeholder is "unmapped" if the user hasn't picked either a
-   * static value or a field/custom-field source. Blocks Next until
-   * every placeholder has something — otherwise the broadcast would
-   * ship with empty strings and confuse recipients.
-   */
   const unmappedKeys = useMemo(() => {
     const missing: string[] = [];
     for (const placeholder of placeholders) {
@@ -187,10 +198,62 @@ export function Step3Personalize({
     });
   }
 
-  /**
-   * Substitute placeholders using the first real contact where
-   * possible. Placeholders keyed by "{{N}}" map to variable key "N".
-   */
+  // Handle local photo upload
+  async function handlePhotoUpload(file: File) {
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      toast.error('Por favor, selecione um arquivo de imagem (PNG, JPG, WEBP).');
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('A imagem não pode ultrapassar 10MB.');
+      return;
+    }
+
+    setUploadingPhoto(true);
+    try {
+      let publicUrl: string | null = null;
+
+      // 1. Direct Supabase Storage client-side upload
+      try {
+        const res = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
+        if (res?.publicUrl) {
+          publicUrl = res.publicUrl;
+        }
+      } catch (clientErr) {
+        console.warn('[BroadcastPhoto] Direct upload fallback:', clientErr);
+      }
+
+      // 2. Server-side API route fallback
+      if (!publicUrl) {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch('/api/whatsapp/media/upload', {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await res.json();
+        if (data.publicUrl) {
+          publicUrl = data.publicUrl;
+        } else {
+          throw new Error(data.error || 'Falha no upload da foto');
+        }
+      }
+
+      if (publicUrl) {
+        onHeaderMediaUrlChange(publicUrl);
+        toast.success('Foto carregada com sucesso!');
+      }
+    } catch (err: any) {
+      console.error('[BroadcastPhoto] Upload error:', err);
+      toast.error('Erro ao enviar foto: ' + (err.message || 'Tente novamente'));
+    } finally {
+      setUploadingPhoto(false);
+    }
+  }
+
   const previewText = useMemo(() => {
     const contact = firstContact ?? SAMPLE_CONTACT;
     const customValues = firstContact
@@ -242,55 +305,228 @@ export function Step3Personalize({
         </p>
       </div>
 
-      {mediaHeaderType && (
-        <div className="rounded-xl border border-border bg-card/50 p-4">
-          <div className="mb-3 flex items-center gap-2">
-            <ImageIcon className="h-4 w-4 text-primary" />
-            <p className="text-sm font-medium text-foreground">{t('personalize.headerImage')}</p>
-            <span className="inline-flex items-center rounded-md bg-primary/10 px-2 py-0.5 text-xs font-medium uppercase text-primary">
-              {mediaHeaderType}
-            </span>
+      {/* SECÃO DE FOTO / IMAGEM DO DISPARO */}
+      <div className="rounded-xl border border-border bg-card/50 p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-3">
+          <div className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <ImageIcon className="h-4 w-4" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-foreground">
+                {mediaHeaderType ? 'Foto / Imagem do Cabeçalho' : 'Foto / Imagem do Disparo'}
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                {mediaHeaderType
+                  ? 'Este modelo exige uma imagem no cabeçalho.'
+                  : 'Opcional: Anexe uma foto para ser enviada junto com o texto da mensagem.'}
+              </p>
+            </div>
           </div>
-          <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-            {t('personalize.imageUrl')}
-          </label>
-          <Input
-            type="url"
-            value={headerMediaUrl}
-            onChange={(e) => onHeaderMediaUrlChange(e.target.value)}
-            placeholder={t('personalize.imageUrlPlaceholder')}
-            className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
-          />
-          <p className="mt-1.5 text-xs text-muted-foreground">
-            {t('personalize.headerImageDesc')}
-          </p>
-          {mediaHeaderType === 'image' &&
-            headerMediaError === null &&
-            headerMediaUrl.trim() && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={headerMediaUrl.trim()}
-                alt="Header preview"
-                className="mt-3 max-h-40 rounded-lg border border-border object-contain"
-              />
-            )}
-          {headerMediaError && (
-            <p className="mt-1.5 text-xs text-amber-300">
-              {headerMediaError === 'missing'
-                ? 'A media URL is required to send this template.'
-                : 'Enter a valid http(s) URL.'}
-            </p>
-          )}
+          <span
+            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${
+              mediaHeaderType
+                ? 'border border-amber-500/30 bg-amber-500/10 text-amber-300'
+                : headerMediaUrl.trim()
+                ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+                : 'border border-border bg-muted text-muted-foreground'
+            }`}
+          >
+            {mediaHeaderType
+              ? 'Obrigatório pelo Modelo'
+              : headerMediaUrl.trim()
+              ? 'Foto Anexada'
+              : 'Opcional'}
+          </span>
         </div>
-      )}
 
-      {placeholders.length === 0 && !mediaHeaderType ? (
+        {/* Alternador de Modo: Upload vs Link */}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setPhotoMode('upload')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              photoMode === 'upload'
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'bg-muted text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Upload className="h-3.5 w-3.5" />
+            Upload do Computador / Celular
+          </button>
+          <button
+            type="button"
+            onClick={() => setPhotoMode('url')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              photoMode === 'url'
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'bg-muted text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <LinkIcon className="h-3.5 w-3.5" />
+            Inserir Link / URL
+          </button>
+        </div>
+
+        {photoMode === 'upload' ? (
+          <div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/jpg,image/webp"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) handlePhotoUpload(f);
+                e.target.value = '';
+              }}
+            />
+
+            {headerMediaUrl.trim() ? (
+              <div className="flex flex-col sm:flex-row items-center gap-4 rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-4">
+                <div className="relative h-20 w-20 rounded-lg overflow-hidden bg-black/40 border border-white/10 flex-shrink-0 shadow">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={headerMediaUrl.trim()}
+                    alt="Foto do disparo"
+                    className="h-full w-full object-cover"
+                  />
+                </div>
+                <div className="flex-1 min-w-0 text-center sm:text-left space-y-1">
+                  <p className="text-sm font-medium text-emerald-400 flex items-center justify-center sm:justify-start gap-1.5">
+                    <CheckCircle2 className="h-4 w-4" /> Foto anexada e pronta para envio
+                  </p>
+                  <p className="text-xs text-muted-foreground truncate max-w-md">
+                    {headerMediaUrl}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={uploadingPhoto}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-xs border-border text-foreground hover:bg-muted"
+                  >
+                    Trocar Foto
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    disabled={uploadingPhoto}
+                    onClick={() => onHeaderMediaUrlChange('')}
+                    className="text-xs"
+                  >
+                    <Trash2 className="h-3.5 w-3.5 mr-1" />
+                    Remover
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div
+                onClick={() => !uploadingPhoto && fileInputRef.current?.click()}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const f = e.dataTransfer.files?.[0];
+                  if (f) handlePhotoUpload(f);
+                }}
+                className={`group flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-border/80 bg-muted/20 p-6 text-center cursor-pointer transition-all hover:border-primary/50 hover:bg-muted/40 ${
+                  uploadingPhoto ? 'opacity-60 pointer-events-none' : ''
+                }`}
+              >
+                {uploadingPhoto ? (
+                  <div className="flex flex-col items-center gap-2 py-2">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                    <p className="text-sm font-medium text-foreground">Enviando foto para o servidor...</p>
+                    <p className="text-xs text-muted-foreground">Aguarde o processamento</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary transition-transform group-hover:scale-105">
+                      <Upload className="h-6 w-6" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-foreground">
+                        Clique aqui ou arraste uma foto para enviar
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Formatos aceitos: JPG, PNG ou WEBP (máx. 10MB)
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <label className="block text-xs font-medium text-muted-foreground">
+              Link / URL pública da imagem (https://...)
+            </label>
+            <div className="flex items-center gap-2">
+              <Input
+                type="url"
+                value={headerMediaUrl}
+                onChange={(e) => onHeaderMediaUrlChange(e.target.value)}
+                placeholder="https://exemplo.com/sua-imagem.jpg"
+                className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
+              />
+              {headerMediaUrl.trim() && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onHeaderMediaUrlChange('')}
+                  className="border-border text-muted-foreground hover:text-foreground"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+            {headerMediaUrl.trim() && (
+              <div className="mt-2 flex items-center gap-3 rounded-lg border border-border bg-muted/40 p-2">
+                <div className="relative h-16 w-16 rounded overflow-hidden bg-black/40 border border-white/10 flex-shrink-0">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={headerMediaUrl.trim()}
+                    alt="Preview da URL"
+                    className="h-full w-full object-cover"
+                    onError={(e) => {
+                      (e.target as HTMLElement).style.display = 'none';
+                    }}
+                  />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-medium text-foreground">Pré-visualização da URL</p>
+                  <p className="text-[11px] text-muted-foreground truncate">{headerMediaUrl.trim()}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {headerMediaError && (
+          <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-300">
+            <AlertCircle className="h-4 w-4 shrink-0 text-amber-400" />
+            <p>
+              {headerMediaError === 'missing'
+                ? 'Uma foto ou URL de mídia é obrigatória para este modelo.'
+                : 'Por favor, informe uma URL válida iniciando com http:// ou https://'}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {placeholders.length === 0 ? (
         <div className="rounded-xl border border-border bg-card/50 p-6 text-center">
           <p className="text-sm text-muted-foreground">
             {t('personalize.noPreview')}
           </p>
         </div>
-      ) : placeholders.length === 0 ? null : (
+      ) : (
         <div className="space-y-4">
           {placeholders.map((placeholder) => {
             const key = placeholder.replace(/^\{\{|\}\}$/g, '');
@@ -344,7 +580,7 @@ export function Step3Personalize({
                         onChange={(e) =>
                           updateVariable(key, { value: e.target.value })
                         }
-                        placeholder="Enter value..."
+                        placeholder="Insira o valor..."
                         className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
                       />
                     ) : mapping.type === 'field' ? (
@@ -376,10 +612,10 @@ export function Step3Personalize({
                           <SelectValue
                             placeholder={
                               loadingFields
-                                ? 'Loading…'
+                                ? 'Carregando...'
                                 : customFields.length === 0
-                                  ? 'No custom fields'
-                                  : 'Select custom field…'
+                                  ? 'Nenhum campo personalizado'
+                                  : 'Selecione campo...'
                             }
                           />
                         </SelectTrigger>
@@ -400,8 +636,7 @@ export function Step3Personalize({
         </div>
       )}
 
-      {/* Live Preview — rendered as a WhatsApp-style bubble so the user
-          sees approximately what the recipient will see. */}
+      {/* Live Preview estilo WhatsApp */}
       <div className="rounded-xl border border-border bg-card/50 p-4">
         <div className="mb-3 flex items-center gap-2">
           <Eye className="h-4 w-4 text-primary" />
@@ -412,21 +647,36 @@ export function Step3Personalize({
           )}
         </div>
         <div className="rounded-lg bg-[#0e1a12] p-3">
-          <div className="ml-auto max-w-[85%] rounded-lg bg-primary/30 px-3 py-2 shadow-sm">
-            <p className="whitespace-pre-wrap text-sm text-primary">
-              {previewText}
-            </p>
+          <div className="ml-auto max-w-[85%] rounded-lg bg-primary/30 overflow-hidden shadow-sm border border-emerald-500/10">
+            {headerMediaUrl && headerMediaUrl.trim() && (
+              <div className="relative w-full aspect-video max-h-52 bg-black/50 overflow-hidden border-b border-white/10">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={headerMediaUrl.trim()}
+                  alt="Foto da mensagem"
+                  className="h-full w-full object-cover"
+                  onError={(e) => {
+                    (e.target as HTMLElement).style.display = 'none';
+                  }}
+                />
+              </div>
+            )}
+            <div className="px-3 py-2">
+              <p className="whitespace-pre-wrap text-sm text-primary">
+                {previewText}
+              </p>
+            </div>
           </div>
         </div>
       </div>
 
       {unmappedKeys.length > 0 && (
         <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-          Map every placeholder before continuing — still missing{' '}
+          Mapeie todos os campos antes de continuar — ainda restam{' '}
           <span className="font-mono font-semibold">
             {unmappedKeys.join(', ')}
           </span>
-          . Otherwise those placeholders will ship to Meta as empty strings.
+          .
         </div>
       )}
 
@@ -436,16 +686,16 @@ export function Step3Personalize({
           onClick={onBack}
           className="border-border text-muted-foreground"
         >
-          <ArrowLeft className="h-4 w-4" />
+          <ArrowLeft className="h-4 w-4 mr-2" />
           {t('back')}
         </Button>
         <Button
           onClick={onNext}
-          disabled={unmappedKeys.length > 0 || headerMediaError !== null}
+          disabled={unmappedKeys.length > 0 || headerMediaError !== null || uploadingPhoto}
           className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         >
           {t('next')}
-          <ArrowRight className="h-4 w-4" />
+          <ArrowRight className="h-4 w-4 ml-2" />
         </Button>
       </div>
     </div>
