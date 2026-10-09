@@ -59,7 +59,7 @@ export interface BuckPayResponse {
 }
 
 const BUCKPAY_BASE_URL = process.env.BUCKPAY_BASE_URL || 'https://api.realtechdev.com.br'
-const BUCKPAY_API_TOKEN = process.env.BUCKPAY_API_TOKEN || ''
+const BUCKPAY_API_TOKEN = (process.env.BUCKPAY_API_TOKEN || '').trim()
 const BUCKPAY_USER_AGENT = process.env.BUCKPAY_USER_AGENT || 'wacrm-edgar-katsumi/1.0'
 
 /**

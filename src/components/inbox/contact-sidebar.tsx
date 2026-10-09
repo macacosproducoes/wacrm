@@ -19,6 +19,7 @@ import {
   X,
   Smartphone,
   Loader2,
+  Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -29,13 +30,15 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { InstagramDiagnosticModal } from "@/components/contacts/instagram-diagnostic-modal";
 import { FollowerOrderCard } from "./follower-order-card";
+import { GenerateLeadPixModal } from "./generate-lead-pix-modal";
 
 interface ContactSidebarProps {
   contact: Contact | null;
+  conversationId?: string | null;
   onContactUpdated?: (updated: Contact) => void;
 }
 
-export function ContactSidebar({ contact, onContactUpdated }: ContactSidebarProps) {
+export function ContactSidebar({ contact, conversationId, onContactUpdated }: ContactSidebarProps) {
   const tSidebar = useTranslations("Inbox.sidebar");
   const tThread = useTranslations("Inbox.messageThread");
 
@@ -43,6 +46,7 @@ export function ContactSidebar({ contact, onContactUpdated }: ContactSidebarProp
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
+  const [leadPixModalOpen, setLeadPixModalOpen] = useState(false);
   const [tags, setTags] = useState<(Tag & { contact_tag_id: string })[]>([]);
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
@@ -337,7 +341,35 @@ export function ContactSidebar({ contact, onContactUpdated }: ContactSidebarProp
             )}
           </div>
 
-          {/* Follower Order Confirmation Card (Realtime Preview & One-Click Send) */}
+                    {/* Gerar Chave PIX Card (Canto direito do WhatsApp / Lead) */}
+          <div className="mt-4 rounded-xl border border-cyan-500/30 bg-gradient-to-b from-cyan-950/30 to-blue-950/20 p-3 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
+                  <Zap className="h-4 w-4 fill-cyan-400" />
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Chave PIX / Cobrança</p>
+                  <p className="text-[10px] text-muted-foreground">Gerar chave para este lead</p>
+                </div>
+              </div>
+              <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-semibold text-cyan-300">
+                Instantâneo
+              </span>
+            </div>
+
+            <Button
+              type="button"
+              size="sm"
+              className="mt-2.5 w-full gap-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-semibold text-xs shadow-md shadow-cyan-950/50"
+              onClick={() => setLeadPixModalOpen(true)}
+            >
+              <Zap className="h-3.5 w-3.5 fill-current" />
+              <span>Gerar Chave PIX</span>
+            </Button>
+          </div>
+
+{/* Follower Order Confirmation Card (Realtime Preview & One-Click Send) */}
           <div className="mt-4">
             <FollowerOrderCard
               contact={contact}

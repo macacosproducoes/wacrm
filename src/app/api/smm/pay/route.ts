@@ -2,12 +2,33 @@ import { NextResponse } from 'next/server'
 import { createBuckPayTransaction } from '@/lib/buckpay'
 
 function generateValidCPF(): string {
-  const n = Array.from({ length: 9 }, () => Math.floor(Math.random() * 10))
-  let d1 = n.reduce((total, number, index) => total + number * (10 - index), 0) % 11
-  d1 = d1 < 2 ? 0 : 11 - d1
-  let d2 = [...n, d1].reduce((total, number, index) => total + number * (11 - index), 0) % 11
-  d2 = d2 < 2 ? 0 : 11 - d2
-  return [...n, d1, d2].join('')
+  const rnd = (n: number) => Math.round(Math.random() * n)
+  const mod = (dividend: number, divisor: number) =>
+    Math.round(dividend - Math.floor(dividend / divisor) * divisor)
+  const n = Array(9).fill(0).map(() => rnd(9))
+  let d1 = n.reduce((total, number, index) => total + number * (10 - index), 0)
+  d1 = 11 - mod(d1, 11)
+  if (d1 >= 10) d1 = 0
+  let d2 = n.reduce((total, number, index) => total + number * (11 - index), 0) + d1 * 2
+  d2 = 11 - mod(d2, 11)
+  if (d2 >= 10) d2 = 0
+  return '' + n.join('') + d1 + d2
+}
+
+function isValidCPF(cpf: string): boolean {
+  const clean = cpf.replace(/\D/g, '')
+  if (clean.length !== 11 || /^(\d)\1+$/.test(clean)) return false
+  let sum = 0, rest
+  for (let i = 1; i <= 9; i++) sum += parseInt(clean.substring(i - 1, i)) * (11 - i)
+  rest = (sum * 10) % 11
+  if (rest === 10 || rest === 11) rest = 0
+  if (rest !== parseInt(clean.substring(9, 10))) return false
+  sum = 0
+  for (let i = 1; i <= 10; i++) sum += parseInt(clean.substring(i - 1, i)) * (12 - i)
+  rest = (sum * 10) % 11
+  if (rest === 10 || rest === 11) rest = 0
+  if (rest !== parseInt(clean.substring(10, 11))) return false
+  return true
 }
 
 function formatPhone(phone?: string): string {
@@ -60,7 +81,7 @@ export async function POST(request: Request) {
     const buyerEmail = (email || `smm_${cleanRandom}@painelsmm.com`).trim()
 
     let buyerCpf = cpf ? String(cpf).replace(/\D/g, '') : ''
-    if (buyerCpf.length !== 11) {
+    if (!isValidCPF(buyerCpf)) {
       buyerCpf = generateValidCPF()
     }
 

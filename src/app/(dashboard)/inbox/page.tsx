@@ -1020,7 +1020,7 @@ function InboxPageInner() {
               fallbackTitle="Falha ao carregar dados do contato"
               fallbackMessage="Não foi possível carregar os detalhes deste contato."
             >
-              <ContactSidebar contact={activeContact} onContactUpdated={handleContactUpdated} />
+              <ContactSidebar contact={activeContact} conversationId={activeConversation?.id} onContactUpdated={handleContactUpdated} />
             </ErrorBoundary>
           </div>
         )}
