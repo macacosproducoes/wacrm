@@ -77,7 +77,8 @@ export async function POST(request: Request) {
     const external_id = `smm_order_${Date.now()}_${cleanRandom}`
 
     // Clean buyer data
-    const buyerName = (name || (instagram ? `Cliente @${instagram.replace('@', '')}` : 'Cliente SMM')).trim()
+    const rawName = (name || (instagram ? `Cliente ${String(instagram).replace(/[^a-zA-ZÀ-ÿ\s]/g, ' ')}` : 'Cliente SMM')).trim()
+    const buyerName = rawName.replace(/[^a-zA-ZÀ-ÿ\s'-]/g, ' ').replace(/\s+/g, ' ').trim() || 'Cliente SMM'
     const buyerEmail = (email || `smm_${cleanRandom}@painelsmm.com`).trim()
 
     let buyerCpf = cpf ? String(cpf).replace(/\D/g, '') : ''
