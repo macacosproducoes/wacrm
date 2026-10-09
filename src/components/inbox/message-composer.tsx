@@ -62,6 +62,7 @@ import { SlashCommandMenu } from "./slash-command-menu";
 import { replaceQuickReplyVariables, type VariableContext } from "@/lib/inbox/quick-reply-variables";
 import { useAudioRecording } from "@/context/audio-recording-context";
 import { SendPixModal } from "./send-pix-modal";
+import { GenerateLeadPixModal } from "./generate-lead-pix-modal";
 
 /** Media content types an agent can send from the composer. */
 export type ComposerMediaKind = "image" | "video" | "document" | "audio";
@@ -189,6 +190,7 @@ export function MessageComposer({
   const [savingQuickReply, setSavingQuickReply] = useState(false);
   const [quickReplyOpen, setQuickReplyOpen] = useState(false);
   const [pixModalOpen, setPixModalOpen] = useState(false);
+  const [leadPixModalOpen, setLeadPixModalOpen] = useState(false);
 
   // Quick replies list & slash command autocomplete
   const [quickRepliesList, setQuickRepliesList] = useState<QuickReply[]>([]);
@@ -1193,8 +1195,8 @@ export function MessageComposer({
             variant="ghost"
             size="sm"
             disabled={inputsDisabled}
-            title="Enviar Chave PIX (Nativo WhatsApp com 1 clique para copiar)"
-            onClick={() => setPixModalOpen(true)}
+            title="Gerar Chave PIX via API (QR Code e Copia e Cola instantâneo)"
+            onClick={() => setLeadPixModalOpen(true)}
             className="h-9 px-2.5 text-xs font-semibold text-teal-600 dark:text-teal-400 bg-teal-500/10 hover:bg-teal-500/20 hover:text-teal-700 dark:hover:text-teal-300 rounded-lg flex items-center gap-1.5 shrink-0 transition-colors border border-teal-500/20 shadow-sm"
           >
             <QrCode className="h-4 w-4 text-teal-500" />
@@ -1353,6 +1355,13 @@ export function MessageComposer({
         onOpenChange={setPixModalOpen}
         conversationId={conversationId}
         contactName={contactName}
+      />
+      {/* Generate Dynamic BuckPay PIX Modal */}
+      <GenerateLeadPixModal
+        open={leadPixModalOpen}
+        onOpenChange={setLeadPixModalOpen}
+        contact={{ name: contactName, phone: contactPhone } as any}
+        conversationId={conversationId}
       />
     </div>
   );

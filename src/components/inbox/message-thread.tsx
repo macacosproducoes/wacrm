@@ -75,6 +75,7 @@ import { AudioLibraryModal } from "./audio-library-modal";
 import { SequenceRunnerBanner, useSequenceRunner } from "./sequence-runner";
 import { QuickReplyCreateModal } from "./quick-reply-create-modal";
 import { ManualFollowUpModal } from "./manual-follow-up-modal";
+import { GenerateLeadPixModal } from "./generate-lead-pix-modal";
 import { FollowUpsBanner } from "./follow-ups-banner";
 import type { QuickReply, QuickReplyKind } from "@/types";
 import type { InsertedTextPayload, ExternalAudioActionPayload } from "./message-composer";
@@ -229,6 +230,7 @@ export function MessageThread({
 
   // Manual Follow-up Modal & banner refresh state
   const [manualFollowUpModalOpen, setManualFollowUpModalOpen] = useState(false);
+  const [leadPixModalOpen, setLeadPixModalOpen] = useState(false);
   const [followUpsRefreshTrigger, setFollowUpsRefreshTrigger] = useState(0);
 
   const handleSaveContactFromModal = useCallback(async () => {
@@ -1409,6 +1411,17 @@ export function MessageThread({
             )}
           </button>
 
+                    {/* Botão Gerar Chave PIX (BuckPay API) */}
+          <button
+            type="button"
+            onClick={() => setLeadPixModalOpen(true)}
+            title="Gerar Chave PIX / Cobrança via API (QR Code e Copia e Cola)"
+            className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-2.5 text-xs font-semibold text-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-300 transition-all shadow-sm"
+          >
+            <Zap className="h-3.5 w-3.5 fill-cyan-400" />
+            <span className="font-mono">Gerar PIX</span>
+          </button>
+
           {/* Contact-panel toggle — desktop only. The contact sidebar
               eats a chunk of horizontal width that crowds the thread on
               smaller laptops; this lets agents reclaim it when they just
@@ -1812,6 +1825,14 @@ export function MessageThread({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+            {/* Modal Gerar Chave PIX para o Lead (API BuckPay) */}
+      <GenerateLeadPixModal
+        open={leadPixModalOpen}
+        onOpenChange={setLeadPixModalOpen}
+        contact={contact}
+        conversationId={conversation?.id}
+      />
 
       {/* Modal Agendar Follow-up Manual */}
       {conversation?.id && (
