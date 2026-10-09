@@ -67,8 +67,8 @@ export async function POST(request: Request) {
     const external_id = `mimo_edgar_${Date.now()}_${cleanRandom}`
 
     // Clean buyer data with valid CPF and Phone format
-    const rawName = (name || (instagram ? `Cliente ${String(instagram).replace(/[^a-zA-ZÀ-ÿ\s]/g, ' ')}` : 'Cliente SMM')).trim()
-    const buyerName = rawName.replace(/[^a-zA-ZÀ-ÿ\s'-]/g, ' ').replace(/\s+/g, ' ').trim() || 'Cliente SMM'
+    const rawName = (name || 'Apoiador Edgar Katsumi').trim()
+    const buyerName = rawName.replace(/[^a-zA-ZÀ-ÿ\s'-]/g, ' ').replace(/\s+/g, ' ').trim() || 'Apoiador Edgar Katsumi'
     const buyerEmail = (email || 'apoiador@edgarkatsumi.com').trim()
     
     let buyerCpf = cpf ? String(cpf).replace(/\D/g, '') : ''
