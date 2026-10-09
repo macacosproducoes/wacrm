@@ -1015,7 +1015,7 @@ function InboxPageInner() {
             On mobile it's always hidden (the `lg:block` below), so the
             toggle — which is itself desktop-only — never affects it. */}
         {contactPanelOpen && (
-          <div className="hidden lg:block">
+          <div className="hidden h-full min-h-0 lg:block overflow-hidden">
             <ErrorBoundary
               fallbackTitle="Falha ao carregar dados do contato"
               fallbackMessage="Não foi possível carregar os detalhes deste contato."

@@ -206,9 +206,8 @@ export function ContactSidebar({ contact, conversationId, onContactUpdated }: Co
   const initials = displayName.charAt(0).toUpperCase();
 
   return (
-    <div className="flex h-full w-70 flex-col border-l border-border bg-card">
-      <ScrollArea className="flex-1">
-        <div className="p-4">
+    <div className="flex h-full w-72 min-h-0 flex-col border-l border-border bg-card overflow-hidden">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-3.5 space-y-3 [scrollbar-width:thin] [scrollbar-color:hsl(var(--muted-foreground)/0.3)_transparent] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-muted-foreground/30 hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/50">
           {/* Contact Info */}
           <div className="flex flex-col items-center text-center">
             <ContactAvatar
@@ -490,8 +489,7 @@ export function ContactSidebar({ contact, conversationId, onContactUpdated }: Co
               </div>
             </div>
           </div>
-        </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 }
