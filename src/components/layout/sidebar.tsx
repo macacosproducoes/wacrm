@@ -311,7 +311,25 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
 
           <div className="my-4 border-t border-border" />
 
-          {/* Mimos Edgar Katsumi quick link */}
+                    {/* SMM Painel Checkout quick link */}
+          <Link
+            href="/smm"
+            target="_blank"
+            className={cn(
+              "mb-2 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors lg:py-2",
+              pathname.startsWith("/smm")
+                ? "bg-cyan-500/10 text-cyan-400"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground",
+            )}
+          >
+            <Zap className="h-4 w-4 text-cyan-400" />
+            <span className="flex-1">Painel SMM</span>
+            <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-cyan-300">
+              PRO
+            </span>
+          </Link>
+
+{/* Mimos Edgar Katsumi quick link */}
           <Link
             href="/edgar-katsumi/mimos"
             target="_blank"
