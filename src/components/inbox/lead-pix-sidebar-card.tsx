@@ -116,6 +116,8 @@ export function LeadPixSidebarCard({
           service_name: serviceName,
           name: contact?.name || "Cliente Lead",
           phone: contact?.phone,
+          contact_id: contact?.id,
+          account_id: contact?.account_id,
         }),
       });
 

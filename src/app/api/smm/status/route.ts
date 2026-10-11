@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getBuckPayTransaction } from '@/lib/buckpay'
+import { processFirstPaymentAutomation } from '@/lib/automations/first-payment-engine'
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
@@ -16,6 +17,18 @@ export async function GET(request: Request) {
       return NextResponse.json(
         { error: result.error.message, detail: result.error.detail },
         { status: 404 }
+      )
+    }
+
+    if (result.data?.status === 'paid') {
+      processFirstPaymentAutomation({
+        payment_id: result.data.id,
+        external_id,
+        status: 'paid',
+        amount: typeof result.data.total_amount === 'number' ? result.data.total_amount / 100 : undefined,
+        raw_payload: result.data as unknown as Record<string, unknown>,
+      }).catch((err) =>
+        console.error('[API /api/smm/status] Erro assíncrono na automação de primeiro pagamento:', err)
       )
     }
 

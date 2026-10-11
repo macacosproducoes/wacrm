@@ -51,6 +51,8 @@ export async function POST(request: Request) {
       instagram,
       service_name,
       order_bump,
+      contact_id,
+      account_id,
     } = body
 
     // Validate amount
@@ -74,7 +76,7 @@ export async function POST(request: Request) {
 
     // Generate unique external_id matching BuckPay regex ^[A-Za-z0-9_-]+$
     const cleanRandom = Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(0, 8)
-    const external_id = `smm_order_${Date.now()}_${cleanRandom}`
+    const external_id = contact_id ? `smm_${contact_id}_${Date.now()}_${cleanRandom}` : `smm_order_${Date.now()}_${cleanRandom}`
 
     // Clean buyer data
     const rawName = (name || (instagram ? `Cliente ${String(instagram).replace(/[^a-zA-ZÀ-ÿ\s]/g, ' ')}` : 'Cliente SMM')).trim()

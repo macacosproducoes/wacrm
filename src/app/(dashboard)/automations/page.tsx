@@ -28,6 +28,7 @@ import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { WelcomeAutomationTab } from "@/components/automations/welcome-automation-tab"
 import { CentralLibraryTab } from "@/components/automations/central-library-tab"
+import { FirstPaymentAutomationTab } from "@/components/automations/first-payment-tab"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -183,6 +184,9 @@ export default function AutomationsPage() {
           <TabsTrigger value="library" className="gap-2 rounded-lg text-xs font-semibold py-2 px-3.5">
             📚 Biblioteca de Respostas & Categorias
           </TabsTrigger>
+                  <TabsTrigger value="first_payment" className="gap-2 rounded-lg text-xs font-semibold py-2 px-3.5">
+            💰 1º Pagamento Pix (Áudio)
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="welcome" className="space-y-4 focus-visible:outline-none">
@@ -257,6 +261,10 @@ export default function AutomationsPage() {
               ))}
             </ul>
           )}
+        </TabsContent>
+
+                <TabsContent value="first_payment" className="space-y-4 focus-visible:outline-none">
+          <FirstPaymentAutomationTab />
         </TabsContent>
 
         <TabsContent value="library" className="space-y-4 focus-visible:outline-none">
