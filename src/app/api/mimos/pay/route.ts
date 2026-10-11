@@ -1,35 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createBuckPayTransaction } from '@/lib/buckpay'
-
-function generateValidCPF(): string {
-  const rnd = (n: number) => Math.round(Math.random() * n)
-  const mod = (dividend: number, divisor: number) =>
-    Math.round(dividend - Math.floor(dividend / divisor) * divisor)
-  const n = Array(9).fill(0).map(() => rnd(9))
-  let d1 = n.reduce((total, number, index) => total + number * (10 - index), 0)
-  d1 = 11 - mod(d1, 11)
-  if (d1 >= 10) d1 = 0
-  let d2 = n.reduce((total, number, index) => total + number * (11 - index), 0) + d1 * 2
-  d2 = 11 - mod(d2, 11)
-  if (d2 >= 10) d2 = 0
-  return '' + n.join('') + d1 + d2
-}
-
-function isValidCPF(cpf: string): boolean {
-  const clean = cpf.replace(/\D/g, '')
-  if (clean.length !== 11 || /^(\d)\1+$/.test(clean)) return false
-  let sum = 0, rest
-  for (let i = 1; i <= 9; i++) sum += parseInt(clean.substring(i - 1, i)) * (11 - i)
-  rest = (sum * 10) % 11
-  if (rest === 10 || rest === 11) rest = 0
-  if (rest !== parseInt(clean.substring(9, 10))) return false
-  sum = 0
-  for (let i = 1; i <= 10; i++) sum += parseInt(clean.substring(i - 1, i)) * (12 - i)
-  rest = (sum * 10) % 11
-  if (rest === 10 || rest === 11) rest = 0
-  if (rest !== parseInt(clean.substring(10, 11))) return false
-  return true
-}
+import { createWiinPayPayment } from '@/lib/wiinpay'
 
 function formatPhone(phone?: string): string {
   const digits = String(phone || '').replace(/\D/g, '')
@@ -40,14 +10,14 @@ function formatPhone(phone?: string): string {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json()
-    const { amount, payment_method = 'pix', name, email, cpf, phone, message } = body
+    const body = await request.json().catch(() => ({}))
+    const { amount, name, email, phone, message, split } = body
 
-    // Validate amount
+    // Validate amount (WiinPay minimum is 3.00 BRL)
     const numAmount = Number(amount)
-    if (isNaN(numAmount) || numAmount < 6) {
+    if (isNaN(numAmount) || numAmount < 3) {
       return NextResponse.json(
-        { error: 'O valor mínimo para o Mimo é R$ 6,00.' },
+        { error: 'O valor mínimo para o Mimo é R$ 3,00.' },
         { status: 400 }
       )
     }
@@ -59,58 +29,45 @@ export async function POST(request: Request) {
       )
     }
 
-    // Amount in centavos
-    const amountCents = Math.round(numAmount * 100)
-
-    // Generate unique external_id matching BuckPay regex ^[A-Za-z0-9_-]+$
+    // Generate unique external_id
     const cleanRandom = Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(0, 8)
     const external_id = `mimo_edgar_${Date.now()}_${cleanRandom}`
 
-    // Clean buyer data with valid CPF and Phone format
+    // Clean buyer data
     const rawName = (name || 'Apoiador Edgar Katsumi').trim()
     const buyerName = rawName.replace(/[^a-zA-ZÀ-ÿ\s'-]/g, ' ').replace(/\s+/g, ' ').trim() || 'Apoiador Edgar Katsumi'
-    const buyerEmail = (email || 'apoiador@edgarkatsumi.com').trim()
-    
-    let buyerCpf = cpf ? String(cpf).replace(/\D/g, '') : ''
-    if (!isValidCPF(buyerCpf)) {
-      buyerCpf = generateValidCPF()
-    }
-
+    const buyerEmail = (email || `apoiador_${cleanRandom}@edgarkatsumi.com`).trim()
     const buyerPhone = formatPhone(phone)
 
-    // Call BuckPay API
-    const result = await createBuckPayTransaction({
-      external_id,
-      payment_method: payment_method === 'card' ? 'card' : payment_method === 'boleto' ? 'boleto' : 'pix',
-      amount: amountCents,
-      buyer: {
-        name: buyerName,
-        email: buyerEmail,
-        document: buyerCpf,
+    // Base URL for webhooks
+    const appBaseUrl =
+      process.env.NEXT_PUBLIC_APP_URL ||
+      (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : 'https://wacrm-khaki-three.vercel.app')
+    const webhookUrl = `${appBaseUrl.replace(/\/+$/, '')}/api/webhooks/wiinpay`
+
+    const description = `Mimo para Edgar Katsumi (${message ? 'com mensagem' : 'sem mensagem'})`
+
+    // Call WiinPay API
+    const result = await createWiinPayPayment({
+      value: numAmount,
+      name: buyerName,
+      email: buyerEmail,
+      description,
+      webhook_url: webhookUrl,
+      ...(split ? { split } : {}),
+      metadata: {
+        external_id,
+        donor_name: buyerName,
         phone: buyerPhone,
+        message: message || '',
       },
-      product: {
-        name: `Mimo para Edgar Katsumi (${message ? 'com mensagem' : 'sem mensagem'})`,
-      },
-      ...(body.card ? { card: body.card } : {}),
     })
 
     if (result.error) {
-      let detailMsg = ''
-      if (result.error.detail) {
-        if (typeof result.error.detail === 'object') {
-          detailMsg = Object.entries(result.error.detail)
-            .map(([key, val]) => `${key}: ${Array.isArray(val) ? val.join(', ') : val}`)
-            .join(' | ')
-        } else {
-          detailMsg = String(result.error.detail)
-        }
-      }
-
       return NextResponse.json(
         {
-          error: result.error.message || 'Erro ao comunicar com a BuckPay',
-          detail: detailMsg,
+          error: result.error.message || 'Erro ao comunicar com a WiinPay',
+          detail: typeof result.error.detail === 'object' ? JSON.stringify(result.error.detail) : String(result.error.detail || ''),
         },
         { status: 400 }
       )
@@ -129,7 +86,7 @@ export async function POST(request: Request) {
   } catch (err: any) {
     console.error('[API /api/mimos/pay] Unexpected error:', err)
     return NextResponse.json(
-      { error: 'Falha interna ao processar o Mimo. Tente novamente.' },
+      { error: 'Falha interna ao processar o Mimo via WiinPay. Tente novamente.' },
       { status: 500 }
     )
   }

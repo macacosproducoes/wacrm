@@ -53,6 +53,7 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith('/api/mimos') ||
     pathname.startsWith('/api/smm') ||
     pathname.startsWith('/api/webhooks/buckpay') ||
+    pathname.startsWith('/api/webhooks/wiinpay') ||
     pathname.startsWith('/edgar-katsumi') ||
     pathname.startsWith('/smm') ||
     pathname === '/api/health'

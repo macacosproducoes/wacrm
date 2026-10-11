@@ -90,11 +90,11 @@ export default function EdgarKatsumiMimosPage() {
   const handleAmountBlur = () => {
     setIsEditing(false)
     const parsed = parseFloat(inputValue.replace(',', '.'))
-    if (!isNaN(parsed) && parsed >= 6 && parsed <= 3000) {
+    if (!isNaN(parsed) && parsed >= 3 && parsed <= 3000) {
       setAmount(Math.round(parsed * 100) / 100)
-    } else if (!isNaN(parsed) && parsed < 6) {
-      toast.error('Mínimo R$ 6,00')
-      setAmount(6)
+    } else if (!isNaN(parsed) && parsed < 3) {
+      toast.error('Mínimo R$ 3,00')
+      setAmount(3)
     } else if (!isNaN(parsed) && parsed > 3000) {
       toast.error('Máximo R$ 3.000,00')
       setAmount(3000)
@@ -117,8 +117,8 @@ export default function EdgarKatsumiMimosPage() {
   // Generate payment
   const handleGenerate = async () => {
     const finalAmount = totalAmount
-    if (finalAmount < 6 || finalAmount > 3000) {
-      toast.error('Valor total fora do limite (R$ 6 – R$ 3.000)')
+    if (finalAmount < 3 || finalAmount > 3000) {
+      toast.error('Valor total fora do limite (R$ 3 – R$ 3.000)')
       return
     }
 
@@ -258,7 +258,7 @@ export default function EdgarKatsumiMimosPage() {
             <div className="p-3 rounded-xl bg-white/[0.02] border border-white/[0.05]">
               <span className="text-amber-400 font-bold">LIMITES</span>
               <span className="text-white/50 ml-1">R$ 6 – R$ 3.000</span>
-              <p className="text-white/30 mt-1 font-sans text-[10px]">Base: api.realtechdev.com.br</p>
+              <p className="text-white/30 mt-1 font-sans text-[10px]">Base: api-v2.wiinpay.com.br</p>
             </div>
           </div>
         </div>
@@ -296,7 +296,7 @@ export default function EdgarKatsumiMimosPage() {
                         ref={inputRef}
                         type="number"
                         step="1"
-                        min="6"
+                        min="3"
                         max="3000"
                         value={inputValue}
                         onChange={(e) => setInputValue(e.target.value)}
@@ -409,7 +409,7 @@ export default function EdgarKatsumiMimosPage() {
               <div className="absolute z-20" style={{ bottom: '-5px', left: '50%', transform: 'translateX(-50%)' }}>
                 <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/[0.03] border border-white/[0.06] backdrop-blur-xl">
                   <ShieldCheck className="w-3 h-3 text-emerald-500/50" />
-                  <span className="text-[9px] text-white/25 font-medium">BuckPay Seguro</span>
+                  <span className="text-[9px] text-white/25 font-medium">WiinPay Seguro</span>
                   <span className="text-[9px] text-white/15">·</span>
                   <Zap className="w-3 h-3 text-amber-400/50" />
                   <span className="text-[9px] text-white/25 font-medium">PIX</span>
@@ -490,7 +490,7 @@ export default function EdgarKatsumiMimosPage() {
               {isGenerating ? (
                 <span key="btn-loading-state" className="flex items-center gap-3">
                   <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-                  <span>Gerando via BuckPay...</span>
+                  <span>Gerando via WiinPay...</span>
                 </span>
               ) : (
                 <span key="btn-idle-state" className="flex items-center gap-3">
@@ -512,7 +512,13 @@ export default function EdgarKatsumiMimosPage() {
               <div className="flex justify-center">
                 <div className="p-3 bg-white rounded-2xl shadow-inner">
                   <img
-                    src={`data:image/png;base64,${paymentData.data.pix.qrcode_base64}`}
+                    src={
+                      paymentData.data.pix.qrcode_base64?.startsWith('data:')
+                        ? paymentData.data.pix.qrcode_base64
+                        : paymentData.data.pix.qrcode_base64?.startsWith('http')
+                        ? paymentData.data.pix.qrcode_base64
+                        : `data:image/png;base64,${paymentData.data.pix.qrcode_base64}`
+                    }
                     alt="QR Code PIX"
                     className="w-40 h-40 object-contain"
                   />
