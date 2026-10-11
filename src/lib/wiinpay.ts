@@ -114,12 +114,13 @@ export async function createWiinPayPayment(
 
     // Extract transaction details with flexible normalization across WiinPay response formats
     const rawData = resJson.data || resJson
-    const rawId = String(rawData.id || rawData.payment_id || rawData.transaction_id || `wiin_${Date.now()}`)
+    const rawId = String(rawData.paymentId || rawData.id || rawData.payment_id || rawData.transaction_id || `wiin_${Date.now()}`)
     const rawStatus = String(rawData.status || resJson.status || 'PENDING').trim()
     const isPaid = rawStatus === 'PAID' || rawStatus.toLowerCase() === 'paid'
 
     // Extract PIX copy-and-paste code
     const pixCode = String(
+      rawData.qr_code ||
       rawData.pix?.code ||
       rawData.pix_code ||
       rawData.copy_paste ||
