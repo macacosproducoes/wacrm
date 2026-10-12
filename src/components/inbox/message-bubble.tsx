@@ -58,6 +58,15 @@ function StatusIcon({ status }: { status: Message["status"] }) {
   }
 }
 
+function extractImageUrl(text?: string | null): string | null {
+  if (!text) return null;
+  const match =
+    text.match(/https?:\/\/[^\s]+?\.(png|jpe?g|webp|gif|svg|bmp)(\?[^\s]*)?/i) ||
+    text.match(/https?:\/\/[^\s]+?\/storage\/v1\/object\/public\/chat-media\/[^\s]+/i) ||
+    text.match(/https?:\/\/[^\s]+?\/files\/[^\s]+?\.(png|jpe?g|webp|gif)/i);
+  return match ? match[0] : null;
+}
+
 function MessageContent({
   message,
   t,
@@ -74,11 +83,14 @@ function MessageContent({
   // parent wired up no viewer, which is what makes them non-clickable.
   const openMedia = onOpenMedia ? () => onOpenMedia(message.id) : undefined;
 
-  // Check if message is an image, even if stored as document, file or text with image attachment
+  const extractedUrl = extractImageUrl(message.content_text);
+  const effectiveMediaUrl = message.media_url || extractedUrl;
+
+  // Check if message is an image, even if stored as document, file or text with image attachment/link
   const isImage =
     message.content_type === "image" ||
     Boolean(
-      message.media_url &&
+      effectiveMediaUrl &&
         message.content_type !== "video" &&
         message.content_type !== "audio" &&
         message.content_type !== "document" &&
@@ -87,27 +99,46 @@ function MessageContent({
           message.content_text === "[Figurinha]" ||
           message.content_text === "[Mensagem]" ||
           message.media_type?.startsWith("image/") ||
-          /\.(jpe?g|png|gif|webp|bmp|svg)(\?.*)?$/i.test(message.media_url) ||
-          /\.(jpe?g|png|gif|webp)(\?.*)?$/i.test(message.content_text || "") ||
-          message.media_url.includes("mmg.whatsapp.net") ||
-          message.media_url.includes("/api/whatsapp/uazapi/media") ||
-          message.media_url.includes("/files/")
+          /\.(jpe?g|png|gif|webp|bmp|svg)(\?.*)?$/i.test(effectiveMediaUrl) ||
+          effectiveMediaUrl.includes("/storage/v1/object/public/chat-media/") ||
+          effectiveMediaUrl.includes("mmg.whatsapp.net") ||
+          effectiveMediaUrl.includes("/api/whatsapp/uazapi/media") ||
+          effectiveMediaUrl.includes("/files/") ||
+          Boolean(extractedUrl)
         )
     );
 
   if (isImage) {
+    const isUrlOnly =
+      message.content_text &&
+      extractedUrl &&
+      message.content_text.trim() === extractedUrl;
+
+    const displayCaption = isUrlOnly
+      ? null
+      : message.content_text &&
+        message.content_text !== "[Imagem]" &&
+        message.content_text !== "[Figurinha]" &&
+        message.content_text !== "[Mensagem]"
+      ? (extractedUrl ? message.content_text.replace(extractedUrl, "").trim() : message.content_text)
+      : null;
+
     return (
       <div>
-        {message.media_url ? (
-          <MediaImageBubble message={message} onOpen={openMedia} t={t} />
+        {effectiveMediaUrl ? (
+          <MediaImageBubble
+            message={{ ...message, media_url: effectiveMediaUrl }}
+            onOpen={openMedia}
+            t={t}
+          />
         ) : (
           <MediaUnavailable label={t("photo")} t={t} />
         )}
-        {message.content_text && message.content_text !== "[Imagem]" && (
+        {displayCaption ? (
           <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-            {message.content_text}
+            {displayCaption}
           </p>
-        )}
+        ) : null}
       </div>
     );
   }

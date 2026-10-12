@@ -144,6 +144,7 @@ interface MessageComposerProps {
   externalAudioAction?: ExternalAudioActionPayload | null;
   onSelectSequence?: (qr: QuickReply) => void;
   onOpenCreateReply?: (defaultKind: QuickReplyKind, itemToEdit?: QuickReply) => void;
+  onOpenPhotoLibrary?: () => void;
 }
 
 function formatDuration(seconds: number): string {
@@ -173,6 +174,7 @@ export function MessageComposer({
   externalAudioAction,
   onSelectSequence,
   onOpenCreateReply,
+  onOpenPhotoLibrary,
 }: MessageComposerProps) {
   const t = useTranslations("Inbox.composer");
   const { startAudioRecording } = useAudioRecording();
@@ -530,6 +532,16 @@ export function MessageComposer({
       }
       if (qr.kind === "audio") {
         void handleSendAudioWithPresence(qr, true);
+        return;
+      }
+      if (qr.kind === "image" && qr.media_url) {
+        onSendMedia({
+          kind: "image",
+          mediaUrl: qr.media_url,
+          path: "",
+          caption: qr.content_text ? replaceQuickReplyVariables(qr.content_text, variableContext) : undefined,
+          filename: qr.title || "foto.jpg",
+        });
         return;
       }
       const raw = qr.content_text ?? "";
@@ -1155,8 +1167,14 @@ export function MessageComposer({
             <DropdownMenuContent align="start" className="border-border bg-popover">
               <DropdownMenuItem onClick={() => imageInputRef.current?.click()}>
                 <ImageIcon className="mr-2 h-4 w-4" />
-                {t("photo")}
+                {t("photo")} (Upload)
               </DropdownMenuItem>
+              {onOpenPhotoLibrary && (
+                <DropdownMenuItem onClick={onOpenPhotoLibrary} className="cursor-pointer">
+                  <ImageIcon className="mr-2 h-4 w-4 text-emerald-500" />
+                  Galeria de Fotos (Cadastradas)
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onClick={() => videoInputRef.current?.click()}>
                 <Video className="mr-2 h-4 w-4" />
                 {t("video")}
@@ -1188,6 +1206,22 @@ export function MessageComposer({
             <Zap className="h-4 w-4 fill-emerald-500 text-emerald-500" />
             <span className="hidden sm:inline font-mono">ZapPlus</span>
           </Button>
+
+          {/* Photos Library Trigger Button */}
+          {onOpenPhotoLibrary && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={inputsDisabled}
+              title="Galeria de Fotos Cadastradas"
+              onClick={onOpenPhotoLibrary}
+              className="h-9 px-2.5 text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-500/10 hover:bg-blue-500/20 hover:text-blue-700 dark:hover:text-blue-300 rounded-lg flex items-center gap-1.5 shrink-0 transition-colors border border-blue-500/20"
+            >
+              <ImageIcon className="h-4 w-4 text-blue-500" />
+              <span className="hidden sm:inline font-medium">Fotos</span>
+            </Button>
+          )}
 
           {/* PIX Native Message Trigger Button */}
           <Button

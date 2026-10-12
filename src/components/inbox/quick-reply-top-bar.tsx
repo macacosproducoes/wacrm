@@ -52,6 +52,7 @@ interface QuickReplyTopBarProps {
   onSelectMedia: (qr: QuickReply) => void;
   onSelectSequence: (qr: QuickReply) => void;
   onOpenAudioLibrary: () => void;
+  onOpenPhotoLibrary?: () => void;
   onOpenCreateReply: (defaultKind: QuickReplyKind, itemToEdit?: QuickReply) => void;
   onToggleFavorite?: (qr: QuickReply) => void;
   onRefreshReplies?: () => void;
@@ -143,6 +144,7 @@ export function QuickReplyTopBar({
   onSelectMedia,
   onSelectSequence,
   onOpenAudioLibrary,
+  onOpenPhotoLibrary,
   onOpenCreateReply,
   onToggleFavorite,
   onRefreshReplies,
@@ -562,6 +564,22 @@ export function QuickReplyTopBar({
               </TooltipContent>
             </Tooltip>
 
+            {onOpenPhotoLibrary && (
+              <Tooltip>
+                <TooltipTrigger
+                  type="button"
+                  onClick={onOpenPhotoLibrary}
+                  className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/15 border border-emerald-500/20 cursor-pointer"
+                >
+                  <ImageIcon className="h-3 w-3" />
+                  <span className="hidden sm:inline">Galeria de Fotos</span>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  Ver e enviar fotos cadastradas no Supabase
+                </TooltipContent>
+              </Tooltip>
+            )}
+
             <Tooltip>
               <TooltipTrigger
                 type="button"
@@ -726,8 +744,16 @@ export function QuickReplyTopBar({
                     <GripVertical className="h-3 w-3" />
                   </div>
 
-                  {/* Color dot indicator */}
-                  <span className={cn("h-2 w-2 rounded-full shrink-0", kindCfg.dot)} />
+                  {/* Color dot or photo thumbnail */}
+                  {item.kind === "image" && item.media_url ? (
+                    <img
+                      src={item.media_url}
+                      alt={item.title}
+                      className="h-4 w-4 rounded object-cover shrink-0 border border-black/10 dark:border-white/20"
+                    />
+                  ) : (
+                    <span className={cn("h-2 w-2 rounded-full shrink-0", kindCfg.dot)} />
+                  )}
 
                   {/* Title */}
                   <span className="truncate max-w-[140px] sm:max-w-[180px] font-semibold">

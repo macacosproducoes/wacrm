@@ -72,6 +72,7 @@ import { renderTemplateBody } from "@/lib/whatsapp/template-body";
 import { toast } from "sonner";
 import { QuickReplyTopBar } from "./quick-reply-top-bar";
 import { AudioLibraryModal } from "./audio-library-modal";
+import { PhotoLibraryModal } from "./photo-library-modal";
 import { SequenceRunnerBanner, useSequenceRunner } from "./sequence-runner";
 import { QuickReplyCreateModal } from "./quick-reply-create-modal";
 import { ManualFollowUpModal } from "./manual-follow-up-modal";
@@ -1058,6 +1059,7 @@ export function MessageThread({
   const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
   const [loadingQuickReplies, setLoadingQuickReplies] = useState(false);
   const [audioLibraryOpen, setAudioLibraryOpen] = useState(false);
+  const [photoLibraryOpen, setPhotoLibraryOpen] = useState(false);
   const [createQuickReplyOpen, setCreateQuickReplyOpen] = useState(false);
   const [editingQuickReply, setEditingQuickReply] = useState<QuickReply | null>(null);
   const [createDefaultKind, setCreateDefaultKind] = useState<QuickReplyKind>("text");
@@ -1164,6 +1166,19 @@ export function MessageThread({
       filename: qr.title,
     });
   }, [handleSendMedia]);
+
+  const handleSendPhotoFromLibrary = useCallback(
+    (photoUrl: string, caption?: string) => {
+      handleSendMedia({
+        kind: "image",
+        mediaUrl: photoUrl,
+        path: "",
+        caption: caption || undefined,
+        filename: "Foto",
+      });
+    },
+    [handleSendMedia]
+  );
 
   const handleOpenCreateReply = useCallback((defaultKind: QuickReplyKind = "text", itemToEdit?: QuickReply) => {
     setEditingQuickReply(itemToEdit || null);
@@ -1806,6 +1821,7 @@ export function MessageThread({
         onSelectMedia={handleSelectMediaFromTopBar}
         onSelectSequence={startSequence}
         onOpenAudioLibrary={() => setAudioLibraryOpen(true)}
+        onOpenPhotoLibrary={() => setPhotoLibraryOpen(true)}
         onOpenCreateReply={handleOpenCreateReply}
         onRefreshReplies={loadQuickReplies}
       />
@@ -1827,6 +1843,7 @@ export function MessageThread({
         externalAudioAction={externalAudioAction}
         onSelectSequence={startSequence}
         onOpenCreateReply={handleOpenCreateReply}
+        onOpenPhotoLibrary={() => setPhotoLibraryOpen(true)}
       />
 
       <TemplatePicker
@@ -1851,6 +1868,13 @@ export function MessageThread({
         audioReplies={Array.isArray(quickReplies) ? quickReplies.filter((q) => q.kind === "audio") : []}
         onSendAudio={handleSelectAudioFromTopBar}
         onRefreshReplies={loadQuickReplies}
+      />
+
+      {/* Photo Library Modal */}
+      <PhotoLibraryModal
+        open={photoLibraryOpen}
+        onOpenChange={setPhotoLibraryOpen}
+        onSendPhoto={handleSendPhotoFromLibrary}
       />
 
       {/* Quick Reply Create / Edit Modal */}

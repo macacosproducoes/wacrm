@@ -6,6 +6,7 @@ import {
   MessageSquare,
   Zap,
   Mic,
+  Image as ImageIcon,
   Search,
   Plus,
   Play,
@@ -61,7 +62,7 @@ interface QuickReplyPickerProps {
   contactContext?: VariableContext;
 }
 
-type TabFilter = "all" | "audio" | "text" | "sequence" | "interactive";
+type TabFilter = "all" | "audio" | "image" | "text" | "sequence" | "interactive";
 
 export function QuickReplyPicker({
   open,
@@ -241,6 +242,7 @@ export function QuickReplyPicker({
     return items.filter((qr) => {
       // Tab filter
       if (currentTab === "audio" && qr.kind !== "audio") return false;
+      if (currentTab === "image" && qr.kind !== "image") return false;
       if (currentTab === "text" && qr.kind !== "text") return false;
       if (currentTab === "sequence" && qr.kind !== "sequence") return false;
       if (currentTab === "interactive" && qr.kind !== "interactive") return false;
@@ -266,6 +268,7 @@ export function QuickReplyPicker({
 
   // Counts for tabs
   const audioCount = useMemo(() => items.filter((i) => i.kind === "audio").length, [items]);
+  const imageCount = useMemo(() => items.filter((i) => i.kind === "image").length, [items]);
   const textCount = useMemo(() => items.filter((i) => i.kind === "text").length, [items]);
   const sequenceCount = useMemo(() => items.filter((i) => i.kind === "sequence").length, [items]);
   const interactiveCount = useMemo(() => items.filter((i) => i.kind === "interactive").length, [items]);
@@ -562,6 +565,18 @@ export function QuickReplyPicker({
               </button>
               <button
                 type="button"
+                onClick={() => setCurrentTab("image")}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-medium transition-colors ${
+                  currentTab === "image"
+                    ? "bg-blue-600 text-white shadow-xs"
+                    : "bg-muted/80 text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                <ImageIcon className="h-3.5 w-3.5" />
+                Fotos ({imageCount})
+              </button>
+              <button
+                type="button"
                 onClick={() => setCurrentTab("text")}
                 className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-medium transition-colors ${
                   currentTab === "text"
@@ -802,6 +817,7 @@ export function QuickReplyPicker({
               const isAudio = qr.kind === "audio";
               const isSequence = qr.kind === "sequence";
               const isInteractive = qr.kind === "interactive";
+              const isImage = qr.kind === "image" || Boolean(qr.media_url && !isAudio && !isSequence);
 
               return (
                 <div
@@ -882,6 +898,8 @@ export function QuickReplyPicker({
                             ? "bg-orange-500/15 text-orange-600 dark:text-orange-400"
                             : isInteractive
                             ? "bg-purple-500/15 text-purple-600 dark:text-purple-400"
+                            : isImage
+                            ? "bg-blue-500/15 text-blue-600 dark:text-blue-400"
                             : "bg-primary/10 text-primary"
                         }`}
                       >
@@ -891,6 +909,8 @@ export function QuickReplyPicker({
                           <Layers className="h-4 w-4" />
                         ) : isInteractive ? (
                           <Zap className="h-4 w-4" />
+                        ) : isImage ? (
+                          <ImageIcon className="h-4 w-4" />
                         ) : (
                           <MessageSquare className="h-4 w-4" />
                         )}
@@ -970,8 +990,24 @@ export function QuickReplyPicker({
                           </div>
                         )}
 
+                        {/* Image preview thumbnail if available */}
+                        {isImage && qr.media_url && (
+                          <div className="mt-2 flex items-start gap-3">
+                            <img
+                              src={qr.media_url}
+                              alt={qr.title}
+                              className="h-16 w-20 rounded-md object-cover border border-border shrink-0 shadow-2xs"
+                            />
+                            {qr.content_text ? (
+                              <p className="text-xs text-muted-foreground line-clamp-3 leading-relaxed flex-1">
+                                {replaceQuickReplyVariables(qr.content_text, contactContext)}
+                              </p>
+                            ) : null}
+                          </div>
+                        )}
+
                         {/* Text Preview with variable replacement */}
-                        {!isAudio && (
+                        {!isAudio && !isImage && (
                           <p className="mt-1 text-xs text-muted-foreground line-clamp-2 leading-relaxed">
                             {isInteractive && qr.interactive_payload
                               ? interactivePayloadPreviewText(qr.interactive_payload)
@@ -1216,6 +1252,22 @@ export function QuickReplyPicker({
                               </Button>
                             )}
 
+                            {/* Direct Send Photo Button */}
+                            {isImage && qr.media_url && (
+                              <Button
+                                size="sm"
+                                onClick={() => {
+                                  onOpenChange(false);
+                                  onPick(qr);
+                                }}
+                                className="h-8 text-xs px-2.5 bg-blue-600 hover:bg-blue-700 text-white gap-1 shadow-xs"
+                                title="Enviar esta foto cadastrada diretamente para o contato"
+                              >
+                                <ImageIcon className="h-3.5 w-3.5" />
+                                Enviar Foto
+                              </Button>
+                            )}
+
                             {/* Pick / Insert in textarea */}
                             <Button
                               size="sm"
@@ -1226,7 +1278,7 @@ export function QuickReplyPicker({
                               }}
                               className="h-8 text-xs px-3"
                             >
-                              Inserir
+                              {isImage ? "Inserir" : "Inserir"}
                             </Button>
 
                             {/* Direct send for text */}
