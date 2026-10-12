@@ -219,6 +219,35 @@ export function MessageThread({
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [hasFetchedSuccessfully, setHasFetchedSuccessfully] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef<boolean>(true);
+  const activeConversationIdRef = useRef<string | null>(null);
+  const prevMessagesLengthRef = useRef<number>(0);
+  const hasInitialScrolledRef = useRef<boolean>(false);
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const [unreadWhileScrolledCount, setUnreadWhileScrolledCount] = useState(0);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const atBottom = distanceFromBottom <= 100;
+    isAtBottomRef.current = atBottom;
+    setShowScrollBottom(!atBottom);
+    if (atBottom) {
+      setUnreadWhileScrolledCount(0);
+    }
+  }, []);
+
+  const scrollToBottom = useCallback((smooth = true) => {
+    if (!scrollRef.current) return;
+    isAtBottomRef.current = true;
+    setShowScrollBottom(false);
+    setUnreadWhileScrolledCount(0);
+    scrollRef.current.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: smooth ? "smooth" : "instant",
+    });
+  }, []);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [reactions, setReactions] = useState<MessageReaction[]>([]);
@@ -681,13 +710,70 @@ export function MessageThread({
       });
   }, [conversationId, hasUnread]);
 
-  // Auto-scroll to bottom on new messages
+  // Smart auto-scroll: Only auto-scroll down if user is already at the bottom or on initial load / sending message
   useEffect(() => {
-    if (scrollRef.current) {
-      const el = scrollRef.current;
-      el.scrollTop = el.scrollHeight;
+    if (!scrollRef.current) return;
+
+    const currentLength = messages?.length ?? 0;
+    const isNewConv = activeConversationIdRef.current !== conversationId;
+
+    if (isNewConv) {
+      activeConversationIdRef.current = conversationId ?? null;
+      prevMessagesLengthRef.current = currentLength;
+      hasInitialScrolledRef.current = false;
+      isAtBottomRef.current = true;
+      setShowScrollBottom(false);
+      setUnreadWhileScrolledCount(0);
+
+      // Scroll to bottom on initial thread load
+      requestAnimationFrame(() => {
+        if (scrollRef.current) {
+          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          hasInitialScrolledRef.current = true;
+        }
+      });
+      return;
     }
-  }, [messages]);
+
+    // If initial scroll hasn't occurred yet (e.g. messages just loaded for this conversation)
+    if (!hasInitialScrolledRef.current && currentLength > 0) {
+      hasInitialScrolledRef.current = true;
+      isAtBottomRef.current = true;
+      setShowScrollBottom(false);
+      setUnreadWhileScrolledCount(0);
+      prevMessagesLengthRef.current = currentLength;
+      requestAnimationFrame(() => {
+        if (scrollRef.current) {
+          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
+      });
+      return;
+    }
+
+    // If new messages were added
+    if (currentLength > prevMessagesLengthRef.current) {
+      const addedCount = currentLength - prevMessagesLengthRef.current;
+      if (isAtBottomRef.current) {
+        // User is reading at bottom: keep them smoothly at bottom
+        requestAnimationFrame(() => {
+          if (scrollRef.current) {
+            scrollRef.current.scrollTo({
+              top: scrollRef.current.scrollHeight,
+              behavior: "smooth",
+            });
+          }
+        });
+      } else {
+        // User is scrolled UP reading earlier history:
+        // NEVER force scroll! Let the user read peacefully!
+        setUnreadWhileScrolledCount((prev) => prev + addedCount);
+      }
+    }
+    // If length didn't increase (e.g. status update, reaction, poll, re-fetch):
+    // DO NOT touch scroll! User stays exactly where they were scrolling/reading.
+
+    prevMessagesLengthRef.current = currentLength;
+  }, [messages, conversationId]);
 
   const handleSend = useCallback(
     async (text: string, replyToId?: string) => {
@@ -708,6 +794,7 @@ export function MessageThread({
       };
       onNewMessage(optimisticMsg);
       setReplyTo(null);
+      scrollToBottom(true);
 
       try {
         const res = await fetch("/api/whatsapp/send", {
@@ -1572,7 +1659,12 @@ export function MessageThread({
       )}
 
       {/* Messages Area */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
+      <div className="relative flex-1 min-h-0 flex flex-col">
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto px-4 py-4"
+        >
         {effectiveMessages.length === 0 ? (
           !hasFetchedSuccessfully || loading || conversation?.last_message_text || conversation?.last_message_at || (conversation?.unread_count ?? 0) > 0 ? (
             <div className="flex flex-col items-center justify-center py-12 gap-3">
@@ -1659,6 +1751,25 @@ export function MessageThread({
               </div>
             ))}
           </div>
+        )}
+        </div>
+
+        {/* Floating Scroll-to-Bottom Button (WhatsApp style) */}
+        {showScrollBottom && (
+          <button
+            type="button"
+            onClick={() => scrollToBottom(true)}
+            aria-label="Rolar para as mensagens mais recentes"
+            title="Rolar para o final"
+            className="absolute bottom-3 right-5 z-20 flex h-9 w-9 items-center justify-center rounded-full bg-background/95 text-foreground shadow-lg border border-border/80 backdrop-blur-md transition-all hover:bg-muted hover:scale-105 active:scale-95 focus:outline-none cursor-pointer"
+          >
+            <ChevronDown className="h-4 w-4 text-foreground" />
+            {unreadWhileScrolledCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground shadow">
+                {unreadWhileScrolledCount}
+              </span>
+            )}
+          </button>
         )}
       </div>
 
