@@ -323,6 +323,27 @@ export async function POST(request: Request) {
           .then(() => {}, () => {});
       }
 
+      // Check if chat is archived on WhatsApp
+      const isArchived = Boolean(
+        c.wa_archived ||
+        c.isArchived ||
+        c.archived ||
+        c.archive ||
+        String(c.wa_archived) === 'true'
+      );
+
+      // If chat is archived on WhatsApp, exclude it completely from active CRM conversations
+      if (isArchived) {
+        const existingConv = convMap.get(resolvedContactId);
+        if (existingConv?.id) {
+          await admin
+            .from('conversations')
+            .update({ status: 'closed', updated_at: new Date().toISOString() })
+            .eq('id', existingConv.id);
+        }
+        return;
+      }
+
       // B. Conversation resolution via resilient helper
       let convMeta = convMap.get(resolvedContactId);
       if (!convMeta) {

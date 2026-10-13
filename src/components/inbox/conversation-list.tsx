@@ -61,12 +61,12 @@ export function ConversationList({
   const { accountId } = useAuth();
   
   const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = useMemo(() => [
-    { label: t("filterAll"), value: "all" },
-    { label: t("filterUnread"), value: "unread" },
-    { label: t("filterOpen"), value: "open" },
-    { label: t("filterPending"), value: "pending" },
-    { label: t("filterClosed"), value: "closed" },
-  ], [t]);
+    { label: "Todas", value: "all" },
+    { label: "Não lidas", value: "unread" },
+    { label: "Abertas", value: "open" },
+    { label: "Pendentes", value: "pending" },
+    { label: "Arquivadas", value: "closed" },
+  ], []);
 
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<InboxFilter>("all");
@@ -310,8 +310,13 @@ export function ConversationList({
     }
 
     if (filter === "unread") {
-      result = result.filter((c) => c.unread_count > 0);
-    } else if (filter !== "all") {
+      result = result.filter((c) => c.unread_count > 0 && c.status !== "closed");
+    } else if (filter === "all") {
+      // By default, never show archived/closed conversations in CRM main inbox
+      result = result.filter((c) => c.status !== "closed");
+    } else if (filter === "closed") {
+      result = result.filter((c) => c.status === "closed");
+    } else {
       result = result.filter((c) => c.status === filter);
     }
 

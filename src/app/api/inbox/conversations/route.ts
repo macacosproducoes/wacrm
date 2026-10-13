@@ -50,8 +50,13 @@ export async function GET(request: Request) {
 
     if (id) {
       query = query.eq('id', id);
-    } else if (status && status !== 'all' && status !== 'unread') {
+    } else if (status === 'closed') {
+      query = query.eq('status', 'closed');
+    } else if (status && status !== 'all' && status !== 'unread' && status !== 'all_with_archived') {
       query = query.eq('status', status);
+    } else if (status !== 'all_with_archived') {
+      // By default, never show closed / archived conversations in CRM inbox
+      query = query.neq('status', 'closed');
     }
 
     const { data, error } = await query;
