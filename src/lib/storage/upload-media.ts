@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/client";
+﻿import { createClient } from "@/lib/supabase/client";
 
 /**
  * Shared media-upload helper for Supabase Storage buckets that use the
@@ -22,7 +22,7 @@ export const MEDIA_MAX_BYTES = 16 * 1024 * 1024;
 
 /**
  * Per-kind upload ceilings that mirror Meta's WhatsApp Cloud API caps so
- * a file that the bucket would accept (≤16 MB) but Meta would reject is
+ * a file that the bucket would accept (<=16 MB) but Meta would reject is
  * caught client-side BEFORE upload — otherwise it lands in storage as an
  * orphan and the send fails with a confusing 400. Images are Meta's
  * tightest cap at 5 MB; documents are held at the 16 MB bucket limit
@@ -90,6 +90,77 @@ export interface UploadAccountMediaResult {
 }
 
 /**
+ * Client-side image compression to drastically reduce egress and storage.
+ * Compresses images > 350KB to webp (max 1600px dimension), reducing file size by 80-95%.
+ */
+async function compressImageIfNeeded(file: File): Promise<File> {
+  if (
+    typeof window === "undefined" ||
+    !file.type.startsWith("image/") ||
+    file.type === "image/gif" ||
+    file.type === "image/svg+xml"
+  ) {
+    return file;
+  }
+
+  // Files already smaller than 350KB don't need compression
+  if (file.size <= 350 * 1024) {
+    return file;
+  }
+
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const maxDim = 1600;
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return resolve(file);
+        ctx.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob(
+          (blob) => {
+            if (!blob || blob.size >= file.size) {
+              resolve(file);
+            } else {
+              const baseName = file.name.replace(/\.[^.]+$/, "");
+              const compressedFile = new File([blob], `${baseName}.webp`, {
+                type: "image/webp",
+                lastModified: Date.now(),
+              });
+              resolve(compressedFile);
+            }
+          },
+          "image/webp",
+          0.82
+        );
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve(file);
+      };
+      img.src = url;
+    } catch {
+      resolve(file);
+    }
+  });
+}
+
+/**
  * Upload a file to an account-scoped Storage bucket and return its public
  * URL. Throws with a user-facing message on auth / account-resolution /
  * upload failure — callers surface it via a toast.
@@ -99,7 +170,7 @@ export interface UploadAccountMediaResult {
  */
 export async function uploadAccountMedia(
   bucket: string,
-  file: File,
+  rawFile: File,
 ): Promise<UploadAccountMediaResult> {
   const supabase = createClient();
 
@@ -123,6 +194,9 @@ export async function uploadAccountMedia(
     throw new Error("Could not resolve your account.");
   }
 
+  // Compress image if applicable to save bandwidth/egress
+  const file = await compressImageIfNeeded(rawFile);
+
   const path = buildMediaPath(profile.account_id as string, file.name);
   let contentType = file.type;
   if (!contentType || contentType === "application/octet-stream") {
@@ -131,6 +205,8 @@ export async function uploadAccountMedia(
       contentType = "audio/ogg";
     } else if (lowerName.endsWith(".mp3")) {
       contentType = "audio/mpeg";
+    } else if (lowerName.endsWith(".webp")) {
+      contentType = "image/webp";
     }
   }
 
@@ -139,8 +215,9 @@ export async function uploadAccountMedia(
     if (contentType === "audio/opus") contentType = "audio/ogg";
   }
 
+  // Cache for 1 year (immutable) to prevent repeated browser downloads
   const { error: upErr } = await supabase.storage.from(bucket).upload(path, file, {
-    cacheControl: "3600",
+    cacheControl: "31536000, immutable",
     upsert: false,
     contentType: contentType || undefined,
   });

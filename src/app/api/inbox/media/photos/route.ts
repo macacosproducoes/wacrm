@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { createClient as createServerSupabase } from "@/lib/supabase/server";
 import { createClient } from "@supabase/supabase-js";
 
@@ -29,7 +29,7 @@ export async function GET() {
     } = await supabase.auth.getUser();
 
     if (userErr || !user) {
-      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+      return NextResponse.json({ error: "NÃ£o autenticado." }, { status: 401 });
     }
 
     const admin = getAdminClient();
@@ -129,10 +129,17 @@ export async function GET() {
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
 
-    return NextResponse.json({
-      success: true,
-      photos,
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        photos,
+      },
+      {
+        headers: {
+          "Cache-Control": "private, max-age=60, stale-while-revalidate=120",
+        },
+      }
+    );
   } catch (err: any) {
     console.error("[API /api/inbox/media/photos GET] Error:", err);
     return NextResponse.json(
@@ -155,7 +162,7 @@ export async function POST(request: Request) {
     } = await supabase.auth.getUser();
 
     if (userErr || !user) {
-      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+      return NextResponse.json({ error: "NÃ£o autenticado." }, { status: 401 });
     }
 
     const { data: profile } = await supabase
@@ -167,7 +174,7 @@ export async function POST(request: Request) {
     const accountId = profile?.account_id;
     if (!accountId) {
       return NextResponse.json(
-        { error: "Conta não encontrada para o usuário." },
+        { error: "Conta nÃ£o encontrada para o usuÃ¡rio." },
         { status: 400 }
       );
     }
@@ -191,7 +198,8 @@ export async function POST(request: Request) {
     const { error: uploadErr } = await admin.storage
       .from("chat-media")
       .upload(storagePath, buffer, {
-        contentType: file.type || `image/${ext}`,
+        contentType: file.type || ("image/" + ext),
+        cacheControl: "31536000, immutable",
         upsert: true,
       });
 
@@ -218,3 +226,5 @@ export async function POST(request: Request) {
     );
   }
 }
+
+
