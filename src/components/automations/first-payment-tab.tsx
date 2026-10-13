@@ -60,6 +60,7 @@ export function FirstPaymentAutomationTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [retryingAll, setRetryingAll] = useState(false);
   const [audios, setAudios] = useState<AudioItem[]>([]);
   const [logs, setLogs] = useState<FirstPaymentLogItem[]>([]);
   const [config, setConfig] = useState<FirstPaymentConfigData>({
@@ -160,6 +161,7 @@ export function FirstPaymentAutomationTab() {
         body: JSON.stringify({
           payment_id: log.payment_id,
           contact_id: log.contact_id,
+          log_id: log.id,
         }),
       });
 
@@ -177,49 +179,74 @@ export function FirstPaymentAutomationTab() {
     }
   };
 
+  const handleRetryAll = async () => {
+    setRetryingAll(true);
+    try {
+      const res = await fetch("/api/automations/first-payment", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          retry_all: true,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        const count = data.results?.filter((r: any) => r.dispatched)?.length ?? data.count ?? 0;
+        toast.success(`Reenvio concluído! ${count} áudios reenviados pelo WhatsApp com sucesso.`);
+        await loadData();
+      } else {
+        toast.error(data.error || "Erro ao reenviar áudios com falha.");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Erro ao executar reenvio em massa.");
+    } finally {
+      setRetryingAll(false);
+    }
+  };
+
   if (loading) {
     return (
-      <div className="flex h-64 items-center justify-center">
+      <div className="flex min-h-[320px] items-center justify-center">
         <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
       </div>
     );
   }
 
-  const successCount = logs.filter((l) => l.status === "enviado").length;
   const failedCount = logs.filter((l) => l.status === "falhou").length;
 
   return (
     <div className="space-y-6">
-      {/* Header and Status Card */}
+      {/* Top Automation Card */}
       <div className="rounded-xl border border-border/60 bg-card p-6 shadow-sm">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
-              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-500">
-                <Zap className="h-5 w-5" />
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-500">
+                <Zap className="h-4 w-4" />
               </span>
-              <h2 className="text-lg font-semibold tracking-tight text-foreground">
-                Primeiro Pagamento Confirmado
+              <h2 className="text-base font-semibold text-foreground">
+                Confirmação do Primeiro Pagamento
               </h2>
               <Badge
                 variant="outline"
                 className={
                   config.is_active
                     ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                    : "border-muted-foreground/30 bg-muted text-muted-foreground"
+                    : "border-muted-foreground/30 text-muted-foreground"
                 }
               >
-                {config.is_active ? "● Automação Ativa" : "○ Pausada"}
+                {config.is_active ? "Automação Ativa" : "Pausada"}
               </Badge>
             </div>
-            <p className="text-xs text-muted-foreground md:text-sm">
-              Dispara automaticamente o áudio do ZapPlus quando o lead tiver seu 1º pagamento Pix aprovado.
+            <p className="text-xs text-muted-foreground">
+              Dispara automaticamente um áudio pelo ZapPlus quando o lead tem seu 1º pagamento Pix confirmado.
             </p>
           </div>
 
-          <div className="flex items-center gap-3 self-start rounded-lg border border-border/50 bg-muted/40 p-2 md:self-center">
-            <span className="text-xs font-medium text-foreground">
-              {config.is_active ? "Ativada no CRM" : "Desativada"}
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-medium text-muted-foreground">
+              {config.is_active ? "Ativado" : "Desativado"}
             </span>
             <Switch
               checked={config.is_active}
@@ -229,57 +256,31 @@ export function FirstPaymentAutomationTab() {
           </div>
         </div>
 
-        <div className="mt-6 grid grid-cols-1 gap-4 border-t border-border/50 pt-5 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="rounded-lg border border-border/40 bg-muted/20 p-3">
-            <div className="text-xs text-muted-foreground">Nome da Automação</div>
-            <div className="mt-1 text-sm font-semibold text-foreground">{config.name}</div>
-          </div>
-
-          <div className="rounded-lg border border-border/40 bg-muted/20 p-3">
-            <div className="text-xs text-muted-foreground">Gatilho</div>
-            <div className="mt-1 flex items-center gap-1.5 text-sm font-semibold text-foreground">
-              <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
-              {config.trigger_name}
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-border/40 bg-muted/20 p-3">
-            <div className="text-xs text-muted-foreground">Ação WhatsApp</div>
-            <div className="mt-1 flex items-center gap-1.5 text-sm font-semibold text-foreground">
-              <Mic className="h-3.5 w-3.5 text-primary" />
-              {config.action_name}
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-border/40 bg-muted/20 p-3">
-            <div className="text-xs text-muted-foreground">Total de Disparos</div>
-            <div className="mt-1 text-sm font-semibold text-foreground">
-              {config.execution_count ?? successCount} confirmados
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Audio Selector Card */}
-      <div className="rounded-xl border border-border/60 bg-card p-6 shadow-sm">
-        <div className="flex items-center justify-between border-b border-border/50 pb-4">
-          <div className="space-y-0.5">
-            <h3 className="text-sm font-semibold text-foreground">Áudio do ZapPlus Selecionado</h3>
-            <p className="text-xs text-muted-foreground">
-              Mensagem de voz nativa (PTT) enviada para o WhatsApp do cliente.
-            </p>
-          </div>
-          <Badge variant="outline" className="gap-1 border-primary/30 bg-primary/10 text-primary">
-            <Sparkles className="h-3 w-3" />
-            Voz ZapPlus
-          </Badge>
+        {/* Workflow Diagram */}
+        <div className="mt-6 flex flex-wrap items-center gap-2 rounded-lg border border-border/40 bg-muted/20 p-3 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1 font-medium text-foreground">
+            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+            1. Pix Aprovado
+          </span>
+          <ArrowRight className="h-3.5 w-3.5 text-muted-foreground/50" />
+          <span className="font-medium text-foreground">2. Checa Histórico do Lead</span>
+          <ArrowRight className="h-3.5 w-3.5 text-muted-foreground/50" />
+          <span className="flex items-center gap-1 font-medium text-primary">
+            <Mic className="h-3.5 w-3.5" />
+            3. Dispara Áudio no ZapPlus
+          </span>
         </div>
 
-        <div className="mt-4 space-y-4">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            <div className="space-y-1.5 md:col-span-2">
-              <label className="text-xs font-medium text-muted-foreground">
-                Selecionar Áudio da Biblioteca
+        {/* Audio Configuration Section */}
+        <div className="mt-6 space-y-4 border-t border-border/50 pt-5">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Áudio da Resposta Rápida (ZapPlus)
+          </h3>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="space-y-1.5 sm:col-span-2">
+              <label className="text-xs font-medium text-foreground">
+                Selecione o áudio configurado no CRM / ZapPlus
               </label>
               <select
                 value={config.audio_id}
@@ -368,22 +369,36 @@ export function FirstPaymentAutomationTab() {
 
       {/* Execution Logs Table */}
       <div className="rounded-xl border border-border/60 bg-card p-6 shadow-sm">
-        <div className="flex items-center justify-between border-b border-border/50 pb-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-border/50 pb-4">
           <div className="space-y-0.5">
             <h3 className="text-sm font-semibold text-foreground">Registro de Disparos & Auditoria</h3>
             <p className="text-xs text-muted-foreground">
               Histórico de envios de áudio para primeiros pagamentos aprovados.
             </p>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={loadData}
-            className="gap-1.5 text-xs"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            Atualizar
-          </Button>
+          <div className="flex items-center gap-2">
+            {failedCount > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRetryAll}
+                disabled={retryingAll}
+                className="gap-1.5 text-xs text-rose-600 dark:text-rose-400 border-rose-500/30 hover:bg-rose-500/10"
+              >
+                <RotateCcw className={`h-3.5 w-3.5 ${retryingAll ? "animate-spin" : ""}`} />
+                Reenviar Todos com Falha ({failedCount})
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={loadData}
+              className="gap-1.5 text-xs"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Atualizar
+            </Button>
+          </div>
         </div>
 
         <div className="mt-4 overflow-x-auto">
@@ -404,7 +419,7 @@ export function FirstPaymentAutomationTab() {
                   <th className="pb-2 text-right font-medium">Ações</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border/20">
+              <tbody className="divide-y border-border/20">
                 {logs.map((log) => (
                   <tr key={log.id} className="hover:bg-muted/30">
                     <td className="py-2.5 font-medium text-foreground">
@@ -424,7 +439,11 @@ export function FirstPaymentAutomationTab() {
                           Enviado
                         </Badge>
                       ) : log.status === "falhou" ? (
-                        <Badge variant="outline" className="border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400">
+                        <Badge
+                          variant="outline"
+                          title={log.error_message || undefined}
+                          className="border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                        >
                           Falhou
                         </Badge>
                       ) : (
@@ -441,11 +460,11 @@ export function FirstPaymentAutomationTab() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          disabled={retryingId === log.id}
+                          disabled={retryingId === log.id || retryingAll}
                           onClick={() => handleRetry(log)}
                           className="h-7 gap-1 px-2 text-[11px] text-primary"
                         >
-                          <RotateCcw className="h-3 w-3" />
+                          <RotateCcw className={`h-3 w-3 ${retryingId === log.id ? "animate-spin" : ""}`} />
                           Reenviar
                         </Button>
                       )}

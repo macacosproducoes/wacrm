@@ -84,6 +84,7 @@ export interface FirstPaymentInput {
   confirmed_at?: string;
   raw_payload?: Record<string, unknown>;
   force_retry?: boolean;
+  log_id?: string;
 }
 
 export interface ProcessFirstPaymentResult {
@@ -370,6 +371,43 @@ export async function processFirstPaymentAutomation(
     }
   }
 
+  // Always fetch contact from DB when contactId is known to guarantee we have their real WhatsApp phone and name!
+  if (contactId) {
+    const { data: dbContact } = await admin
+      .from('contacts')
+      .select('id, account_id, phone, name')
+      .eq('id', contactId)
+      .maybeSingle();
+
+    if (dbContact) {
+      if (dbContact.phone && (!contactPhone || !contactPhone.trim())) {
+        contactPhone = dbContact.phone;
+      }
+      if (dbContact.name && (!contactName || contactName === 'Cliente')) {
+        contactName = dbContact.name;
+      }
+      if (dbContact.account_id) {
+        accountId = dbContact.account_id;
+      }
+    }
+  }
+
+  // Fallback: check recent conversation for this contact if phone is still empty
+  if (contactId && (!contactPhone || !contactPhone.trim())) {
+    const { data: conv } = await admin
+      .from('conversations')
+      .select('customer_phone')
+      .eq('contact_id', contactId)
+      .not('customer_phone', 'is', null)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (conv?.customer_phone) {
+      contactPhone = conv.customer_phone;
+    }
+  }
+
   if (!contactId && contactPhone) {
     const rawDigits = contactPhone.replace(/\D/g, "");
     const cleanDigits = rawDigits.startsWith("55") ? rawDigits : "55" + rawDigits;
@@ -578,8 +616,40 @@ export async function processFirstPaymentAutomation(
     const formattedPhone = formatUazApiNumber(contactPhone);
     const attemptedAt = new Date().toISOString();
 
-    // 9. Dispatch native PTT voice note via ZapPlus/UazAPI
+    if (!contactPhone || !contactPhone.trim() || !formattedPhone) {
+      console.error("[first-payment-engine] Telefone do contato não encontrado para lead " + contactId);
+      const failLog = await recordAutomationLog(admin, {
+        accountId,
+        automationId: config.id,
+        contactId,
+        paymentId: payment_id,
+        externalId: external_id,
+        leadName: contactName,
+        leadPhone: "",
+        amount,
+        confirmedAt: confirmed_at,
+        attemptedAt: new Date().toISOString(),
+        dispatchStatus: 'failed',
+        status: 'failed',
+        audioId,
+        audioName,
+        audioUrl,
+        errorReason: "Telefone WhatsApp do contato não cadastrado no CRM",
+        existingLogId: input.log_id,
+      });
+
+      return {
+        success: false,
+        dispatched: false,
+        error: "Telefone WhatsApp do contato não cadastrado no CRM",
+        logId: failLog?.id,
+      };
+    }
+
+    // 9. Dispatch native PTT voice note via ZapPlus/UazAPI with 9-digit Brazilian fallback retry
     let uazapiMessageId: string | null = null;
+    let finalSentPhone = formattedPhone;
+
     try {
       console.log("[first-payment-engine] 🎙️ Disparando áudio " + audioName + " para " + formattedPhone + " (Lead ID: " + contactId + ", Payment ID: " + payment_id + ")...");
 
@@ -593,33 +663,64 @@ export async function processFirstPaymentAutomation(
       uazapiMessageId = sendRes.messageId || ("ptt_" + Date.now());
       console.log("[first-payment-engine] ✅ Áudio WhatsApp disparado com sucesso! Message ID: " + uazapiMessageId);
     } catch (dispatchErr: any) {
-      console.error("[first-payment-engine] ❌ Falha ao enviar áudio pelo ZapPlus:", dispatchErr);
+      const errMsg = String(dispatchErr?.message || "").toLowerCase();
+      let alternatePhone: string | null = null;
+      if (errMsg.includes("not on whatsapp") || errMsg.includes("invalid") || errMsg.includes("not registered")) {
+        if (formattedPhone.length === 13 && formattedPhone.startsWith("55") && formattedPhone[4] === "9") {
+          alternatePhone = formattedPhone.slice(0, 4) + formattedPhone.slice(5);
+        } else if (formattedPhone.length === 12 && formattedPhone.startsWith("55")) {
+          alternatePhone = formattedPhone.slice(0, 4) + "9" + formattedPhone.slice(4);
+        }
+      }
 
-      const failLog = await recordAutomationLog(admin, {
-        accountId,
-        automationId: config.id,
-        contactId,
-        paymentId: payment_id,
-        externalId: external_id,
-        leadName: contactName,
-        leadPhone: contactPhone,
-        amount,
-        confirmedAt: confirmed_at,
-        attemptedAt,
-        dispatchStatus: 'failed',
-        status: 'failed',
-        audioId,
-        audioName,
-        audioUrl,
-        errorReason: dispatchErr?.message || "Falha na comunicação com o gateway WhatsApp ZapPlus",
-      });
+      if (alternatePhone) {
+        console.log("[first-payment-engine] 🔄 Retrying with alternate phone format: " + alternatePhone);
+        try {
+          const retryRes = await sendUazApiMedia(baseUrl, plainToken, {
+            number: alternatePhone,
+            url: audioUrl,
+            type: 'audio',
+            ptt: true,
+          });
+          uazapiMessageId = retryRes.messageId || ("ptt_" + Date.now());
+          finalSentPhone = alternatePhone;
+          console.log("[first-payment-engine] ✅ Retry bem-sucedido com formato alternativo! Message ID: " + uazapiMessageId);
+        } catch (retryErr: any) {
+          console.error("[first-payment-engine] ❌ Falha no retry pelo ZapPlus:", retryErr);
+          dispatchErr = retryErr;
+        }
+      }
 
-      return {
-        success: false,
-        dispatched: false,
-        error: dispatchErr?.message || "Falha ao enviar áudio pelo ZapPlus",
-        logId: failLog?.id,
-      };
+      if (!uazapiMessageId) {
+        console.error("[first-payment-engine] ❌ Falha ao enviar áudio pelo ZapPlus:", dispatchErr);
+
+        const failLog = await recordAutomationLog(admin, {
+          accountId,
+          automationId: config.id,
+          contactId,
+          paymentId: payment_id,
+          externalId: external_id,
+          leadName: contactName,
+          leadPhone: formattedPhone,
+          amount,
+          confirmedAt: confirmed_at,
+          attemptedAt,
+          dispatchStatus: 'failed',
+          status: 'failed',
+          audioId,
+          audioName,
+          audioUrl,
+          errorReason: dispatchErr?.message || "Falha na comunicação com o gateway WhatsApp ZapPlus",
+          existingLogId: input.log_id,
+        });
+
+        return {
+          success: false,
+          dispatched: false,
+          error: dispatchErr?.message || "Falha ao enviar áudio pelo ZapPlus",
+          logId: failLog?.id,
+        };
+      }
     }
 
     // 10. Persist Success Log for Idempotency and Auditability
@@ -631,7 +732,7 @@ export async function processFirstPaymentAutomation(
       paymentId: payment_id,
       externalId: external_id,
       leadName: contactName,
-      leadPhone: contactPhone,
+      leadPhone: finalSentPhone || contactPhone,
       amount,
       confirmedAt: confirmed_at,
       attemptedAt,
@@ -643,6 +744,7 @@ export async function processFirstPaymentAutomation(
       audioName,
       audioUrl,
       errorReason: null,
+      existingLogId: input.log_id,
     });
 
     // 11. Increment automation execution counter
@@ -710,6 +812,7 @@ async function recordAutomationLog(
     audioName: string;
     audioUrl: string;
     errorReason?: string | null;
+    existingLogId?: string;
   }
 ) {
   try {
@@ -763,6 +866,21 @@ async function recordAutomationLog(
       error_reason: params.errorReason,
       attempt_count: 1,
     };
+
+    if (params.existingLogId) {
+      const { data: updatedLog } = await admin
+        .from('automation_logs')
+        .update({
+          status: params.status,
+          error_message: params.errorReason || null,
+          steps_executed: [stepPayload],
+        })
+        .eq('id', params.existingLogId)
+        .select('id')
+        .single();
+
+      if (updatedLog?.id) return updatedLog;
+    }
 
     const { data: log, error } = await admin
       .from('automation_logs')

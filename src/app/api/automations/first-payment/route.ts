@@ -58,7 +58,32 @@ export async function PUT(request: Request) {
   }
 
   const body = await request.json().catch(() => null);
-  if (!body || !body.payment_id) {
+  if (!body) {
+    return NextResponse.json({ error: 'Payload JSON inválido' }, { status: 400 });
+  }
+
+  if (body.retry_all) {
+    const logs = await getFirstPaymentLogs(ctx.accountId, 100);
+    const failedLogs = logs.filter((l) => l.status === 'falhou');
+    const results = [];
+
+    for (const log of failedLogs) {
+      const res = await processFirstPaymentAutomation({
+        payment_id: log.payment_id,
+        contact_id: log.contact_id,
+        status: 'paid',
+        account_id: ctx.accountId,
+        user_id: ctx.userId,
+        force_retry: true,
+        log_id: log.id,
+      });
+      results.push({ log_id: log.id, ...res });
+    }
+
+    return NextResponse.json({ success: true, count: results.length, results });
+  }
+
+  if (!body.payment_id) {
     return NextResponse.json({ error: 'payment_id é obrigatório para retry' }, { status: 400 });
   }
 
@@ -70,6 +95,7 @@ export async function PUT(request: Request) {
     account_id: ctx.accountId,
     user_id: ctx.userId,
     force_retry: true,
+    log_id: body.log_id,
   });
 
   return NextResponse.json({ result });
