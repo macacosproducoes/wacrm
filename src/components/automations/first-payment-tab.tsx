@@ -70,7 +70,7 @@ export function FirstPaymentAutomationTab() {
     is_active: true,
     audio_id: "2fc16835-ab2a-4bf2-a0a5-3f70c9af402a",
     audio_name: "PEDIDO CONFIRMADO",
-    audio_url: "https://zwdpytqizoodlcrhryvg.supabase.co/storage/v1/object/public/chat-media/account-4fe971b8-cf70-45e2-8db3-c3eff700ae75/audio-1789937522426-WhatsApp_Ptt_2025_11_16_at_23_28_43.ogg",
+    audio_url: "https://swovcbrtjzdsqgqzjrdm.supabase.co/storage/v1/object/public/chat-media/account-ce78c02b-49e0-43bf-b384-7cdd52f61b9f/WhatsApp%20Ptt%202025-11-16%20at%2023.28.43.ogg",
   });
 
   const loadData = async () => {

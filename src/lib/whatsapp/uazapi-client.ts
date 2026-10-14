@@ -39,7 +39,7 @@ export interface UazApiSendResult {
  */
 export function normalizeMediaUrl(url?: string | null): string {
   if (!url || typeof url !== 'string') return '';
-  return url.trim().replace(/kzhvkfunvrhjvghhhart\.supabase\.co/gi, 'zwdpytqizoodlcrhryvg.supabase.co');
+  return url.trim().replace(/(?:kzhvkfunvrhjvghhhart|zwdpytqizoodlcrhryvg)\.supabase\.co/gi, 'swovcbrtjzdsqgqzjrdm.supabase.co');
 }
 
 export function normalizeBaseUrl(url?: string | null): string {
