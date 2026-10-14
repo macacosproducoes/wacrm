@@ -1110,7 +1110,7 @@ export function MessageThread({
     toast.info("Texto inserido no campo de mensagem para revisão.");
   }, []);
 
-  const handleSelectAudioFromTopBar = useCallback((qr: QuickReply, simulateRecording = false) => {
+  const handleSelectAudioFromTopBar = useCallback((qr: QuickReply, simulateRecording = true) => {
     if (!qr.media_url) {
       toast.error("Este áudio não possui arquivo de mídia configurado.");
       return;

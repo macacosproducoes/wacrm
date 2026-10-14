@@ -214,6 +214,16 @@ export function QuickReplyCreateModal({
       if (!title) {
         setTitle(file.name.replace(/\.[^/.]+$/, ""));
       }
+      if (kind === "audio" || file.type.startsWith("audio/")) {
+        try {
+          const tempAudio = new Audio(publicUrl);
+          tempAudio.onloadedmetadata = () => {
+            if (tempAudio.duration && isFinite(tempAudio.duration)) {
+              setMediaDuration(Math.round(tempAudio.duration));
+            }
+          };
+        } catch {}
+      }
       toast.success("Arquivo enviado com sucesso!");
     } catch {
       toast.error("Erro no upload do arquivo.");
@@ -508,11 +518,32 @@ export function QuickReplyCreateModal({
                 </Button>
 
                 {mediaUrl && (
-                  <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30 text-xs">
-                    ✓ Áudio salvo ({mediaDuration}s)
-                  </Badge>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30 text-xs">
+                      ✓ Áudio salvo ({mediaDuration}s)
+                    </Badge>
+                    <label className="text-[11px] text-muted-foreground flex items-center gap-1">
+                      <span>Duração exata:</span>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={600}
+                        value={mediaDuration || ""}
+                        onChange={(e) => setMediaDuration(Math.max(1, parseInt(e.target.value) || 0))}
+                        className="h-7 w-16 text-xs text-center font-mono bg-background"
+                        placeholder="s"
+                      />
+                      <span>seg</span>
+                    </label>
+                  </div>
                 )}
               </div>
+
+              {mediaUrl && (
+                <div className="pt-2 border-t border-purple-500/20">
+                  <audio src={mediaUrl} controls className="h-8 w-full rounded" />
+                </div>
+              )}
             </div>
           )}
 

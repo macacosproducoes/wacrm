@@ -982,9 +982,9 @@ export function QuickReplyPicker({
                                 {qr.category}
                               </Badge>
                             )}
-                            {isAudio && qr.media_duration && (
-                              <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-mono">
-                                {Math.floor(qr.media_duration / 60)}:{(qr.media_duration % 60).toString().padStart(2, "0")}
+                            {isAudio && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-700 dark:text-purple-300 font-mono font-bold shrink-0">
+                                {qr.media_duration ? `${Math.floor(qr.media_duration / 60)}:${(qr.media_duration % 60).toString().padStart(2, "0")}` : "0:00"}
                               </span>
                             )}
                           </div>

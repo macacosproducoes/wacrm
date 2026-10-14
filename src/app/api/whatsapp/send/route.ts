@@ -81,6 +81,7 @@ export async function POST(request: Request) {
       content_text,
       media_url,
       filename,
+      media_duration,
       template_name,
       template_language,
       template_params,
@@ -213,11 +214,12 @@ export async function POST(request: Request) {
         if (baileysActive || config.driver === 'baileys') {
           // Simulate presence before sending so recipient sees "gravando áudio..." or "digitando..."
           if (media_url && message_type === 'audio') {
+            const audioDelayMs = Number(media_duration) > 0 ? Number(media_duration) * 1000 : 3500;
             void sendWhatsAppPresence({
               accountId,
               phoneNumber: contactPhone,
               presence: 'recording',
-              delayMs: 3500,
+              delayMs: audioDelayMs,
             });
             // Instant dispatch
           } else if (message_type === 'text') {
@@ -323,11 +325,12 @@ export async function POST(request: Request) {
             // Live WhatsApp Presence simulation before sending:
             // Shows "Gravando áudio..." for audio and "Digitando..." for text
             if (media_url && message_type === 'audio') {
+              const audioDelayMs = Number(media_duration) > 0 ? Number(media_duration) * 1000 : 3800;
               void sendWhatsAppPresence({
                 accountId,
                 phoneNumber: contactPhone,
                 presence: 'recording',
-                delayMs: 3800,
+                delayMs: audioDelayMs,
                 baseUrl,
                 token,
               });

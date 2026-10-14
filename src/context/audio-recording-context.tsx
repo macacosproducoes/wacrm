@@ -75,6 +75,8 @@ export function AudioRecordingProvider({ children }: { children: React.ReactNode
           conversation_id: rec.conversationId,
           message_type: "audio",
           media_url: rec.mediaUrl,
+          filename: rec.audioTitle,
+          media_duration: rec.totalSeconds,
           is_ptt: true,
         }),
       });
@@ -162,7 +164,28 @@ export function AudioRecordingProvider({ children }: { children: React.ReactNode
         return;
       }
 
-      const durationSec = Math.max(1, Number(qr.media_duration) || 5);
+      let durationSec = Number(qr.media_duration);
+      if (!durationSec || durationSec <= 0 || isNaN(durationSec)) {
+        try {
+          const tempAudio = new Audio(qr.media_url);
+          await new Promise<void>((resolve) => {
+            tempAudio.onloadedmetadata = () => {
+              if (tempAudio.duration && isFinite(tempAudio.duration)) {
+                durationSec = Math.round(tempAudio.duration);
+                void fetch(`/api/quick-replies/${qr.id}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ media_duration: durationSec }),
+                }).catch(() => {});
+              }
+              resolve();
+            };
+            tempAudio.onerror = () => resolve();
+            setTimeout(resolve, 800);
+          });
+        } catch {}
+      }
+      durationSec = Math.max(1, durationSec || 5);
 
       if (!simulateRecording) {
         // Direct immediate send

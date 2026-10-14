@@ -41,6 +41,14 @@ import {
   replaceQuickReplyVariables,
   type VariableContext,
 } from "@/lib/inbox/quick-reply-variables";
+import { useAudioRecording } from "@/context/audio-recording-context";
+
+function formatAudioTime(seconds?: number | null): string {
+  if (!seconds || seconds <= 0 || isNaN(seconds)) return "0:00";
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
 
 interface QuickReplyTopBarProps {
   quickReplies: QuickReply[];
@@ -167,10 +175,13 @@ export function QuickReplyTopBar({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // Active 3-second instant send countdown state
   const [pendingSend, setPendingSend] = useState<PendingSend | null>(null);
   const countdownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Audio recording simulation context & dynamic duration cache
+  const { recordings, cancelRecording, sendNowRecording } = useAudioRecording();
+  const [dynamicDurations, setDynamicDurations] = useState<Record<string, number>>({});
 
   // Sync quickReplies prop
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -326,7 +337,38 @@ export function QuickReplyTopBar({
     return items.filter((i) => i.is_favorite && i.is_active !== false).length;
   }, [localItems]);
 
-  // Execute actual send after 3 seconds - humanized audio simulation enabled by default!
+  // Dynamically load & cache metadata for any audio item missing media_duration
+  useEffect(() => {
+    filteredItems.forEach((item) => {
+      if (item.kind === "audio" && item.media_url && !item.media_duration && !dynamicDurations[item.id]) {
+        try {
+          const audio = new Audio(item.media_url);
+          audio.onloadedmetadata = () => {
+            if (audio.duration && isFinite(audio.duration)) {
+              const sec = Math.round(audio.duration);
+              setDynamicDurations((prev) => ({ ...prev, [item.id]: sec }));
+              void fetch(`/api/quick-replies/${item.id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ media_duration: sec }),
+              }).catch(() => {});
+            }
+          };
+        } catch {}
+      }
+    });
+  }, [filteredItems, dynamicDurations]);
+
+  const activeRecording = recordings.find(
+    (r) =>
+      r.conversationId &&
+      (!contactContext?.phone ||
+        !r.recipientPhone ||
+        r.recipientPhone.includes(contactContext.phone) ||
+        contactContext.phone.includes(r.recipientPhone || ""))
+  ) || recordings[0];
+
+  // Execute actual send - humanized audio simulation enabled by default!
   const executeDispatch = (qr: QuickReply, textToSend?: string) => {
     // Record usage count
     void fetch(`/api/quick-replies/${qr.id}/use`, { method: "POST" }).catch(() => {});
@@ -338,8 +380,8 @@ export function QuickReplyTopBar({
         onSelectText(textToSend);
       }
     } else if (qr.kind === "audio") {
-      // 🎙️ Guaranteed audio delivery: direct send with waveform bubble & native PTT
-      onSelectAudio(qr, false);
+      // 🎙️ Humanized Audio sending: simulate "Gravando áudio..." before delivery
+      onSelectAudio(qr, true);
     } else if (qr.kind === "sequence") {
       onSelectSequence(qr);
     } else if (["image", "video", "document", "media"].includes(qr.kind)) {
@@ -361,13 +403,13 @@ export function QuickReplyTopBar({
     const rawText = qr.content_text || "";
     const substituted = replaceQuickReplyVariables(rawText, contactContext || {});
 
-    // If SHIFT is pressed: Place into composer for manual editing
+    // If SHIFT is pressed: Place into composer or open edit modal
     if (isShiftPressed) {
       if (qr.kind === "text") {
         onSelectText(substituted);
         toast.info("Texto inserido no campo para edição.");
       } else if (qr.kind === "audio") {
-        onSelectAudio(qr, false);
+        onOpenCreateReply(qr.kind, qr);
       } else if (qr.kind === "sequence") {
         onSelectSequence(qr);
       } else if (["image", "video", "document", "media"].includes(qr.kind)) {
@@ -378,7 +420,34 @@ export function QuickReplyTopBar({
       return;
     }
 
-    // NORMAL CLICK: 3-Second Instant Send with CANCEL option!
+    // Direct Instant Humanized Audio Send with EXACT Audio Duration Simulation!
+    if (qr.kind === "audio") {
+      if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      setPendingSend(null);
+
+      // If already recording, clicking the card again sends it immediately!
+      const activeRec = recordings.find(
+        (r) => r.audioTitle === qr.title || (qr.media_url && r.mediaUrl === qr.media_url)
+      );
+      if (activeRec) {
+        void sendNowRecording(activeRec.id);
+        return;
+      }
+
+      void fetch(`/api/quick-replies/${qr.id}/use`, { method: "POST" }).catch(() => {});
+      onSelectAudio(qr, true);
+      return;
+    }
+
+    // Direct Instant Sequence execution
+    if (qr.kind === "sequence") {
+      void fetch(`/api/quick-replies/${qr.id}/use`, { method: "POST" }).catch(() => {});
+      onSelectSequence(qr);
+      return;
+    }
+
+    // NORMAL CLICK (Text, Media): 3-Second Instant Send with CANCEL option!
     if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
     if (intervalRef.current) clearInterval(intervalRef.current);
 
@@ -408,8 +477,49 @@ export function QuickReplyTopBar({
   return (
     <TooltipProvider delay={200}>
       <div className="relative border-t border-border/60 bg-card/85 dark:bg-card/65 backdrop-blur-md transition-opacity duration-200 z-10 select-none shadow-2xs">
+        {/* Active Audio Recording Simulation Banner with Exact Duration */}
+        {activeRecording && (
+          <div className="flex items-center justify-between gap-3 border-b border-purple-500/40 bg-purple-500/15 px-3 py-2 text-xs font-medium text-purple-900 dark:text-purple-200 animate-in fade-in slide-in-from-top-1 duration-200">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="flex h-2.5 w-2.5 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-purple-500" />
+              </span>
+              <span className="truncate">
+                🎙️ Gravando áudio <strong>&quot;{activeRecording.audioTitle}&quot;</strong> para {activeRecording.recipientName} ({activeRecording.totalSeconds}s) em{" "}
+                <span className="font-mono text-sm font-bold text-purple-600 dark:text-purple-400">
+                  {activeRecording.remainingSeconds}s
+                </span>
+                ...
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                type="button"
+                size="sm"
+                variant="destructive"
+                className="h-6 px-2.5 text-xs font-semibold gap-1 bg-red-600 hover:bg-red-700 text-white shadow-sm"
+                onClick={() => cancelRecording(activeRecording.id)}
+              >
+                <X className="h-3.5 w-3.5" />
+                <span>Cancelar</span>
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="h-6 px-2.5 text-xs font-semibold gap-1 bg-purple-600 hover:bg-purple-700 text-white shadow-sm"
+                onClick={() => void sendNowRecording(activeRecording.id)}
+              >
+                <Send className="h-3 w-3" />
+                <span>Enviar Agora</span>
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* Active 3-Second Instant Send Countdown Banner */}
-        {pendingSend && (
+        {!activeRecording && pendingSend && (
           <div className="flex items-center justify-between gap-3 border-b border-amber-500/40 bg-amber-500/15 px-3 py-2 text-xs font-medium text-amber-900 dark:text-amber-200 animate-in fade-in slide-in-from-top-1 duration-200">
             <div className="flex items-center gap-2 min-w-0">
               <span className="flex h-2.5 w-2.5 relative">
@@ -611,7 +721,6 @@ export function QuickReplyTopBar({
             filteredItems.map((item) => {
               const kindCfg = KIND_COLORS[item.kind] || KIND_COLORS.text;
               const isFav = Boolean(item.is_favorite);
-              const isAudio = item.kind === "audio";
               const isEditing = editingId === item.id;
               const isConfirmingDelete = confirmDeleteId === item.id;
 
@@ -692,6 +801,17 @@ export function QuickReplyTopBar({
                 );
               }
 
+              const isAudio = item.kind === "audio";
+              const effectiveDuration = item.media_duration || dynamicDurations[item.id] || 0;
+              const activeItemRecording = isAudio
+                ? recordings.find(
+                    (r) =>
+                      r.audioTitle === item.title ||
+                      (item.media_url && r.mediaUrl === item.media_url)
+                  )
+                : null;
+              const isItemRecording = Boolean(activeItemRecording);
+
               return (
                 <div
                   key={item.id}
@@ -725,15 +845,21 @@ export function QuickReplyTopBar({
                   }}
                   onClick={(e) => handleCardClick(item, e.shiftKey)}
                   className={cn(
-                    "group relative flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium cursor-pointer transition-all duration-150 shrink-0 select-none shadow-2xs",
+                    "group relative flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium cursor-pointer transition-all duration-150 shrink-0 select-none shadow-2xs",
                     kindCfg.bg,
                     kindCfg.border,
                     kindCfg.text,
                     dragOverId === item.id
                       ? "border-purple-500 ring-2 ring-purple-500/50 bg-purple-500/20 scale-105"
+                      : isItemRecording
+                      ? "border-purple-500 ring-2 ring-purple-500/60 bg-purple-500/25 scale-[1.03] animate-pulse"
                       : "hover:scale-[1.02] active:scale-[0.98]"
                   )}
-                  title={`Arraste para mudar de lugar | Clique: Envia em 3s (${isAudio ? "com 'Gravando áudio...'" : "direto"})`}
+                  title={
+                    isAudio
+                      ? `🎙️ ${item.title} • Duração: ${formatAudioTime(effectiveDuration)} • Clique: Gravar e enviar com tempo certinho (${effectiveDuration}s)`
+                      : `Clique: Envia em 3s | Shift+Clique: Insere no texto`
+                  }
                 >
                   {/* Drag Handle */}
                   <div
@@ -760,11 +886,21 @@ export function QuickReplyTopBar({
                     {item.title}
                   </span>
 
-                  {/* Audio duration tag if applicable */}
-                  {isAudio && item.media_duration && (
-                    <span className="text-[10px] opacity-75 font-mono">
-                      {Math.floor(Number(item.media_duration))}s
-                    </span>
+                  {/* Audio duration tag with exact time or active live countdown */}
+                  {isAudio && (
+                    isItemRecording && activeItemRecording ? (
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-purple-600 text-white font-mono font-bold shrink-0 flex items-center gap-1 shadow-xs animate-pulse"
+                        title="Gravando áudio... Clique novamente para Enviar Agora!"
+                      >
+                        <span className="h-1.5 w-1.5 rounded-full bg-red-400 animate-ping" />
+                        {formatAudioTime(activeItemRecording.remainingSeconds)}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-700 dark:text-purple-300 font-mono font-bold shrink-0">
+                        {formatAudioTime(effectiveDuration)}
+                      </span>
+                    )
                   )}
 
                   {/* Favorite star */}

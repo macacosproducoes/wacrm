@@ -220,6 +220,24 @@ export async function POST(request: Request) {
             console.log(`[TRACE ${traceId}] AI auto-reply completed in after() execution context.`);
           }
 
+          // Priority 2.5: Custom Workflow Automations (e.g. keywords, new inbound message)
+          if (processResult.accountId && processResult.contactId) {
+            try {
+              const { runAutomationsForTrigger } = await import('@/lib/automations/engine');
+              await runAutomationsForTrigger({
+                accountId: processResult.accountId,
+                triggerType: 'new_message_received',
+                contactId: processResult.contactId,
+                context: {
+                  message_text: processResult.messageText,
+                  conversation_id: processResult.conversationId,
+                },
+              });
+            } catch (autoErr) {
+              console.warn(`[TRACE ${traceId}] Error in runAutomationsForTrigger:`, autoErr);
+            }
+          }
+
           // Priority 3: Process due follow-ups in background
           try {
             const { processDueFollowUps } = await import('@/lib/automations/follow-up-engine');
