@@ -21,6 +21,7 @@ export interface FindOrCreateConversationParams {
   userId: string;
   contactId: string;
   connectionId?: string | null;
+  status?: 'open' | 'pending' | 'closed';
 }
 
 export interface UpdateConversationWithMessageParams {
@@ -218,7 +219,7 @@ export async function findOrCreateConversation(
         account_id: params.accountId,
         user_id: params.userId,
         contact_id: params.contactId,
-        status: 'open',
+        status: params.status || 'open',
         ai_autoreply_disabled: false,
         ai_reply_count: 0,
         unread_count: 0,

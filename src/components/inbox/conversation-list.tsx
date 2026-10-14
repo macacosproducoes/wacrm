@@ -60,13 +60,37 @@ export function ConversationList({
   const t = useTranslations("Inbox.conversationList");
   const { accountId } = useAuth();
   
-  const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = useMemo(() => [
-    { label: "Todas", value: "all" },
-    { label: "Não lidas", value: "unread" },
-    { label: "Abertas", value: "open" },
-    { label: "Pendentes", value: "pending" },
-    { label: "Arquivadas", value: "closed" },
-  ], []);
+  // Accurately compute count of conversations for each filter
+  const counts = useMemo(() => {
+    let all = 0;
+    let unread = 0;
+    let open = 0;
+    let pending = 0;
+    let closed = 0;
+
+    for (const c of conversations) {
+      if (accountId && c.account_id && c.account_id !== accountId) continue;
+      const isArchived = c.status === 'closed' || (c as unknown as { status: string }).status === 'archived';
+      if (isArchived) {
+        closed++;
+      } else {
+        all++;
+        if (c.unread_count > 0) unread++;
+        if (c.status === 'open') open++;
+        if (c.status === 'pending') pending++;
+      }
+    }
+
+    return { all, unread, open, pending, closed };
+  }, [conversations, accountId]);
+
+  const FILTER_OPTIONS: { label: string; value: InboxFilter; count: number }[] = useMemo(() => [
+    { label: "Todas", value: "all", count: counts.all },
+    { label: "Não lidas", value: "unread", count: counts.unread },
+    { label: "Abertas", value: "open", count: counts.open },
+    { label: "Pendentes", value: "pending", count: counts.pending },
+    { label: "Arquivadas", value: "closed", count: counts.closed },
+  ], [counts]);
 
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<InboxFilter>("all");
@@ -134,7 +158,7 @@ export function ConversationList({
           }).catch(() => {});
         }
         // Refresh conversations list
-        const apiRes = await fetch("/api/inbox/conversations?limit=80").then((r) => r.json());
+        const apiRes = await fetch("/api/inbox/conversations?status=all_with_archived&limit=150").then((r) => r.json());
         if (apiRes.conversations) {
           onConversationsLoadedRef.current(apiRes.conversations);
         }
@@ -206,7 +230,7 @@ export function ConversationList({
       // 2. If client query returned 0 rows or errored, ALWAYS fallback to server API
       if (!list || list.length === 0) {
         try {
-          const apiRes = await fetch("/api/inbox/conversations").then((r) => r.json());
+          const apiRes = await fetch("/api/inbox/conversations?status=all_with_archived&limit=150").then((r) => r.json());
           if (apiRes?.conversations && apiRes.conversations.length > 0) {
             list = apiRes.conversations;
           } else if (apiRes?.conversations) {
@@ -251,7 +275,7 @@ export function ConversationList({
           .then((r) => r.json())
           .then(async (data) => {
             if (data?.success && !cancelled) {
-              const res = await fetch('/api/inbox/conversations').then((r) => r.json());
+              const res = await fetch('/api/inbox/conversations?status=all_with_archived&limit=150').then((r) => r.json());
               if (res.conversations && res.conversations.length > 0 && !cancelled) {
                 console.log(`[INBOX] Auto-sync populated ${res.conversations.length} conversations`);
                 onConversationsLoadedRef.current(res.conversations);
@@ -309,15 +333,22 @@ export function ConversationList({
       result = result.filter((c) => !c.account_id || c.account_id === accountId);
     }
 
-    if (filter === "unread") {
-      result = result.filter((c) => c.unread_count > 0 && c.status !== "closed");
-    } else if (filter === "all") {
-      // By default, never show archived/closed conversations in CRM main inbox
-      result = result.filter((c) => c.status !== "closed");
-    } else if (filter === "closed") {
-      result = result.filter((c) => c.status === "closed");
+    // STRICT ARCHIVE ISOLATION:
+    // If viewing "Arquivadas" tab: ONLY show closed / archived conversations.
+    // If viewing any other tab ("Todas", "Não lidas", "Abertas", "Pendentes"):
+    // NEVER show closed / archived conversations! They are 100% segregated.
+    if (filter === "closed") {
+      result = result.filter((c) => c.status === "closed" || (c as unknown as { status: string }).status === "archived");
     } else {
-      result = result.filter((c) => c.status === filter);
+      result = result.filter((c) => c.status !== "closed" && (c as unknown as { status: string }).status !== "archived");
+    }
+
+    if (filter === "unread") {
+      result = result.filter((c) => c.unread_count > 0);
+    } else if (filter === "open") {
+      result = result.filter((c) => c.status === "open");
+    } else if (filter === "pending") {
+      result = result.filter((c) => c.status === "pending");
     }
 
     // Contact-based filters (tags via OR logic, exact company match).
@@ -340,7 +371,12 @@ export function ConversationList({
       });
     }
 
-    return result;
+    // Final absolute safety assertion:
+    if (filter === "closed") {
+      return result.filter((c) => c.status === "closed" || (c as unknown as { status: string }).status === "archived");
+    } else {
+      return result.filter((c) => c.status !== "closed" && (c as unknown as { status: string }).status !== "archived");
+    }
   }, [conversations, filter, search, selectedTagIds, selectedCompany, accountId]);
 
   const toggleTag = useCallback((id: string) => {
@@ -428,26 +464,33 @@ export function ConversationList({
 
         <div className="flex flex-wrap items-center gap-1">
           <DropdownMenu>
-            <DropdownMenuTrigger className="inline-flex items-center justify-center h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground rounded-md hover:bg-muted">
-                {activeFilter?.label ?? t("filterAll")}
+            <DropdownMenuTrigger className="inline-flex items-center justify-center h-7 gap-1 px-2 text-xs font-medium text-muted-foreground hover:text-foreground rounded-md hover:bg-muted">
+                <span>{activeFilter?.label ?? "Todas"}</span>
+                <span className="text-[11px] opacity-70 font-semibold">({activeFilter?.count ?? 0})</span>
                 <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="start"
-              className="border-border bg-popover"
+              className="border-border bg-popover w-44"
             >
               {FILTER_OPTIONS.map((opt) => (
                 <DropdownMenuItem
                   key={opt.value}
                   onClick={() => setFilter(opt.value)}
                   className={cn(
-                    "text-sm",
+                    "flex items-center justify-between gap-2 text-sm cursor-pointer",
                     filter === opt.value
-                      ? "text-primary"
+                      ? "text-primary font-medium"
                       : "text-popover-foreground"
                   )}
                 >
-                  {opt.label}
+                  <span>{opt.label}</span>
+                  <span className={cn(
+                    "rounded px-1.5 py-0.2 text-[10px] font-semibold",
+                    opt.value === "closed" ? "bg-muted text-muted-foreground" : "bg-muted text-foreground"
+                  )}>
+                    {opt.count}
+                  </span>
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>

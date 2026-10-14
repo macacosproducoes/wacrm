@@ -332,7 +332,7 @@ export async function POST(request: Request) {
         String(c.wa_archived) === 'true'
       );
 
-      // If chat is archived on WhatsApp, exclude it completely from active CRM conversations
+      // If chat is archived on WhatsApp, strictly isolate it in closed/archived status
       if (isArchived) {
         const existingConv = convMap.get(resolvedContactId);
         if (existingConv?.id) {
@@ -340,6 +340,21 @@ export async function POST(request: Request) {
             .from('conversations')
             .update({ status: 'closed', updated_at: new Date().toISOString() })
             .eq('id', existingConv.id);
+        } else {
+          const createdConvId = await findOrCreateConversation(admin, {
+            accountId,
+            userId: ownerUserId,
+            contactId: resolvedContactId,
+            connectionId: conn.id,
+            status: 'closed',
+          });
+          if (createdConvId) {
+            convMap.set(resolvedContactId, {
+              id: String(createdConvId),
+              last_message_at: null,
+              last_message_text: null,
+            });
+          }
         }
         return;
       }

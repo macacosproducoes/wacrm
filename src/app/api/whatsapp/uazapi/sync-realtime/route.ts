@@ -191,6 +191,26 @@ async function handleSync(request: Request) {
         if (!formattedPhone || formattedPhone.length < 8) return;
 
         const matchedConv = convMapByPhone.get(formattedPhone) || convMapByPhone.get(rawPhone);
+
+        // Strict WhatsApp Archive segregation: if chat is archived on WhatsApp, guarantee status is closed
+        const isArchived = Boolean(
+          chat.wa_archived ||
+          chat.isArchived ||
+          chat.archived ||
+          chat.archive ||
+          String(chat.wa_archived) === 'true'
+        );
+
+        if (isArchived) {
+          if (matchedConv?.id) {
+            await admin
+              .from('conversations')
+              .update({ status: 'closed', updated_at: new Date().toISOString() })
+              .eq('id', matchedConv.id);
+          }
+          return;
+        }
+
         const chatLastMsgTs = Number(chat.wa_lastMsgTimestamp || 0);
         const dbLastMsgTs = matchedConv?.last_message_at
           ? new Date(matchedConv.last_message_at).getTime()

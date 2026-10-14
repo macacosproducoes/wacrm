@@ -175,10 +175,10 @@ function groupMessagesByDate(messages: Message[]) {
   return groups;
 }
 
-const STATUS_OPTIONS: { label: string; value: ConversationStatus; color: string }[] = [
-  { label: "Open", value: "open", color: "text-primary" },
-  { label: "Pending", value: "pending", color: "text-amber-400" },
-  { label: "Closed", value: "closed", color: "text-muted-foreground" },
+const STATUS_OPTIONS: { label: string; value: ConversationStatus; color: string; ptLabel: string }[] = [
+  { label: "Open", value: "open", color: "text-primary", ptLabel: "Aberta" },
+  { label: "Pending", value: "pending", color: "text-amber-500", ptLabel: "Pendente" },
+  { label: "Closed", value: "closed", color: "text-muted-foreground", ptLabel: "Arquivada" },
 ];
 
 /**
@@ -1579,7 +1579,7 @@ export function MessageThread({
                   "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
                   currentStatus?.color ?? "text-muted-foreground"
                 )}>
-                {currentStatus ? t(`status${currentStatus.label}`) : t("status")}
+                {currentStatus ? currentStatus.ptLabel : "Status"}
                 <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -1590,9 +1590,14 @@ export function MessageThread({
                 <DropdownMenuItem
                   key={opt.value}
                   onClick={() => handleStatusChange(opt.value)}
-                  className={cn("text-sm", opt.color)}
+                  className={cn(
+                    "flex items-center justify-between gap-3 text-sm cursor-pointer",
+                    opt.color,
+                    conversation.status === opt.value && "font-semibold"
+                  )}
                 >
-                  {t(`status${opt.label}`)}
+                  <span>{opt.ptLabel}</span>
+                  {conversation.status === opt.value && <span className="text-xs">✓</span>}
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
