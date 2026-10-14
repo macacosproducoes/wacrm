@@ -40,6 +40,8 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const status = searchParams.get('status');
     const id = searchParams.get('id');
+    const limitParam = searchParams.get('limit');
+    const limitNum = limitParam ? Math.min(Math.max(Number(limitParam), 1), 200) : 80;
 
     let query = admin
       .from('conversations')
@@ -59,6 +61,9 @@ export async function GET(request: Request) {
       query = query.neq('status', 'closed');
     }
 
+    if (!id) {
+      query = query.limit(limitNum);
+    }
     const { data, error } = await query;
 
     if (error) {

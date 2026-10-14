@@ -74,8 +74,8 @@ export function WhatsAppRealtimeBridge() {
       }
     }
 
-    // Initial trigger after 3s to let the page settle
-    timer = setTimeout(tick, 3000);
+    // Initial trigger after 15s to let the page settle with 0 contention
+    timer = setTimeout(tick, 15000);
 
     // Periodic check for due conditional follow-ups (every 90s to save Vercel quotas)
     let followUpTimer: NodeJS.Timeout | null = null;
@@ -101,7 +101,7 @@ export function WhatsAppRealtimeBridge() {
       if (document.visibilityState === 'visible') {
         if (!isSyncingRef.current) {
           if (timer) clearTimeout(timer);
-          timer = setTimeout(tick, 1000);
+          timer = setTimeout(tick, 5000);
         }
         void fetch('/api/follow-ups/cron', { method: 'POST' }).catch(() => {});
       }

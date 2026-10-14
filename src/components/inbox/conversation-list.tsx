@@ -134,7 +134,7 @@ export function ConversationList({
           }).catch(() => {});
         }
         // Refresh conversations list
-        const apiRes = await fetch("/api/inbox/conversations").then((r) => r.json());
+        const apiRes = await fetch("/api/inbox/conversations?limit=80").then((r) => r.json());
         if (apiRes.conversations) {
           onConversationsLoadedRef.current(apiRes.conversations);
         }
@@ -241,7 +241,7 @@ export function ConversationList({
       setLoading(false);
 
       // 4. If user actually has 0 conversations on first load, trigger background sync
-      if (normalizedList.length === 0 && prevCount === 0 && !hasAutoSyncedRef.current) {
+      if (normalizedList.length === 0 && prevCount === 0 && !hasAutoSyncedRef.current && list !== null && Array.isArray(list)) {
         hasAutoSyncedRef.current = true;
         fetch('/api/whatsapp/sync', {
           method: 'POST',

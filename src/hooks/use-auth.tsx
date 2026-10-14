@@ -198,93 +198,82 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // pulls the matching profile row along with its account summary.
   const fetchProfile = useCallback(async (userId: string) => {
     const supabase = createClient();
-    if (!profile) setProfileLoading(true);
+    if (!profile && !cached.profile) setProfileLoading(true);
     setStatusDetail(null);
     lastFetchedUserIdRef.current = userId;
     try {
       let data: ProfileRow | null = null;
-      for (let attempt = 1; ; attempt++) {
-        const timeoutPromise = new Promise<{ data: null; error: { message: string; details?: string; hint?: string; code?: string } }>((resolve) =>
-          setTimeout(() => resolve({ data: null, error: { message: "Supabase profile query timed out" } }), PROFILE_FETCH_TIMEOUT_MS)
+      let accountRow: AccountSummary | null = null;
+
+      // 1. Try Supabase client query with 3.5s timeout
+      try {
+        const timeoutPromise = new Promise<{ data: null; error: { message: string } }>((resolve) =>
+          setTimeout(() => resolve({ data: null, error: { message: "timeout" } }), 3500)
         );
 
         const queryPromise = supabase
           .from("profiles")
-          .select(
-            "id, full_name, email, avatar_url, role, beta_features, account_id, account_role",
-          )
+          .select("id, full_name, email, avatar_url, role, beta_features, account_id, account_role")
           .eq("user_id", userId)
           .maybeSingle();
 
         const result = await Promise.race([queryPromise, timeoutPromise]);
-
         if (!result.error && result.data) {
           data = result.data;
-          break;
         }
-
-        const error = result.error;
-        console.warn("[AuthProvider] fetchProfile issue:", error?.message);
-        if (attempt < PROFILE_FETCH_ATTEMPTS) {
-          await sleep(PROFILE_FETCH_RETRY_MS);
-          continue;
-        }
-        lastFetchedUserIdRef.current = null;
-        if (!profile && error) setStatusDetail(error.message);
-        return;
+      } catch (clientErr) {
+        console.warn("[AuthProvider] Supabase client query warning:", clientErr);
       }
 
-      if (data) {
-        // Load the account with a plain lookup by id instead of an
-        // embedded FK join. The embed (`account:accounts!inner(...)`)
-        // forces PostgREST to resolve the profiles.account_id →
-        // accounts.id relationship from its schema cache; a stale cache
-        // (common right after a migration adds the FK) makes it fail
-        // hard with PGRST200 and blanks the whole profile — the user
-        // then loses account context everywhere (issue #294). A point
-        // lookup by id needs no relationship inference, so the profile
-        // (with account_id / account_role) still resolves even if the
-        // account name lookup itself can't.
-        let accountRow: AccountSummary | null = null;
-        if (data.account_id) {
-          const { data: account, error: accountErr } = await supabase
+      // 2. Fast Resilient Server Fallback via /api/auth/me
+      if (!data) {
+        try {
+          const apiRes = await fetch("/api/auth/me", { cache: "no-store" });
+          if (apiRes.ok) {
+            const apiJson = await apiRes.json();
+            if (apiJson?.profile) {
+              data = apiJson.profile;
+              if (apiJson.account) {
+                accountRow = apiJson.account;
+              }
+            }
+          }
+        } catch (apiErr) {
+          console.warn("[AuthProvider] /api/auth/me fallback error:", apiErr);
+        }
+      }
+
+      // 3. Fallback to /api/account if accountRow is still missing
+      if (data && !accountRow && data.account_id) {
+        try {
+          const { data: acc } = await supabase
             .from("accounts")
-            // default_currency added in migration 021; narrowed to the
-            // USD fallback below for older schemas where it reads null.
             .select("id, name, default_currency")
             .eq("id", data.account_id)
             .maybeSingle();
-          if (accountErr) {
-            try {
-              const res = await fetch("/api/account").then((r) => r.json());
-              if (res?.account) {
-                accountRow = {
-                  id: res.account.id,
-                  name: res.account.name,
-                  default_currency: res.account.default_currency ?? DEFAULT_CURRENCY,
-                };
-              }
-            } catch {
-              // Silently handle fallback failure
-            }
-          } else if (account) {
+          if (acc) {
             accountRow = {
-              id: account.id,
-              name: account.name,
-              default_currency: account.default_currency ?? DEFAULT_CURRENCY,
+              id: acc.id,
+              name: acc.name,
+              default_currency: acc.default_currency ?? DEFAULT_CURRENCY,
             };
+          } else {
+            const res = await fetch("/api/account").then((r) => r.json());
+            if (res?.account) {
+              accountRow = {
+                id: res.account.id,
+                name: res.account.name,
+                default_currency: res.account.default_currency ?? DEFAULT_CURRENCY,
+              };
+            }
           }
+        } catch {
+          // Handled safely
         }
+      }
 
-        // Narrow the DB enum into our AccountRole union. The DB
-        // constraint should make this unconditional, but a future
-        // migration that broadens the enum without updating TS would
-        // otherwise crash here — fall back to null and let UI gates
-        // treat the caller as least-privileged.
-        const accountRole = isAccountRole(data.account_role)
-          ? data.account_role
-          : null;
-
+      if (data) {
+        const accountRole = isAccountRole(data.account_role) ? data.account_role : null;
         const newProfile: Profile = {
           id: data.id,
           user_id: userId,
@@ -297,7 +286,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           account_role: accountRole,
         };
         setProfile(newProfile);
-        setAccount(accountRow);
+        if (accountRow) setAccount(accountRow);
+
         try {
           const pStr = JSON.stringify(newProfile);
           localStorage.setItem(CACHE_PROFILE_KEY, pStr);
@@ -308,28 +298,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             sessionStorage.setItem(CACHE_ACCOUNT_KEY, aStr);
           }
         } catch {}
+
         if (!data.account_id || !accountRole) {
-          // The row exists but carries no tenancy. Migration 017 made
-          // both columns NOT NULL for new signups, so this is a user
-          // whose bootstrap didn't complete (handle_new_user swallows a
-          // failure as a WARNING) or one predating that migration.
-          // Every insert and update they attempt will be denied by RLS.
-          setStatusDetail(
-            `profile ${data.id} has no ${!data.account_id ? "account_id" : "account_role"}`,
-          );
+          setStatusDetail(`profile ${data.id} has no ${!data.account_id ? "account_id" : "account_role"}`);
         }
-      } else {
+      } else if (!cached.profile) {
         lastFetchedUserIdRef.current = null;
         setStatusDetail("no profiles row for the signed-in user");
       }
     } catch (err) {
       console.error("[AuthProvider] fetchProfile threw:", err);
-      lastFetchedUserIdRef.current = null;
-      setStatusDetail(err instanceof Error ? err.message : "profile fetch failed");
+      if (!cached.profile) {
+        lastFetchedUserIdRef.current = null;
+        setStatusDetail(err instanceof Error ? err.message : "profile fetch failed");
+      }
     } finally {
       setProfileLoading(false);
     }
-  }, []);
+  }, [cached.profile, profile]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -458,11 +444,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // every consumer render. Cheap regardless, but the memo also gives
   // each derived value a stable identity for React.memo / useEffect
   // dependencies downstream.
+  const activeProfile = profile || (cached.profile?.user_id === user?.id ? cached.profile : null);
   const derived = useMemo(() => {
-    const role = profile?.account_role ?? null;
+    const role = activeProfile?.account_role ?? null;
     return {
       accountRole: role,
-      accountId: profile?.account_id ?? null,
+      accountId: activeProfile?.account_id ?? null,
       isOwner: role === "owner",
       isAdmin: role === "admin",
       isAgent: role === "agent",
@@ -471,15 +458,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       canEditSettings: role ? canEditSettingsFor(role) : false,
       canSendMessages: role ? canSendMessagesFor(role) : false,
     };
-  }, [profile?.account_role, profile?.account_id]);
+  }, [activeProfile?.account_role, activeProfile?.account_id]);
 
   // Signed out is not a broken account — the shell redirects to /login
   // before anything reads this.
   const accountStatus: AccountStatus = !user
     ? "loading"
-    : profileLoading
+    : profileLoading && !activeProfile
       ? "loading"
-      : !profile
+      : !activeProfile
         ? "error"
         : derived.accountId && derived.accountRole
           ? "ready"

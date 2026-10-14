@@ -120,7 +120,7 @@ async function handleSync(request: Request) {
         token,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ limit: 200 }),
+      body: JSON.stringify({ limit: 25 }),
     });
 
     if (!chatsRes.ok) {
@@ -447,7 +447,11 @@ async function handleSync(request: Request) {
       }
     };
 
-    await Promise.allSettled(rawChats.map(syncChat));
+    // Controlled bounded execution to never saturate PostgREST connection slots
+    const chatsToSync = rawChats.slice(0, 25);
+    for (const chat of chatsToSync) {
+      await syncChat(chat);
+    }
 
     return NextResponse.json({
       success: true,
