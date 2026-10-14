@@ -5,6 +5,7 @@ import {
   sendUazApiText,
   sendUazApiMedia,
   normalizeBaseUrl,
+  normalizeMediaUrl,
   formatUazApiNumber,
 } from '@/lib/whatsapp/uazapi-client';
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
@@ -179,8 +180,9 @@ export async function checkAndDispatchWelcomeMessage(
   // 3. Welcome log history & inactivity window check
   const { data: recentLogs } = await admin
     .from('welcome_message_logs')
-    .select('id, sent_at')
+    .select('id, sent_at, uazapi_message_id')
     .eq('conversation_id', conversationId)
+    .not('uazapi_message_id', 'like', 'welcome_lock_%')
     .order('sent_at', { ascending: false })
     .limit(1);
 
@@ -246,7 +248,8 @@ export async function checkAndDispatchWelcomeMessage(
   let uazapiMessageId = `welcome_${Date.now()}`;
   const meta = ((replyRow.interactive_payload as Record<string, unknown>) || {}) as Record<string, unknown>;
   const rawKind = String(replyRow.kind || meta.type || 'text').toLowerCase();
-  const mediaUrl = String(replyRow.media_url || meta.media_url || uazConfig.media_url || '').trim();
+  const rawMediaUrl = String(replyRow.media_url || meta.media_url || uazConfig.media_url || '').trim();
+  const mediaUrl = normalizeMediaUrl(rawMediaUrl);
   const mediaType = String(replyRow.media_type || meta.media_type || '').toLowerCase();
   const category = String(replyRow.category || meta.category || '').toLowerCase();
 
@@ -334,31 +337,46 @@ export async function checkAndDispatchWelcomeMessage(
         });
         let stepMsgId = `welcome_seq_${Date.now()}_${i}`;
         const stepType = (step.type || 'text').toLowerCase();
-        const hasMedia = Boolean(step.media_url && typeof step.media_url === 'string' && step.media_url.trim().length > 0);
+        const stepMediaUrl = normalizeMediaUrl(step.media_url);
+        const hasMedia = Boolean(stepMediaUrl && typeof stepMediaUrl === 'string' && stepMediaUrl.trim().length > 0);
 
-        if (stepType === 'audio' && hasMedia) {
-          const res = await sendUazApiMedia(baseUrl, plainToken, {
-            number: phone,
-            url: step.media_url!,
-            type: 'audio',
-            ptt: true,
-          });
-          if (res?.messageId) stepMsgId = res.messageId;
-        } else if (['image', 'video', 'document'].includes(stepType) && hasMedia) {
-          const res = await sendUazApiMedia(baseUrl, plainToken, {
-            number: phone,
-            url: step.media_url!,
-            type: stepType as any,
-            caption: stepText || undefined,
-          });
-          if (res?.messageId) stepMsgId = res.messageId;
-        } else {
-          // Strictly text: never call media endpoints
-          const res = await sendUazApiText(baseUrl, plainToken, {
-            number: phone,
-            text: stepText || 'Olá! Seja muito bem-vindo.',
-          });
-          if (res?.messageId) stepMsgId = res.messageId;
+        try {
+          if (stepType === 'audio' && hasMedia) {
+            const res = await sendUazApiMedia(baseUrl, plainToken, {
+              number: phone,
+              url: stepMediaUrl,
+              type: 'audio',
+              ptt: true,
+            });
+            if (res?.messageId) stepMsgId = res.messageId;
+          } else if (['image', 'video', 'document'].includes(stepType) && hasMedia) {
+            const res = await sendUazApiMedia(baseUrl, plainToken, {
+              number: phone,
+              url: stepMediaUrl,
+              type: stepType as any,
+              caption: stepText || undefined,
+            });
+            if (res?.messageId) stepMsgId = res.messageId;
+          } else {
+            // Strictly text: never call media endpoints
+            const res = await sendUazApiText(baseUrl, plainToken, {
+              number: phone,
+              text: stepText || 'Olá! Seja muito bem-vindo.',
+            });
+            if (res?.messageId) stepMsgId = res.messageId;
+          }
+        } catch (stepErr) {
+          console.error('[welcome-engine] Step ' + (i + 1) + ' failed to send media via provider, continuing sequence:', stepErr);
+          // If media failed, fallback to sending the accompanying text if available
+          if (hasMedia && stepText) {
+            try {
+              const textRes = await sendUazApiText(baseUrl, plainToken, {
+                number: phone,
+                text: stepText,
+              });
+              if (textRes?.messageId) stepMsgId = textRes.messageId;
+            } catch {}
+          }
         }
 
         const stepTime = new Date().toISOString();
@@ -427,6 +445,13 @@ export async function checkAndDispatchWelcomeMessage(
     }
   } catch (err) {
     console.error('[welcome-engine] Failed to send welcome message via provider:', err);
+    try {
+      await admin
+        .from('welcome_message_logs')
+        .delete()
+        .eq('conversation_id', conversationId)
+        .eq('sent_at', preLogTime);
+    } catch {}
     return { dispatched: false, reason: 'provider_send_failed' };
   }
 

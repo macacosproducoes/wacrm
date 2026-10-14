@@ -16,6 +16,7 @@ import { createClient as createAdminClient, SupabaseClient } from '@supabase/sup
 import {
   sendUazApiMedia,
   formatUazApiNumber,
+  normalizeMediaUrl,
 } from '@/lib/whatsapp/uazapi-client';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
@@ -548,7 +549,7 @@ export async function processFirstPaymentAutomation(
     }
 
     // 7. Resolve Audio Asset in ZapPlus ("PEDIDO CONFIRMADO")
-    let audioUrl = config.audio_url || DEFAULT_AUDIO.url;
+    let audioUrl = normalizeMediaUrl(config.audio_url || DEFAULT_AUDIO.url);
     let audioName = config.audio_name || DEFAULT_AUDIO.name;
     let audioId = config.audio_id || DEFAULT_AUDIO.id;
 
@@ -564,7 +565,7 @@ export async function processFirstPaymentAutomation(
       audioId = qr.id;
       audioName = qr.title;
       const meta = (qr.interactive_payload || {}) as Record<string, unknown>;
-      audioUrl = qr.media_url || (meta.media_url as string) || audioUrl;
+      audioUrl = normalizeMediaUrl(qr.media_url || (meta.media_url as string) || audioUrl);
     }
 
     // 8. Find Active WhatsApp Connection in ZapPlus / UazAPI

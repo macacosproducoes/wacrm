@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
+import { processFirstPaymentAutomation } from '@/lib/automations/first-payment-engine'
 
 function supabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -50,11 +51,26 @@ export async function GET(request: Request) {
         const isPaid = rawStatus === 'PAID' || rawStatus.toLowerCase() === 'paid' || match.processing_status === 'COMPLETED'
 
         if (isPaid) {
+          processFirstPaymentAutomation({
+            payment_id: String(p.id || external_id),
+            external_id,
+            status: 'paid',
+            amount: typeof p.value === 'number' ? p.value : typeof p.amount === 'number' ? p.amount : undefined,
+            buyer: {
+              name: p.name || p.metadata?.donor_name,
+              email: p.email,
+              phone: p.phone,
+            },
+            raw_payload: (match.payload || {}) as Record<string, unknown>,
+          }).catch((err) =>
+            console.error('[API /api/mimos/status] Erro na automação de primeiro pagamento:', err)
+          );
+
           return NextResponse.json({
             success: true,
             status: 'paid',
             data: match.payload,
-          })
+          });
         }
       }
     }
