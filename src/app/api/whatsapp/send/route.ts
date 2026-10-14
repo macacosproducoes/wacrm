@@ -219,7 +219,7 @@ export async function POST(request: Request) {
               presence: 'recording',
               delayMs: 3500,
             });
-            await new Promise((r) => setTimeout(r, 2600));
+            // Instant dispatch
           } else if (message_type === 'text') {
             const typingDelay = Math.min(3000, Math.max(1800, (content_text || '').length * 25));
             void sendWhatsAppPresence({
@@ -331,7 +331,7 @@ export async function POST(request: Request) {
                 baseUrl,
                 token,
               });
-              await new Promise((r) => setTimeout(r, 2800));
+              // Instant dispatch
             } else if (message_type === 'text') {
               const typingDelay = Math.min(3000, Math.max(1800, (content_text || '').length * 25));
               void sendWhatsAppPresence({

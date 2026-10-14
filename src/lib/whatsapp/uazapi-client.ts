@@ -420,6 +420,7 @@ export async function sendUazApiMedia(
     body.isPtt = true;
     body.isForwarded = false;
     body.forwarded = false;
+    body.mimetype = 'audio/ogg; codecs=opus';
     // CRITICAL: Voice notes (PTT) MUST NOT carry a text caption on WhatsApp!
     // Carrying a caption forces WhatsApp to convert the voice note into a
     // forwarded audio file attachment instead of a native voice note with avatar & waveform.

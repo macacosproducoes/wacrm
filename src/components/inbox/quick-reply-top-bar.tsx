@@ -128,11 +128,7 @@ const KIND_COLORS: Record<
   },
 };
 
-interface PendingSend {
-  qr: QuickReply;
-  substitutedText?: string;
-  secondsLeft: number;
-}
+
 
 export function QuickReplyTopBar({
   quickReplies,
@@ -166,11 +162,6 @@ export function QuickReplyTopBar({
   // Delete confirmation state
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-
-  // Active 3-second instant send countdown state
-  const [pendingSend, setPendingSend] = useState<PendingSend | null>(null);
-  const countdownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Sync quickReplies prop
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -258,9 +249,6 @@ export function QuickReplyTopBar({
 
   const handleConfirmDelete = async (item: QuickReply, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (pendingSend?.qr.id === item.id) {
-      cancelPendingSend();
-    }
     setDeletingId(item.id);
     try {
       const res = await fetch(`/api/quick-replies/${item.id}`, { method: "DELETE" });
@@ -295,14 +283,6 @@ export function QuickReplyTopBar({
     loadCategories();
   }, []);
 
-  // Cleanup timers on unmount
-  useEffect(() => {
-    return () => {
-      if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, []);
-
   const filteredItems = useMemo(() => {
     const items = Array.isArray(localItems) ? localItems : [];
     return items.filter((item) => {
@@ -326,37 +306,13 @@ export function QuickReplyTopBar({
     return items.filter((i) => i.is_favorite && i.is_active !== false).length;
   }, [localItems]);
 
-  // Execute actual send after 3 seconds - humanized audio simulation enabled by default!
-  const executeDispatch = (qr: QuickReply, textToSend?: string) => {
-    // Record usage count
-    void fetch(`/api/quick-replies/${qr.id}/use`, { method: "POST" }).catch(() => {});
-
-    if (qr.kind === "text") {
-      if (onDirectSendText && textToSend) {
-        onDirectSendText(textToSend);
-      } else if (textToSend) {
-        onSelectText(textToSend);
-      }
-    } else if (qr.kind === "audio") {
-      // 🎙️ Guaranteed audio delivery: direct send with waveform bubble & native PTT
-      onSelectAudio(qr, false);
-    } else if (qr.kind === "sequence") {
-      onSelectSequence(qr);
-    } else if (["image", "video", "document", "media"].includes(qr.kind)) {
-      onSelectMedia(qr);
-    }
-  };
-
-  const cancelPendingSend = () => {
-    if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    setPendingSend(null);
-    toast.info("Envio cancelado.");
-  };
-
+  // Direct Instant 1-Click Action - Exactly as it was originally!
   const handleCardClick = (qr: QuickReply, isShiftPressed: boolean) => {
     // Do not trigger send if user is renaming or confirming delete
     if (editingId === qr.id || confirmDeleteId === qr.id) return;
+
+    // Record usage count asynchronously
+    void fetch(`/api/quick-replies/${qr.id}/use`, { method: "POST" }).catch(() => {});
 
     const rawText = qr.content_text || "";
     const substituted = replaceQuickReplyVariables(rawText, contactContext || {});
@@ -378,71 +334,26 @@ export function QuickReplyTopBar({
       return;
     }
 
-    // NORMAL CLICK: 3-Second Instant Send with CANCEL option!
-    if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
-    if (intervalRef.current) clearInterval(intervalRef.current);
-
-    setPendingSend({
-      qr,
-      substitutedText: substituted,
-      secondsLeft: 3,
-    });
-
-    // Tick every 1 second
-    let currentSeconds = 3;
-    intervalRef.current = setInterval(() => {
-      currentSeconds -= 1;
-      if (currentSeconds > 0) {
-        setPendingSend((prev) => (prev ? { ...prev, secondsLeft: currentSeconds } : null));
+    // Direct Instant 1-Click Action!
+    if (qr.kind === "text") {
+      if (onDirectSendText && substituted) {
+        onDirectSendText(substituted);
+      } else if (substituted) {
+        onSelectText(substituted);
       }
-    }, 1000);
-
-    // Dispatch after 3 seconds
-    countdownTimerRef.current = setTimeout(() => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      setPendingSend(null);
-      executeDispatch(qr, substituted);
-    }, 3000);
+    } else if (qr.kind === "audio") {
+      // 🎙️ Guaranteed instant audio delivery with native PTT
+      onSelectAudio(qr, false);
+    } else if (qr.kind === "sequence") {
+      onSelectSequence(qr);
+    } else if (["image", "video", "document", "media"].includes(qr.kind)) {
+      onSelectMedia(qr);
+    }
   };
 
   return (
     <TooltipProvider delay={200}>
       <div className="relative border-t border-border/60 bg-card/85 dark:bg-card/65 backdrop-blur-md transition-opacity duration-200 z-10 select-none shadow-2xs">
-        {/* Active 3-Second Instant Send Countdown Banner */}
-        {pendingSend && (
-          <div className="flex items-center justify-between gap-3 border-b border-amber-500/40 bg-amber-500/15 px-3 py-2 text-xs font-medium text-amber-900 dark:text-amber-200 animate-in fade-in slide-in-from-top-1 duration-200">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="flex h-2.5 w-2.5 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
-              </span>
-              <span className="truncate">
-                Enviando <strong>&quot;{pendingSend.qr.title}&quot;</strong> em{" "}
-                <span className="font-mono text-sm font-bold text-amber-600 dark:text-amber-400">
-                  {pendingSend.secondsLeft}s
-                </span>
-                ...
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="hidden sm:inline text-[11px] opacity-70">
-                (Shift+Clique edita antes)
-              </span>
-              <Button
-                type="button"
-                size="sm"
-                variant="destructive"
-                className="h-6 px-2.5 text-xs font-semibold gap-1 bg-red-600 hover:bg-red-700 text-white shadow-sm"
-                onClick={cancelPendingSend}
-              >
-                <X className="h-3.5 w-3.5" />
-                <span>Cancelar</span>
-              </Button>
-            </div>
-          </div>
-        )}
-
         {/* Categories & Filter Bar */}
         <div className="flex items-center justify-between gap-1.5 px-3 py-1.5 overflow-hidden">
           <div className="flex items-center gap-1 shrink-0 overflow-x-auto no-scrollbar">
@@ -486,7 +397,7 @@ export function QuickReplyTopBar({
                   : "text-muted-foreground hover:bg-muted"
               )}
             >
-              <span>🟨 Texto</span>
+              <span>📝 Texto</span>
             </button>
 
             <button
@@ -499,7 +410,7 @@ export function QuickReplyTopBar({
                   : "text-muted-foreground hover:bg-muted"
               )}
             >
-              <span>🟪 Áudio</span>
+              <span>🎙️ Áudio</span>
             </button>
 
             <button
@@ -512,7 +423,7 @@ export function QuickReplyTopBar({
                   : "text-muted-foreground hover:bg-muted"
               )}
             >
-              <span>🟧 Sequência</span>
+              <span>⚡ Sequência</span>
             </button>
 
             <button
@@ -525,7 +436,7 @@ export function QuickReplyTopBar({
                   : "text-muted-foreground hover:bg-muted"
               )}
             >
-              <span>🟦 Mídia</span>
+              <span>🖼️ Mídia</span>
             </button>
 
             {/* Category Dropdown/Selector */}
@@ -733,7 +644,7 @@ export function QuickReplyTopBar({
                       ? "border-purple-500 ring-2 ring-purple-500/50 bg-purple-500/20 scale-105"
                       : "hover:scale-[1.02] active:scale-[0.98]"
                   )}
-                  title={`Arraste para mudar de lugar | Clique: Envia em 3s (${isAudio ? "com 'Gravando áudio...'" : "direto"})`}
+                  title={`Clique: Enviar ${isAudio ? "áudio" : item.kind} instantaneamente | Arraste para reordenar`}
                 >
                   {/* Drag Handle */}
                   <div
