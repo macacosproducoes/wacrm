@@ -44,12 +44,11 @@ export async function GET(request: Request, context: RouteContext) {
       .order('created_at', { ascending: false })
       .limit(10);
 
-    // Filter for this contact's orders
+    // Filter for this contact's orders strictly by contact_id or phone number
     const contactJobs = (jobs || []).filter((j) => {
       const inputData = (j.input_data || {}) as Record<string, any>;
-      if (inputData.contact_id === contact.id) return true;
+      if (inputData.contact_id && inputData.contact_id === contact.id) return true;
       if (contact.phone && (inputData.recipient === contact.phone || inputData.phone === contact.phone)) return true;
-      if (contact.instagram_username && inputData.instagram_username?.toLowerCase() === contact.instagram_username.toLowerCase()) return true;
       return false;
     });
 
@@ -63,7 +62,7 @@ export async function GET(request: Request, context: RouteContext) {
       .eq('status', 'ACTIVE')
       .order('name');
 
-    if (!latestJob) {
+    if (!latestJob || (!latestJob.output_url && latestJob.status === 'FAILED')) {
       return NextResponse.json({
         has_order: false,
         templates: availableTemplates || [],

@@ -1,4 +1,4 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { createClient as createServerSupabase } from "@/lib/supabase/server";
 import { createClient } from "@supabase/supabase-js";
 
@@ -122,9 +122,7 @@ export async function GET() {
           });
         }
       }
-    }
-
-    // Convert map to array and sort descending by created_at
+    }    // Convert map to array and sort descending by created_at
     const photos = Array.from(photosMap.values()).sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
@@ -136,7 +134,7 @@ export async function GET() {
       },
       {
         headers: {
-          "Cache-Control": "private, max-age=60, stale-while-revalidate=120",
+          "Cache-Control": "no-store",
         },
       }
     );
@@ -144,6 +142,96 @@ export async function GET() {
     console.error("[API /api/inbox/media/photos GET] Error:", err);
     return NextResponse.json(
       { error: "Erro ao buscar fotos cadastradas." },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * DELETE /api/inbox/media/photos
+ * Deletes a registered photo from Supabase Storage and quick_replies.
+ */
+export async function DELETE(request: Request) {
+  try {
+    const supabase = await createServerSupabase();
+    const {
+      data: { user },
+      error: userErr,
+    } = await supabase.auth.getUser();
+
+    if (userErr || !user) {
+      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+    }
+
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("account_id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    const accountId = profile?.account_id;
+    if (!accountId) {
+      return NextResponse.json({ error: "Conta não encontrada." }, { status: 400 });
+    }
+
+    const url = new URL(request.url);
+    let targetPath = url.searchParams.get("path") || "";
+    let targetUrl = url.searchParams.get("url") || "";
+
+    if (!targetPath && !targetUrl) {
+      const body = await request.json().catch(() => ({}));
+      targetPath = body.path || "";
+      targetUrl = body.url || "";
+    }
+
+    // Extract path if URL was given
+    if (!targetPath && targetUrl) {
+      if (targetUrl.includes("chat-media/")) {
+        targetPath = decodeURIComponent(targetUrl.split("chat-media/")[1]?.split("?")[0] || "");
+      } else {
+        targetPath = targetUrl;
+      }
+    }
+
+    if (!targetPath && !targetUrl) {
+      return NextResponse.json({ error: "Caminho da foto não informado." }, { status: 400 });
+    }
+
+    const admin = getAdminClient();
+
+    // 1. Remove from Storage if valid path
+    if (targetPath) {
+      const cleanPath = targetPath.replace(/^\/+/, "");
+      await admin.storage.from("chat-media").remove([cleanPath]);
+    }
+
+    // 2. Remove from quick_replies if registered there
+    if (targetUrl || targetPath) {
+      const queries = [];
+      if (targetUrl) queries.push(targetUrl);
+      if (targetPath) {
+        const fullPub = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/chat-media/${targetPath}`;
+        queries.push(fullPub);
+      }
+
+      for (const q of queries) {
+        await admin
+          .from("quick_replies")
+          .delete()
+          .eq("account_id", accountId)
+          .eq("media_url", q);
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: "Foto excluída com sucesso do Supabase.",
+      deleted_path: targetPath,
+    });
+  } catch (err: any) {
+    console.error("[API /api/inbox/media/photos DELETE] Error:", err);
+    return NextResponse.json(
+      { error: "Erro ao excluir foto do Supabase." },
       { status: 500 }
     );
   }
@@ -162,7 +250,7 @@ export async function POST(request: Request) {
     } = await supabase.auth.getUser();
 
     if (userErr || !user) {
-      return NextResponse.json({ error: "NÃ£o autenticado." }, { status: 401 });
+      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
     }
 
     const { data: profile } = await supabase
@@ -174,7 +262,7 @@ export async function POST(request: Request) {
     const accountId = profile?.account_id;
     if (!accountId) {
       return NextResponse.json(
-        { error: "Conta nÃ£o encontrada para o usuÃ¡rio." },
+        { error: "Conta não encontrada para o usuário." },
         { status: 400 }
       );
     }
@@ -191,14 +279,20 @@ export async function POST(request: Request) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    const ext = file.name.split(".").pop() || "png";
+    let ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
+    if (ext === "jpeg") ext = "jpg";
     const cleanFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, "_");
     const storagePath = `account-${accountId}/${Date.now()}-${cleanFileName}`;
+
+    let contentType = file.type;
+    if (!contentType || contentType === "application/octet-stream") {
+      contentType = ext === "png" ? "image/png" : "image/jpeg";
+    }
 
     const { error: uploadErr } = await admin.storage
       .from("chat-media")
       .upload(storagePath, buffer, {
-        contentType: file.type || ("image/" + ext),
+        contentType,
         cacheControl: "31536000, immutable",
         upsert: true,
       });
@@ -226,5 +320,3 @@ export async function POST(request: Request) {
     );
   }
 }
-
-

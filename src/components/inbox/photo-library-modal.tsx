@@ -6,15 +6,14 @@ import {
   Search,
   Upload,
   Send,
-  Sparkles,
-  Clock,
-  X,
+  Trash2,
   Loader2,
   Check,
-  ExternalLink,
   Copy,
   Maximize2,
   Plus,
+  AlertTriangle,
+  Link as LinkIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -55,6 +54,8 @@ export function PhotoLibraryModal({
   const [caption, setCaption] = useState("");
   const [previewZoomUrl, setPreviewZoomUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [deletingUrl, setDeletingUrl] = useState<string | null>(null);
+  const [failedUrls, setFailedUrls] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Fetch photos on open
@@ -111,7 +112,7 @@ export function PhotoLibraryModal({
         return;
       }
 
-      toast.success("Foto cadastrada com sucesso na galeria!");
+      toast.success("Foto cadastrada com sucesso na galeria do Supabase!");
       const newPhoto: StoredPhoto = {
         id: data.path || Date.now().toString(),
         name: data.name || file.name,
@@ -131,12 +132,53 @@ export function PhotoLibraryModal({
     }
   };
 
+  // Handle delete photo from Supabase Storage and Quick Replies
+  const handleDeletePhoto = async (photo: StoredPhoto, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+
+    const confirmed = window.confirm(
+      `Deseja realmente excluir permanentemente a foto "${photo.name}" do Supabase Storage?`
+    );
+    if (!confirmed) return;
+
+    setDeletingUrl(photo.url);
+    try {
+      const res = await fetch(
+        `/api/inbox/media/photos?path=${encodeURIComponent(photo.path)}&url=${encodeURIComponent(photo.url)}`,
+        {
+          method: "DELETE",
+        }
+      );
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        toast.error(data.error || "Erro ao excluir foto do Supabase.");
+        return;
+      }
+
+      toast.success("Foto excluída com sucesso do Supabase!");
+      setPhotos((prev) => prev.filter((p) => p.url !== photo.url));
+      if (selectedPhoto?.url === photo.url) {
+        setSelectedPhoto(null);
+      }
+      if (previewZoomUrl === photo.url) {
+        setPreviewZoomUrl(null);
+      }
+    } catch (err) {
+      console.error("Error deleting photo:", err);
+      toast.error("Erro de conexão ao excluir foto do Supabase.");
+    } finally {
+      setDeletingUrl(null);
+    }
+  };
+
   const filteredPhotos = useMemo(() => {
     if (!search.trim()) return photos;
     const term = search.toLowerCase();
-    return photos.filter((p) =>
-      p.name.toLowerCase().includes(term) ||
-      (p.title && p.title.toLowerCase().includes(term))
+    return photos.filter(
+      (p) =>
+        p.name.toLowerCase().includes(term) ||
+        (p.title && p.title.toLowerCase().includes(term))
     );
   }, [photos, search]);
 
@@ -146,10 +188,10 @@ export function PhotoLibraryModal({
     onOpenChange(false);
   };
 
-  const copyUrl = (url: string, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const copyUrl = (url: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     navigator.clipboard.writeText(url);
-    toast.success("Link da foto copiado!");
+    toast.success("Link do Supabase copiado para a área de transferência!");
   };
 
   return (
@@ -164,12 +206,15 @@ export function PhotoLibraryModal({
               <div>
                 <DialogTitle className="text-base font-bold text-foreground flex items-center gap-2">
                   Galeria de Fotos Cadastradas
-                  <Badge variant="outline" className="text-[11px] font-normal border-blue-500/30 text-blue-600 dark:text-blue-400 bg-blue-500/5">
+                  <Badge
+                    variant="outline"
+                    className="text-[11px] font-normal border-blue-500/30 text-blue-600 dark:text-blue-400 bg-blue-500/5"
+                  >
                     {photos.length} fotos
                   </Badge>
                 </DialogTitle>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Fotos salvas no Supabase Storage. Clique para enviar como imagem direta no chat do WhatsApp.
+                  Fotos salvas no Supabase Storage. Você pode copiar o link direto, excluir fotos indesejadas ou enviar com 1 clique.
                 </p>
               </div>
             </div>
@@ -227,7 +272,9 @@ export function PhotoLibraryModal({
               <ImageIcon className="h-10 w-10 stroke-1 opacity-40 text-blue-500" />
               <p className="text-sm font-medium text-foreground">Nenhuma foto encontrada</p>
               <p className="text-xs max-w-sm">
-                {search ? "Nenhum resultado para a busca." : "Faça upload de fotos para visualizar e enviar com 1 clique no WhatsApp."}
+                {search
+                  ? "Nenhum resultado para a busca."
+                  : "Faça upload de fotos para visualizar, gerenciar, copiar link ou enviar no WhatsApp."}
               </p>
               <Button
                 type="button"
@@ -243,6 +290,9 @@ export function PhotoLibraryModal({
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
               {filteredPhotos.map((photo) => {
                 const isSelected = selectedPhoto?.url === photo.url;
+                const isDeleting = deletingUrl === photo.url;
+                const hasLoadError = failedUrls.has(photo.url);
+
                 return (
                   <div
                     key={photo.url}
@@ -255,50 +305,86 @@ export function PhotoLibraryModal({
                   >
                     {/* Image Thumbnail */}
                     <div className="relative w-full aspect-square bg-muted/50 overflow-hidden flex items-center justify-center">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={photo.url}
-                        alt={photo.name}
-                        loading="lazy"
-                        className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-105"
-                      />
+                      {isDeleting ? (
+                        <div className="flex flex-col items-center justify-center gap-2 p-3 text-rose-500">
+                          <Loader2 className="h-6 w-6 animate-spin" />
+                          <span className="text-[10px] font-medium">Excluindo...</span>
+                        </div>
+                      ) : hasLoadError ? (
+                        <div className="flex flex-col items-center justify-center gap-1.5 p-3 text-center text-muted-foreground bg-rose-500/5">
+                          <AlertTriangle className="h-6 w-6 text-rose-500 stroke-[1.5]" />
+                          <span className="text-[10px] text-rose-600 dark:text-rose-400 font-medium">
+                            Não carregou
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => handleDeletePhoto(photo, e)}
+                            className="mt-1 px-2 py-0.5 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 text-[10px] font-semibold flex items-center gap-1"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            Excluir
+                          </button>
+                        </div>
+                      ) : (
+                        /* eslint-disable-next-line @next/next/no-img-element */
+                        <img
+                          src={photo.url}
+                          alt={photo.name}
+                          loading="lazy"
+                          onError={() => {
+                            setFailedUrls((prev) => new Set(prev).add(photo.url));
+                          }}
+                          className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-105"
+                        />
+                      )}
 
                       {/* Hover action overlay */}
-                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 p-2">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setPreviewZoomUrl(photo.url);
-                          }}
-                          title="Ampliar Foto"
-                          className="p-1.5 rounded-full bg-white/90 text-gray-800 hover:bg-white hover:scale-110 transition-all shadow"
-                        >
-                          <Maximize2 className="h-3.5 w-3.5" />
-                        </button>
+                      {!isDeleting && !hasLoadError && (
+                        <div className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 p-2">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPreviewZoomUrl(photo.url);
+                            }}
+                            title="Ampliar Foto"
+                            className="p-1.5 rounded-full bg-white/95 text-gray-800 hover:bg-white hover:scale-110 transition-all shadow"
+                          >
+                            <Maximize2 className="h-3.5 w-3.5" />
+                          </button>
 
-                        <button
-                          type="button"
-                          onClick={(e) => copyUrl(photo.url, e)}
-                          title="Copiar Link"
-                          className="p-1.5 rounded-full bg-white/90 text-gray-800 hover:bg-white hover:scale-110 transition-all shadow"
-                        >
-                          <Copy className="h-3.5 w-3.5" />
-                        </button>
+                          <button
+                            type="button"
+                            onClick={(e) => copyUrl(photo.url, e)}
+                            title="Copiar Link do Supabase"
+                            className="p-1.5 rounded-full bg-white/95 text-gray-800 hover:bg-white hover:scale-110 transition-all shadow"
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                          </button>
 
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleSendCurrent(photo);
-                          }}
-                          title="Enviar Imediatamente"
-                          className="px-2.5 py-1 rounded-full bg-blue-600 text-white font-semibold text-[11px] hover:bg-blue-700 hover:scale-105 transition-all shadow flex items-center gap-1"
-                        >
-                          <Send className="h-3 w-3" />
-                          <span>Enviar</span>
-                        </button>
-                      </div>
+                          <button
+                            type="button"
+                            onClick={(e) => handleDeletePhoto(photo, e)}
+                            title="Excluir Foto do Supabase"
+                            className="p-1.5 rounded-full bg-white/95 text-rose-600 hover:bg-rose-50 hover:scale-110 transition-all shadow"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSendCurrent(photo);
+                            }}
+                            title="Enviar Imediatamente"
+                            className="px-2.5 py-1 rounded-full bg-blue-600 text-white font-semibold text-[11px] hover:bg-blue-700 hover:scale-105 transition-all shadow flex items-center gap-1"
+                          >
+                            <Send className="h-3 w-3" />
+                            <span>Enviar</span>
+                          </button>
+                        </div>
+                      )}
 
                       {/* Selected check badge */}
                       {isSelected && (
@@ -309,13 +395,38 @@ export function PhotoLibraryModal({
                     </div>
 
                     {/* Metadata Footer */}
-                    <div className="p-2 flex flex-col gap-0.5 border-t border-border/40 bg-card">
-                      <span className="text-[11px] font-semibold text-foreground truncate" title={photo.name}>
+                    <div className="p-2 flex flex-col gap-1 border-t border-border/40 bg-card">
+                      <span
+                        className="text-[11px] font-semibold text-foreground truncate"
+                        title={photo.name}
+                      >
                         {photo.name}
                       </span>
                       <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                        <span>{photo.created_at ? new Date(photo.created_at).toLocaleDateString("pt-BR") : "Cadastrada"}</span>
-                        {photo.size && <span>{(photo.size / 1024).toFixed(0)} KB</span>}
+                        <span>
+                          {photo.created_at
+                            ? new Date(photo.created_at).toLocaleDateString("pt-BR")
+                            : "Cadastrada"}
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          {photo.size && <span>{(photo.size / 1024).toFixed(0)} KB</span>}
+                          <button
+                            type="button"
+                            onClick={(e) => copyUrl(photo.url, e)}
+                            title="Copiar Link Supabase"
+                            className="p-0.5 text-muted-foreground hover:text-foreground hover:scale-110 transition-transform"
+                          >
+                            <Copy className="h-3 w-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => handleDeletePhoto(photo, e)}
+                            title="Excluir do Supabase"
+                            className="p-0.5 text-rose-500/70 hover:text-rose-600 hover:scale-110 transition-transform"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -355,7 +466,34 @@ export function PhotoLibraryModal({
               </div>
             </div>
 
-            <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+            <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => copyUrl(selectedPhoto.url)}
+                className="h-8 gap-1.5 text-xs border-border hover:bg-muted text-foreground cursor-pointer"
+              >
+                <LinkIcon className="h-3.5 w-3.5" />
+                <span>Copiar Link Supabase</span>
+              </Button>
+
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => handleDeletePhoto(selectedPhoto)}
+                disabled={deletingUrl === selectedPhoto.url}
+                className="h-8 gap-1.5 text-xs border-rose-500/30 text-rose-600 hover:bg-rose-500/10 cursor-pointer"
+              >
+                {deletingUrl === selectedPhoto.url ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5" />
+                )}
+                <span>Excluir</span>
+              </Button>
+
               <Button
                 type="button"
                 variant="outline"
@@ -383,27 +521,56 @@ export function PhotoLibraryModal({
       {/* Lightbox / Zoom Dialog */}
       {previewZoomUrl && (
         <Dialog open={Boolean(previewZoomUrl)} onOpenChange={() => setPreviewZoomUrl(null)}>
-          <DialogContent className="max-w-4xl p-2 bg-black/90 border-neutral-800 flex flex-col items-center justify-center">
+          <DialogContent className="max-w-4xl p-3 bg-black/95 border-neutral-800 flex flex-col items-center justify-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={previewZoomUrl}
               alt="Ampliação"
-              className="max-h-[80vh] max-w-full rounded-md object-contain"
+              className="max-h-[78vh] max-w-full rounded-md object-contain"
             />
-            <div className="mt-2 flex items-center gap-2">
+            <div className="mt-3 flex items-center gap-2 flex-wrap justify-center">
               <Button
                 type="button"
+                variant="outline"
                 size="sm"
-                onClick={() => {
-                  const target = photos.find((p) => p.url === previewZoomUrl);
-                  if (target) handleSendCurrent(target);
-                  setPreviewZoomUrl(null);
-                }}
-                className="gap-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white"
+                onClick={() => copyUrl(previewZoomUrl)}
+                className="gap-1.5 text-xs bg-neutral-900 border-neutral-700 text-white hover:bg-neutral-800"
               >
-                <Send className="h-3.5 w-3.5" />
-                <span>Enviar Esta Foto</span>
+                <Copy className="h-3.5 w-3.5" />
+                <span>Copiar Link Supabase</span>
               </Button>
+
+              {(() => {
+                const target = photos.find((p) => p.url === previewZoomUrl);
+                if (!target) return null;
+                return (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleDeletePhoto(target)}
+                      className="gap-1.5 text-xs bg-neutral-900 border-rose-900/60 text-rose-400 hover:bg-rose-950/40"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>Excluir do Supabase</span>
+                    </Button>
+
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => {
+                        handleSendCurrent(target);
+                        setPreviewZoomUrl(null);
+                      }}
+                      className="gap-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white font-semibold"
+                    >
+                      <Send className="h-3.5 w-3.5" />
+                      <span>Enviar Esta Foto no Chat</span>
+                    </Button>
+                  </>
+                );
+              })()}
             </div>
           </DialogContent>
         </Dialog>

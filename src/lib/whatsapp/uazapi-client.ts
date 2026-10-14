@@ -395,20 +395,31 @@ export async function sendUazApiMedia(
     }
   }
 
-  // UazAPI media endpoints accept 'file', 'url', 'media', 'mediaUrl'.
-  // Providing all primary & alias keys ensures 100% compatibility across
-  // UazAPI server builds and prevents any "missing file field" errors.
+  // UazAPI media endpoints accept 'file', 'url', 'media'.
+  // If mediaPayload is a data: base64 string, set it on 'file' and 'media',
+  // while keeping 'url' as the genuine HTTP URL fallback (or omitting if not an HTTP URL)
+  // to prevent UazAPI fetch(data:...) crashes.
+  const isDataUrl = typeof mediaPayload === 'string' && mediaPayload.startsWith('data:');
+  const isHttpUrl = typeof mediaUrl === 'string' && (mediaUrl.startsWith('http://') || mediaUrl.startsWith('https://'));
+
   const body: Record<string, unknown> = {
     number: formattedNumber,
     file: mediaPayload,
-    url: mediaPayload,
     media: mediaPayload,
-    mediaUrl: mediaPayload,
     type: opts.type,
   };
 
+  if (isHttpUrl) {
+    body.url = mediaUrl;
+    body.mediaUrl = mediaUrl;
+  } else if (!isDataUrl) {
+    body.url = mediaPayload;
+    body.mediaUrl = mediaPayload;
+  }
+
   if (opts.type === 'image') {
-    body.mimetype = 'image/jpeg';
+    const isPng = (opts.url || '').toLowerCase().endsWith('.png') || (isDataUrl && mediaPayload.startsWith('data:image/png'));
+    body.mimetype = isPng ? 'image/png' : 'image/jpeg';
   } else if (opts.type === 'video') {
     body.mimetype = 'video/mp4';
   } else if (opts.type === 'document') {

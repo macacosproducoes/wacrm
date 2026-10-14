@@ -1,4 +1,4 @@
-﻿import { createClient } from "@/lib/supabase/client";
+import { createClient } from "@/lib/supabase/client";
 
 /**
  * Shared media-upload helper for Supabase Storage buckets that use the
@@ -138,15 +138,15 @@ async function compressImageIfNeeded(file: File): Promise<File> {
               resolve(file);
             } else {
               const baseName = file.name.replace(/\.[^.]+$/, "");
-              const compressedFile = new File([blob], `${baseName}.webp`, {
-                type: "image/webp",
+              const compressedFile = new File([blob], `${baseName}.jpg`, {
+                type: "image/jpeg",
                 lastModified: Date.now(),
               });
               resolve(compressedFile);
             }
           },
-          "image/webp",
-          0.82
+          "image/jpeg",
+          0.85
         );
       };
       img.onerror = () => {

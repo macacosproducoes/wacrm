@@ -302,7 +302,14 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
   };
 
   // Only render if we have loaded confirmed order data for the current contact
-  if (loading || !data || !data.has_order || !data.job || (data.contact?.id && data.contact.id !== contact?.id)) {
+  if (
+    loading ||
+    !data ||
+    !data.has_order ||
+    !data.job ||
+    (data.contact?.id && data.contact.id !== contact?.id) ||
+    (!data.job.output_url && data.job.status === "FAILED")
+  ) {
     return null;
   }
 
