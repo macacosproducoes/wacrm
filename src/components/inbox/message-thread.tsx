@@ -37,6 +37,7 @@ import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { useTranslations } from "next-intl";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -133,6 +134,7 @@ interface MessageThreadProps {
   onToggleContactPanel?: () => void;
   isUazApi?: boolean;
   onContactUpdated?: (updated: Contact) => void;
+  onAiToggle?: (conversationId: string, disabled: boolean) => void;
 }
 
 function formatDateSeparator(dateStr: string, t: ReturnType<typeof useTranslations>): string {
@@ -209,6 +211,7 @@ export function MessageThread({
   onToggleContactPanel,
   isUazApi = true,
   onContactUpdated,
+  onAiToggle,
 }: MessageThreadProps) {
   const t = useTranslations("Inbox.messageThread");
   const tTimer = useTranslations("Inbox.sessionTimer");
@@ -358,10 +361,12 @@ export function MessageThread({
         throw new Error(errData?.error || "Falha ao alterar status da IA");
       }
 
+      onAiToggle?.(conversation.id, nextDisabled);
+
       toast.success(
         nextDisabled
-          ? "⏸️ IA pausada — Atendimento humano assumido"
-          : "🤖 IA ativada! O bot responderá automaticamente"
+          ? "⏸️ IA desativada nesta conversa (Atendimento humano assumido)"
+          : "🤖 IA ativada! O bot responderá automaticamente nesta conversa"
       );
 
       if (nextDisabled && user?.id) {
@@ -376,7 +381,7 @@ export function MessageThread({
     } finally {
       setIsTogglingAi(false);
     }
-  }, [conversation?.id, aiDisabled, isTogglingAi, user?.id, onAssignChange]);
+  }, [conversation?.id, aiDisabled, isTogglingAi, user?.id, onAssignChange, onAiToggle]);
 
   // Which attachment the media viewer is showing. Lives here rather than in
   // the bubble so the viewer can page through every image/video in the
@@ -1475,42 +1480,43 @@ export function MessageThread({
         </div>
 
         <div className="flex items-center gap-2">
-          {/* AI Quick Toggle */}
+          {/* AI Toggle Switch Button */}
           <button
             type="button"
             onClick={handleToggleAiAutoreply}
             disabled={isTogglingAi}
             title={
               aiDisabled
-                ? "IA pausada nesta conversa. Clique para reativar o bot automático."
-                : "IA ativa nesta conversa. Clique para pausar e assumir o atendimento."
+                ? "IA DESATIVADA nesta conversa (Atendimento Humano). Clique para ativar a IA."
+                : "IA ATIVA nesta conversa (Bot respondendo). Clique para desativar a IA."
             }
             className={cn(
-              "inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs font-medium border transition-all duration-150 cursor-pointer disabled:opacity-60",
+              "inline-flex items-center gap-2 h-7 px-2.5 rounded-lg border text-xs font-semibold transition-all select-none cursor-pointer disabled:opacity-60",
               aiDisabled
-                ? "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"
-                : "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20"
+                ? "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"
+                : "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 shadow-xs"
             )}
           >
             {isTogglingAi ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : aiDisabled ? (
-              <>
-                <User className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
-                <span className="hidden md:inline">Atendimento Humano</span>
-                <span className="md:hidden">Humano</span>
-              </>
+              <User className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
             ) : (
-              <>
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-                </span>
-                <Bot className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-                <span className="hidden md:inline">IA Ativa</span>
-                <span className="md:hidden">IA</span>
-              </>
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+              </span>
             )}
+            <span className="hidden sm:inline">
+              {aiDisabled ? "IA Desativada" : "IA Ativa"}
+            </span>
+            <span className="sm:hidden">
+              {aiDisabled ? "IA Off" : "IA On"}
+            </span>
+            <Switch
+              checked={!aiDisabled}
+              className="scale-75 origin-right pointer-events-none"
+            />
           </button>
 
                     {/* Botão Gerar Chave PIX (BuckPay API) */}

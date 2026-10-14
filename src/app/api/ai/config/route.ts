@@ -101,6 +101,29 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null)
     if (!body || typeof body !== 'object') return bad('Invalid request body')
 
+    // Handle quick toggle of is_active (Global AI switch) without requiring full config payload
+    if (typeof body.is_active === 'boolean' && !body.provider) {
+      try {
+        const { error: updateErr } = await supabase
+          .from('ai_configs')
+          .update({ is_active: body.is_active, updated_at: new Date().toISOString() })
+          .eq('account_id', accountId)
+
+        if (updateErr) {
+          console.error('[ai/config POST] failed to update is_active:', updateErr)
+          return NextResponse.json({ error: 'Falha ao atualizar status da IA' }, { status: 500 })
+        }
+
+        return NextResponse.json({
+          success: true,
+          is_active: body.is_active,
+        })
+      } catch (err) {
+        console.error('[ai/config POST] error in is_active toggle:', err)
+        return NextResponse.json({ error: 'Erro interno ao alternar IA' }, { status: 500 })
+      }
+    }
+
     // Handle quick toggle of only_new_conversations without requiring full config payload
     if (typeof body.only_new_conversations === 'boolean' && !body.provider) {
       try {

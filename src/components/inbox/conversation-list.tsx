@@ -9,7 +9,7 @@ import {
 } from "@/lib/inbox/conversations";
 import { cn } from "@/lib/utils";
 import type { Conversation, ConversationStatus, Tag } from "@/types";
-import { Search, ChevronDown, X, RefreshCw, UserCheck } from "lucide-react";
+import { Search, ChevronDown, X, RefreshCw, UserCheck, Bot, Loader2 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
@@ -104,7 +104,49 @@ export function ConversationList({
   const [syncing, setSyncing] = useState(false);
   const [leadCaptureEnabled, setLeadCaptureEnabled] = useState(true);
   const [togglingLeadCapture, setTogglingLeadCapture] = useState(false);
+  const [aiActive, setAiActive] = useState(true);
+  const [togglingAiGlobal, setTogglingAiGlobal] = useState(false);
   const hasAutoSyncedRef = useRef(false);
+
+  useEffect(() => {
+    fetch('/api/ai/config')
+      .then((r) => r.json())
+      .then((data) => {
+        if (typeof data.is_active === 'boolean') {
+          setAiActive(data.is_active);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleToggleAiGlobal = async () => {
+    try {
+      setTogglingAiGlobal(true);
+      const next = !aiActive;
+      setAiActive(next);
+      const res = await fetch('/api/ai/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: next }),
+      });
+      const data = await res.json();
+      if (data.success || res.ok) {
+        toast.success(
+          next
+            ? '🤖 IA Geral ATIVADA (Respondendo clientes automaticamente)'
+            : '⏸️ IA Geral DESATIVADA (Pausada para todas as conversas)'
+        );
+      } else {
+        setAiActive(!next);
+        toast.error(data.error || 'Falha ao alternar status da IA');
+      }
+    } catch {
+      setAiActive((prev) => !prev);
+      toast.error('Erro ao alternar status da IA');
+    } finally {
+      setTogglingAiGlobal(false);
+    }
+  };
 
   useEffect(() => {
     fetch('/api/whatsapp/uazapi/capture-leads')
@@ -415,30 +457,55 @@ export function ConversationList({
     <div className="flex h-full w-full flex-col border-r border-border bg-card lg:w-80">
       {/* Search + Filter */}
       <div className="space-y-2 border-b border-border p-3">
-        {/* Quick Lead Capture Toggle & Sync */}
-        <div className="flex items-center justify-between gap-1.5 pb-0.5">
-          <div className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
-            <UserCheck className="h-3.5 w-3.5 text-emerald-500" />
-            <span>Captura Leads:</span>
-          </div>
-          <div className="flex items-center gap-1.5">
+        {/* Quick Controls: Global AI Toggle & Lead Capture Toggle & Sync */}
+        <div className="flex items-center justify-between gap-1 pb-0.5">
+          {/* Global AI Toggle */}
+          <button
+            type="button"
+            onClick={handleToggleAiGlobal}
+            disabled={togglingAiGlobal}
+            title={
+              aiActive
+                ? "IA Geral ATIVADA (Respondendo clientes automaticamente). Clique para desativar a IA."
+                : "IA Geral DESATIVADA (Pausada para todas as conversas). Clique para ativar a IA."
+            }
+            className={cn(
+              "inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-semibold transition-all cursor-pointer select-none",
+              aiActive
+                ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25"
+                : "bg-muted text-muted-foreground border border-border/60 hover:bg-muted/80"
+            )}
+          >
+            {togglingAiGlobal ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Bot className={cn("h-3 w-3", aiActive ? "text-emerald-500" : "text-muted-foreground")} />
+            )}
+            <span>IA:</span>
+            <span className={cn(
+              "h-1.5 w-1.5 rounded-full",
+              aiActive ? "bg-emerald-500 animate-pulse" : "bg-muted-foreground/50"
+            )} />
+            <span>{aiActive ? "Ativa" : "Desativada"}</span>
+          </button>
+
+          {/* Lead Capture Toggle & Sync */}
+          <div className="flex items-center gap-1">
             <button
               type="button"
               onClick={handleToggleLeadCapture}
               disabled={togglingLeadCapture}
               title={leadCaptureEnabled ? "Captura automática de leads ativada (Sim). Clique para desativar." : "Captura desativada (Não). Clique para ativar."}
               className={cn(
-                "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold transition-all cursor-pointer select-none",
+                "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium transition-all cursor-pointer select-none",
                 leadCaptureEnabled
                   ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25"
                   : "bg-muted text-muted-foreground border border-border/60 hover:bg-muted/80"
               )}
             >
-              <span className={cn(
-                "h-1.5 w-1.5 rounded-full",
-                leadCaptureEnabled ? "bg-emerald-500 animate-pulse" : "bg-muted-foreground/50"
-              )} />
-              {leadCaptureEnabled ? "Sim" : "Não"}
+              <UserCheck className="h-3 w-3 text-emerald-500" />
+              <span className="hidden sm:inline">Leads:</span>
+              <span>{leadCaptureEnabled ? "Sim" : "Não"}</span>
             </button>
             <button
               type="button"
