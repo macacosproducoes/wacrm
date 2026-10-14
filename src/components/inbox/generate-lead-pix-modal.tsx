@@ -75,6 +75,8 @@ export function GenerateLeadPixModal({
           service_name: serviceName,
           name: contact?.name || "Cliente Lead",
           phone: contact?.phone,
+          contact_id: contact?.id,
+          account_id: contact?.account_id,
         }),
       });
 
@@ -89,12 +91,22 @@ export function GenerateLeadPixModal({
         throw new Error("A API não retornou o código Copia e Cola.");
       }
 
-      setPixResult({
+      const resultObj = {
         code: pixData.code,
         qrcode_base64: pixData.qrcode_base64,
         external_id: data.external_id,
         amount: numAmount,
-      });
+        status: "pending" as const,
+        created_at: Date.now(),
+      };
+
+      setPixResult(resultObj);
+
+      if (contact?.id && typeof window !== "undefined") {
+        try {
+          localStorage.setItem(`wacrm_pix_${contact.id}`, JSON.stringify(resultObj));
+        } catch {}
+      }
 
       toast.success("✅ Chave PIX gerada com sucesso!");
     } catch (err: any) {

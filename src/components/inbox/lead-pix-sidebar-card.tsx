@@ -55,11 +55,35 @@ export function LeadPixSidebarCard({
     external_id: string;
     amount: number;
     status: "pending" | "paid";
+    created_at?: number;
   } | null>(null);
 
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
   const numAmount = Number(amount) || 0;
+
+  // Restore saved PIX for this contact from localStorage (persists for 24h across tab/conversation switches)
+  useEffect(() => {
+    if (!contact?.id || typeof window === "undefined") {
+      setPixResult(null);
+      return;
+    }
+    try {
+      const saved = localStorage.getItem(`wacrm_pix_${contact.id}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && (!parsed.created_at || Date.now() - parsed.created_at < 24 * 60 * 60 * 1000)) {
+          setPixResult(parsed);
+          // If pending, do an immediate check
+          if (parsed.status === "pending" && parsed.external_id) {
+            void checkStatus(parsed.external_id);
+          }
+          return;
+        }
+      }
+    } catch {}
+    setPixResult(null);
+  }, [contact?.id]);
 
   // Poll status when PIX is generated and pending
   const checkStatus = useCallback(async (externalId: string) => {
@@ -68,7 +92,16 @@ export function LeadPixSidebarCard({
       if (!res.ok) return;
       const data = await res.json();
       if (data?.data?.status === "paid") {
-        setPixResult((prev) => (prev ? { ...prev, status: "paid" } : null));
+        setPixResult((prev) => {
+          if (!prev) return null;
+          const updated = { ...prev, status: "paid" as const };
+          if (contact?.id && typeof window !== "undefined") {
+            try {
+              localStorage.setItem(`wacrm_pix_${contact.id}`, JSON.stringify(updated));
+            } catch {}
+          }
+          return updated;
+        });
         toast.success("🎉 PIX Compensado! Pagamento recebido!");
         if (pollingRef.current) {
           clearInterval(pollingRef.current);
@@ -78,13 +111,56 @@ export function LeadPixSidebarCard({
     } catch {
       // ignore transient poll errors
     }
-  }, []);
+  }, [contact?.id]);
+
+  // Listen to global Realtime SSE event from WhatsAppRealtimeBridge
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const handleRealtime = (e: any) => {
+      const detail = e.detail;
+      if (!detail) return;
+      const msg = detail.message;
+      const isPayment =
+        msg?.type === "payment_received" ||
+        msg?.payment_confirmed === true ||
+        detail.eventType === "PAYMENT_RECEIVED" ||
+        (msg?.status === "paid" && (msg?.external_id || msg?.payment_id));
+
+      if (isPayment) {
+        const matchesContact =
+          (contact?.id && (msg?.contact_id === contact.id || msg?.contactId === contact.id)) ||
+          (contact?.phone && msg?.buyer?.phone && String(msg.buyer.phone).includes(contact.phone.replace(/\D/g, "").slice(-8))) ||
+          (pixResult?.external_id && (msg?.external_id === pixResult.external_id || detail.conversationId === conversationId));
+
+        if (matchesContact) {
+          setPixResult((prev) => {
+            const updated = prev ? { ...prev, status: "paid" as const } : null;
+            if (contact?.id && updated && typeof window !== "undefined") {
+              try {
+                localStorage.setItem(`wacrm_pix_${contact.id}`, JSON.stringify(updated));
+              } catch {}
+            }
+            return updated;
+          });
+          toast.success("🎉 PIX Compensado! Pagamento recebido!");
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+        }
+      }
+    };
+
+    window.addEventListener("wacrm:realtime", handleRealtime);
+    return () => window.removeEventListener("wacrm:realtime", handleRealtime);
+  }, [contact?.id, contact?.phone, conversationId, pixResult?.external_id]);
 
   useEffect(() => {
     if (pixResult?.external_id && pixResult.status === "pending") {
       pollingRef.current = setInterval(() => {
         checkStatus(pixResult.external_id);
-      }, 3000);
+      }, 4000);
     }
     return () => {
       if (pollingRef.current) {
@@ -136,13 +212,22 @@ export function LeadPixSidebarCard({
         throw new Error("A API não retornou o código Copia e Cola.");
       }
 
-      setPixResult({
+      const resultObj = {
         code: pixData.code,
         qrcode_base64: pixData.qrcode_base64,
         external_id: data.external_id,
         amount: val,
-        status: "pending",
-      });
+        status: "pending" as const,
+        created_at: Date.now(),
+      };
+
+      setPixResult(resultObj);
+
+      if (contact?.id && typeof window !== "undefined") {
+        try {
+          localStorage.setItem(`wacrm_pix_${contact.id}`, JSON.stringify(resultObj));
+        } catch {}
+      }
 
       toast.success(`✅ PIX de R$ ${val.toFixed(2).replace(".", ",")} gerado!`);
     } catch (err: any) {
@@ -183,6 +268,7 @@ export function LeadPixSidebarCard({
           pixKeyType: "COPIA_E_COLA",
           amount: pixResult.amount,
           merchantName: "SMM Painel",
+          externalId: pixResult.external_id,
           text: `Segue a chave PIX Copia e Cola no valor de R$ ${pixResult.amount.toFixed(2).replace(".", ",")}:`,
           followUpEnabled: true,
           followUpType: "text",
@@ -225,6 +311,11 @@ _Copie o código acima e pague no app do seu banco._`,
     if (pollingRef.current) {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
+    }
+    if (contact?.id && typeof window !== "undefined") {
+      try {
+        localStorage.removeItem(`wacrm_pix_${contact.id}`);
+      } catch {}
     }
     setPixResult(null);
   };
@@ -361,9 +452,20 @@ _Copie o código acima e pague no app do seu banco._`,
                         <CheckCircle2 className="h-3 w-3" /> Pago!
                       </span>
                     ) : (
-                      <span className="text-[10px] font-semibold text-amber-300 flex items-center gap-1 animate-pulse">
-                        <Clock className="h-2.5 w-2.5" /> Aguardando...
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-semibold text-amber-300 flex items-center gap-1 animate-pulse">
+                          <Clock className="h-2.5 w-2.5" /> Aguardando...
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => checkStatus(pixResult.external_id)}
+                          title="Verificar status do PIX agora"
+                          className="text-[9px] text-cyan-400 hover:text-cyan-300 flex items-center gap-0.5 hover:underline"
+                        >
+                          <RefreshCw className="h-2.5 w-2.5" />
+                          <span>Verificar</span>
+                        </button>
+                      </div>
                     )}
                     <span className="text-[10px] font-mono font-bold text-foreground">
                       R$ {pixResult.amount.toFixed(2).replace(".", ",")}

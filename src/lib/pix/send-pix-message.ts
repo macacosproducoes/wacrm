@@ -25,6 +25,7 @@ export interface SendPixMessageParams {
   merchantName?: string;
   merchantCity?: string;
   amount?: number | string;
+  externalId?: string;
   text?: string;
   sendMode?: PixSendMode;
   followUpEnabled?: boolean;
@@ -251,6 +252,7 @@ export async function sendPixMessage(params: SendPixMessageParams): Promise<Send
         pix_copia_e_cola: pixCopiaECola,
         send_mode: sendMode,
         amount: amount || null,
+        external_id: params.externalId || null,
         sent_at: nowIso,
         status: 'sent',
         provider: 'uazapi',

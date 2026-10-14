@@ -772,6 +772,8 @@ export async function processFirstPaymentAutomation(
         audioName,
         uazapiMessageId,
         sentAt,
+        amount,
+        leadName: contactName,
       });
     } catch (inboxErr) {
       console.warn("[first-payment-engine] Warning syncing inbox:", inboxErr);
@@ -921,6 +923,8 @@ async function syncInboxAudioMessage(
     audioName: string;
     uazapiMessageId: string;
     sentAt: string;
+    amount?: number;
+    leadName?: string;
   }
 ) {
   let { data: conv } = await admin
@@ -995,6 +999,10 @@ async function syncInboxAudioMessage(
       message_id: params.uazapiMessageId,
       status: 'delivered',
       created_at: params.sentAt,
+      payment_confirmed: true,
+      amount: params.amount,
+      contact_id: params.contactId,
+      lead_name: params.leadName,
     },
     conversation: {
       id: conversationId,

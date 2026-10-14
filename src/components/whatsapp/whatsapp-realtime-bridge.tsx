@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { useUazApiSse } from '@/hooks/use-uazapi-sse';
+import { toast } from 'sonner';
 
 /**
  * Global Realtime Bridge for WhatsApp.
@@ -21,6 +22,36 @@ export function WhatsAppRealtimeBridge() {
   useUazApiSse({
     enabled: true,
   });
+
+  // 1b. Global celebration toast whenever any PIX payment is received in CRM
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleRealtime = (e: any) => {
+      const detail = e.detail;
+      if (!detail) return;
+      const msg = detail.message;
+      const isPayment =
+        msg?.type === 'payment_received' ||
+        msg?.payment_confirmed === true ||
+        detail.eventType === 'PAYMENT_RECEIVED' ||
+        (msg?.status === 'paid' && (msg?.external_id || msg?.payment_id));
+
+      if (isPayment) {
+        const amountNum = typeof msg?.amount === 'number' ? msg.amount : Number(msg?.amount || 0);
+        const amountStr = amountNum > 0 ? `R$ ${amountNum.toFixed(2).replace('.', ',')}` : 'PIX';
+        const leadName = msg?.buyer?.name || msg?.lead_name || msg?.leadName || 'Cliente';
+
+        toast.success(`🎉 PIX Compensado! Pagamento de ${amountStr} confirmado!`, {
+          description: `Lead: ${leadName} — Áudio de confirmação liberado automaticamente!`,
+          duration: 8000,
+        });
+      }
+    };
+
+    window.addEventListener('wacrm:realtime', handleRealtime);
+    return () => window.removeEventListener('wacrm:realtime', handleRealtime);
+  }, []);
 
   // 2. Continuous lightweight background sync with smart throttling
   useEffect(() => {
