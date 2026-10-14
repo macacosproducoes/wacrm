@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+﻿import { NextResponse } from 'next/server';
 import { createClient as createAdminClient } from '@supabase/supabase-js';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { normalizeBaseUrl } from '@/lib/whatsapp/uazapi-client';
@@ -88,12 +88,16 @@ export async function GET() {
 
           if (whRes.ok) {
             const whData = await whRes.json();
-            const webhooks = Array.isArray(whData) ? whData : [whData];
-            const activeWh = webhooks.find((w: any) => w.enabled && Array.isArray(w.events) && w.events.includes('messages'));
-            if (activeWh) {
-              webhookStatus = 'HEALTHY';
+            if (whData) {
+              const webhooks = Array.isArray(whData) ? whData : [whData];
+              const activeWh = webhooks.find((w: any) => w && w.enabled && Array.isArray(w.events) && w.events.includes('messages'));
+              if (activeWh) {
+                webhookStatus = 'HEALTHY';
+              } else {
+                webhookStatus = 'MISCONFIGURED_NO_MESSAGES_EVENT';
+              }
             } else {
-              webhookStatus = 'MISCONFIGURED_NO_MESSAGES_EVENT';
+              webhookStatus = 'NOT_CONFIGURED';
             }
           }
         } catch (uazErr: any) {
