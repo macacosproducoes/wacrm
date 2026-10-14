@@ -130,10 +130,9 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
 
   // Initial fetch on contact change
   useEffect(() => {
+    setData(null);
     if (contact?.id) {
       fetchOrderData();
-    } else {
-      setData(null);
     }
   }, [contact?.id, fetchOrderData]);
 
@@ -302,8 +301,8 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
     }
   };
 
-  // If no order exists and contact has no @instagram, don't show card
-  if (!loading && (!data || !data.has_order || !data.job)) {
+  // Only render if we have loaded confirmed order data for the current contact
+  if (loading || !data || !data.has_order || !data.job || (data.contact?.id && data.contact.id !== contact?.id)) {
     return null;
   }
 

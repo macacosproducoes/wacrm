@@ -351,6 +351,7 @@ export function ContactSidebar({ contact, conversationId, onContactUpdated }: Co
           {/* Follower Order Confirmation Card (Realtime Preview & One-Click Send) */}
           <div className="mt-4">
             <FollowerOrderCard
+              key={contact?.id}
               contact={contact}
               onContactUpdated={onContactUpdated}
             />
