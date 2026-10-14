@@ -418,8 +418,24 @@ async function handleSync(request: Request) {
                 }
               }
 
-              // Handle Follower Order or AI auto-reply for newly synced inbound customer messages
+              // Handle Follower Order, Welcome Sequence, or AI auto-reply for newly synced inbound customer messages
               if (!lastIsFromMe && toInsert.some((m) => m.sender_type === 'customer')) {
+                // Priority 0: Welcome Message Automation (Immediate & Safe Idempotent Check)
+                if (contactId) {
+                  try {
+                    const { checkAndDispatchWelcomeMessage } = await import('@/lib/automations/welcome-engine');
+                    void checkAndDispatchWelcomeMessage({
+                      accountId,
+                      conversationId: convId,
+                      contactId,
+                      connection: conn,
+                      pushName: String(chat.wa_name || chat.name || chat.wa_contactName || '').trim() || undefined,
+                    }).catch((wErr) => console.error('[sync-realtime] Error in welcome dispatch:', wErr));
+                  } catch (wImpErr) {
+                    console.error('[sync-realtime] Failed to import welcome-engine:', wImpErr);
+                  }
+                }
+
                 let orderHandled = false;
                 if (lastTextMsg && contactId) {
                   try {

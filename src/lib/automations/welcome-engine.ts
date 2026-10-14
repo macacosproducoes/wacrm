@@ -178,6 +178,17 @@ export async function checkAndDispatchWelcomeMessage(
   }
 
   // 3. Welcome log history & inactivity window check
+  // Clean up any stale welcome_lock rows older than 2 minutes for this conversation
+  try {
+    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    await admin
+      .from('welcome_message_logs')
+      .delete()
+      .eq('conversation_id', conversationId)
+      .like('uazapi_message_id', 'welcome_lock_%')
+      .lt('sent_at', twoMinutesAgo);
+  } catch {}
+
   const { data: recentLogs } = await admin
     .from('welcome_message_logs')
     .select('id, sent_at, uazapi_message_id')
@@ -325,9 +336,12 @@ export async function checkAndDispatchWelcomeMessage(
 
       for (let i = 0; i < sortedSteps.length; i++) {
         const step = sortedSteps[i];
-        const stepDelay = Math.max(0, step.delay_seconds || 0);
+        // The first step must send immediately (0s delay) so the customer receives the initial greeting without waiting.
+        // Subsequent steps respect configured delay (clamped to a safe max of 5s to prevent serverless timeout).
+        const rawDelay = i === 0 ? 0 : Math.max(0, step.delay_seconds || 0);
+        const stepDelay = Math.min(rawDelay, 5);
         if (stepDelay > 0) {
-          await new Promise((resolve) => setTimeout(resolve, Math.min(stepDelay * 1000, 30000)));
+          await new Promise((resolve) => setTimeout(resolve, stepDelay * 1000));
         }
         const stepText = replaceQuickReplyVariables(step.content || '', {
           name: contactName,

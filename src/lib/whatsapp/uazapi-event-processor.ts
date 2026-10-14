@@ -826,18 +826,6 @@ export async function processUazApiEvent(
     return { success: false, reason: 'failed_to_resolve_conversation' };
   }
 
-  // Check for duplicate message (idempotency)
-  const { data: existingMsg } = await admin
-    .from('messages')
-    .select('id')
-    .eq('conversation_id', conversationId)
-    .in('message_id', [externalMessageId, rawExternalId])
-    .maybeSingle();
-
-  if (existingMsg) {
-    return { success: true, reason: 'deduplicated', conversationId, contactId };
-  }
-
   // Extract actual message timestamp (handles seconds vs milliseconds)
   const rawMsgTs =
     msgData.messageTimestamp ||
@@ -853,6 +841,52 @@ export async function processUazApiEvent(
       messageCreatedAt = new Date(ms).toISOString();
       messageAgeMs = Math.max(0, Date.now() - ms);
     }
+  }
+
+  // Check for duplicate message (idempotency)
+  const { data: existingMsg } = await admin
+    .from('messages')
+    .select('id')
+    .eq('conversation_id', conversationId)
+    .in('message_id', [externalMessageId, rawExternalId])
+    .maybeSingle();
+
+  if (existingMsg) {
+    const trimmedDup = (messageText || '').trim();
+    const isIgnoredDup =
+      trimmedDup === '[Mensagem recebida]' ||
+      trimmedDup === '[Reação]' ||
+      trimmedDup.startsWith('[Undecryptable]');
+    const isFreshDup = messageAgeMs < 60 * 60 * 1000;
+
+    let welcomeDispatchParams: ProcessUazApiResult['welcomeDispatchParams'] | undefined;
+    if (!fromMe && !isIgnoredDup && isFreshDup) {
+      welcomeDispatchParams = {
+        accountId: connection.account_id,
+        conversationId,
+        contactId,
+        connection,
+        pushName,
+      };
+      if (!options?.skipAiDispatch) {
+        try {
+          const welcomeResult = await checkAndDispatchWelcomeMessage(welcomeDispatchParams);
+          if (welcomeResult.dispatched) {
+            console.log(`[UazAPI Event Processor] Welcome message successfully dispatched for conv ${conversationId}`);
+          }
+        } catch (err) {
+          console.error('[UazAPI Event Processor] Error evaluating welcome message for conv:', err);
+        }
+      }
+    }
+
+    return {
+      success: true,
+      reason: 'deduplicated',
+      conversationId,
+      contactId,
+      welcomeDispatchParams,
+    };
   }
 
   // Insert Message
