@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     const numAmount = Number(amount)
     if (isNaN(numAmount) || numAmount < 3) {
       return NextResponse.json(
-        { error: 'O valor mínimo para o Mimo é R$ 3,00.' },
+        { error: 'O valor mínimo para o Apoio VIP é R$ 3,00.' },
         { status: 400 }
       )
     }
@@ -31,7 +31,7 @@ export async function POST(request: Request) {
 
     // Generate unique external_id
     const cleanRandom = Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(0, 8)
-    const external_id = `mimo_edgar_${Date.now()}_${cleanRandom}`
+    const external_id = `apoiovip_edgar_${Date.now()}_${cleanRandom}`
 
     // Clean buyer data
     const rawName = (name || 'Apoiador Edgar Katsumi').trim()
@@ -45,7 +45,7 @@ export async function POST(request: Request) {
       (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : 'https://wacrm-khaki-three.vercel.app')
     const webhookUrl = `${appBaseUrl.replace(/\/+$/, '')}/api/webhooks/wiinpay`
 
-    const description = `Mimo para Edgar Katsumi (${message ? 'com mensagem' : 'sem mensagem'})`
+    const description = `Apoio VIP para Edgar Katsumi (${message ? 'com mensagem' : 'sem mensagem'})`
 
     // Call WiinPay API
     const result = await createWiinPayPayment({
@@ -86,7 +86,7 @@ export async function POST(request: Request) {
   } catch (err: any) {
     console.error('[API /api/mimos/pay] Unexpected error:', err)
     return NextResponse.json(
-      { error: 'Falha interna ao processar o Mimo via WiinPay. Tente novamente.' },
+      { error: 'Falha interna ao processar o Apoio VIP via WiinPay. Tente novamente.' },
       { status: 500 }
     )
   }

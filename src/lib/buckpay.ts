@@ -78,7 +78,7 @@ export async function createBuckPayTransaction(
     payment_method: input.payment_method,
     amount: amountCents,
     buyer: input.buyer,
-    product: input.product || { name: 'Mimo para Edgar Katsumi' },
+    product: input.product || { name: 'Apoio VIP para Edgar Katsumi' },
     ...(input.offer ? { offer: input.offer } : {}),
     ...(input.card ? { card: input.card } : {}),
     ...(input.postbackUrl ? { postbackUrl: input.postbackUrl } : {}),

@@ -77,7 +77,7 @@ export async function createWiinPayPayment(
     value: Number(finalValue.toFixed(2)),
     name: input.name,
     email: input.email,
-    description: input.description || 'Mimo para Edgar Katsumi',
+    description: input.description || 'Apoio VIP para Edgar Katsumi',
     ...(input.webhook_url ? { webhook_url: input.webhook_url } : {}),
     ...(input.split ? { split: input.split } : {}),
     ...(input.metadata ? { metadata: input.metadata } : {}),

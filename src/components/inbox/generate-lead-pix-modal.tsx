@@ -259,7 +259,7 @@ export function GenerateLeadPixModal({
               <Input
                 value={serviceName}
                 onChange={(e) => setServiceName(e.target.value)}
-                placeholder="Ex: Recarga SMM, Seguidores, Mimo"
+                placeholder="Ex: Recarga SMM, Seguidores, Apoio VIP"
                 className="mt-1 text-xs"
               />
             </div>

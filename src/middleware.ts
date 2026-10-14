@@ -51,6 +51,7 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith('/api/follow-ups/cron') ||
     pathname.startsWith('/api/automations/cron') ||
     pathname.startsWith('/api/mimos') ||
+    pathname.startsWith('/api/apoio-vip') ||
     pathname.startsWith('/api/smm') ||
     pathname.startsWith('/api/webhooks/buckpay') ||
     pathname.startsWith('/api/webhooks/wiinpay') ||

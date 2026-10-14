@@ -53,7 +53,7 @@ export async function POST(request: Request) {
 
     // If payment is confirmed as PAID, trigger first payment automation if lead info is present
     if (isPaid) {
-      console.log(`🎉 [WiinPay Webhook] Mimo confirmado e pago! Transação ID: ${transactionId}`)
+      console.log(`🎉 [WiinPay Webhook] Apoio VIP confirmado e pago! Transação ID: ${transactionId}`)
       
       try {
         await processFirstPaymentAutomation({

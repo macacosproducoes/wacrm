@@ -329,9 +329,9 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
             </span>
           </Link>
 
-{/* Mimos Edgar Katsumi quick link */}
+{/* Apoio VIP Edgar Katsumi quick link */}
           <Link
-            href="/edgar-katsumi/mimos"
+            href="/edgar-katsumi/apoio-vip"
             target="_blank"
             className={cn(
               "mb-3 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors lg:py-2",
@@ -341,7 +341,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
             )}
           >
             <Heart className="h-4 w-4 text-pink-500" />
-            <span className="flex-1">Mimos API</span>
+            <span className="flex-1">Apoio VIP API</span>
             <span className="rounded-full border border-pink-500/40 bg-pink-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-pink-300">
               Edgar
             </span>

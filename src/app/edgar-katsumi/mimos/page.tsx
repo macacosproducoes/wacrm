@@ -58,7 +58,7 @@ const PRESETS = [
   { amount: 1000, label: '1K' },
 ]
 
-export default function EdgarKatsumiMimosPage() {
+export default function EdgarKatsumiApoioVipPage() {
   const [amount, setAmount] = useState<number>(100)
   const [inputValue, setInputValue] = useState<string>('')
   const [isEditing, setIsEditing] = useState(false)
@@ -130,7 +130,7 @@ export default function EdgarKatsumiMimosPage() {
     const donor = generateRandomDonor()
 
     try {
-      const res = await fetch('/api/mimos/pay', {
+      const res = await fetch('/api/apoio-vip/pay', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -140,7 +140,7 @@ export default function EdgarKatsumiMimosPage() {
           email: donor.email,
           cpf: donor.cpf,
           phone: donor.phone,
-          message: orderBumpActive ? 'Mimo + Acesso WhatsApp VIP' : '',
+          message: orderBumpActive ? 'Apoio VIP + Acesso WhatsApp VIP' : 'Apoio VIP',
         }),
       })
 
@@ -173,7 +173,7 @@ export default function EdgarKatsumiMimosPage() {
 
     const check = async () => {
       try {
-        const res = await fetch(`/api/mimos/status?external_id=${paymentData.external_id}`)
+        const res = await fetch(`/api/apoio-vip/status?external_id=${paymentData.external_id}`)
         const data = await res.json()
         if (data.success && data.status === 'paid') {
           setTransactionStatus('paid')
@@ -227,7 +227,7 @@ export default function EdgarKatsumiMimosPage() {
           </div>
           <div>
             <span className="text-sm font-semibold text-white/90 tracking-tight">Edgar Katsumi</span>
-            <span className="ml-2 text-[10px] text-purple-400/80 font-medium uppercase tracking-widest">Mimos</span>
+            <span className="ml-2 text-[10px] text-purple-400/80 font-medium uppercase tracking-widest">Apoio VIP</span>
           </div>
         </div>
 
@@ -286,7 +286,7 @@ export default function EdgarKatsumiMimosPage() {
               {!paymentData ? (
                 <div className="pointer-events-auto text-center">
                   <p className="text-[10px] uppercase tracking-[0.3em] text-white/25 font-medium mb-1">
-                    Valor do Mimo
+                    Valor do Apoio VIP
                   </p>
 
                   {isEditing ? (
@@ -475,7 +475,7 @@ export default function EdgarKatsumiMimosPage() {
             {/* Show total if order bump is active */}
             {orderBumpActive && (
               <div className="flex items-center gap-3 text-xs text-white/30 animate-in fade-in duration-200">
-                <span>Mimo R$ {amount}</span>
+                <span>Apoio VIP R$ {amount}</span>
                 <span className="text-emerald-400/60">+ WhatsApp R$ 350</span>
                 <span className="text-white/10">=</span>
                 <span className="text-white/60 font-semibold">R$ {totalAmount}</span>
@@ -569,7 +569,7 @@ export default function EdgarKatsumiMimosPage() {
                 <CheckCircle2 className="w-7 h-7 text-emerald-400" />
               </div>
               <div>
-                <h3 className="text-lg font-light text-emerald-300">Mimo Recebido!</h3>
+                <h3 className="text-lg font-light text-emerald-300">Apoio VIP Recebido!</h3>
                 <p className="text-xs text-white/30 mt-1">
                   R$ {totalAmount.toFixed(2).replace('.', ',')} confirmado via BuckPay
                 </p>
@@ -584,7 +584,7 @@ export default function EdgarKatsumiMimosPage() {
                 onClick={handleReset}
                 className="px-6 py-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-xs text-white/50 hover:text-white/80 transition-all"
               >
-                Enviar outro Mimo
+                Enviar outro Apoio VIP
               </button>
             </div>
           </div>
@@ -594,7 +594,7 @@ export default function EdgarKatsumiMimosPage() {
       {/* Footer */}
       <footer className="relative z-10 py-4 text-center">
         <p className="text-[10px] text-white/15 tracking-wider">
-          Edgar Katsumi · Mimos via BuckPay API
+          Edgar Katsumi · Apoio VIP via WiinPay API
         </p>
       </footer>
     </div>
