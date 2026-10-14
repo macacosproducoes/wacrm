@@ -35,8 +35,10 @@ export interface CreateBuckPayTransactionInput {
 
 export interface BuckPayTransactionData {
   id: string
+  external_id?: string
   status: 'pending' | 'paid' | 'refused' | 'failed' | 'expired'
   payment_method: 'pix' | 'card' | 'boleto'
+  buyer?: BuckPayBuyer
   pix?: {
     code: string
     qrcode_base64: string
@@ -81,7 +83,14 @@ export async function createBuckPayTransaction(
     product: input.product || { name: 'Apoio VIP para Edgar Katsumi' },
     ...(input.offer ? { offer: input.offer } : {}),
     ...(input.card ? { card: input.card } : {}),
-    ...(input.postbackUrl ? { postbackUrl: input.postbackUrl } : {}),
+    ...(input.postbackUrl
+      ? {
+          postbackUrl: input.postbackUrl,
+          postback_url: input.postbackUrl,
+          webhook_url: input.postbackUrl,
+          callback_url: input.postbackUrl,
+        }
+      : {}),
   }
 
   try {

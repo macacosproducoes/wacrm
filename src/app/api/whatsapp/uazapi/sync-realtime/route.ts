@@ -13,6 +13,9 @@ import {
 import { handleInboundMessageInstagram } from '@/lib/instagram-resolver';
 import { handleFollowerOrder } from '@/lib/orders/follower-order-handler';
 import { processDueFollowUps } from '@/lib/automations/follow-up-engine';
+import { getBuckPayTransaction } from '@/lib/buckpay';
+import { processFirstPaymentAutomation } from '@/lib/automations/first-payment-engine';
+import { notifyPaymentInCrm } from '@/lib/notifications/payment-notification';
 
 export const dynamic = 'force-dynamic';
 
@@ -489,6 +492,9 @@ async function handleSync(request: Request) {
       await syncChat(chat);
     }
 
+    // Auto-reconcile pending payments in the background
+    await reconcilePendingPayments(admin, accountId);
+
     return NextResponse.json({
       success: true,
       syncedMessages: totalSyncedMessages,
@@ -498,6 +504,64 @@ async function handleSync(request: Request) {
   } catch (err) {
     console.error('[sync-realtime] Fatal error:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
+async function reconcilePendingPayments(admin: any, accountId: string) {
+  try {
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const { data: pendingEvents } = await admin
+      .from('webhook_events')
+      .select('id, provider, external_event_id, payload')
+      .in('provider', ['buckpay', 'wiinpay'])
+      .eq('processing_status', 'RECEIVED')
+      .gte('created_at', twoHoursAgo)
+      .limit(10);
+
+    if (!pendingEvents || pendingEvents.length === 0) return;
+
+    for (const event of pendingEvents) {
+      const extId = event.external_event_id;
+      if (!extId) continue;
+
+      if (event.provider === 'buckpay') {
+        const result = await getBuckPayTransaction(extId);
+        if (result?.data?.status === 'paid') {
+          const amount = typeof result.data.total_amount === 'number' ? result.data.total_amount / 100 : undefined;
+
+          await processFirstPaymentAutomation({
+            payment_id: result.data.id,
+            external_id: extId,
+            status: 'paid',
+            amount,
+            buyer: result.data.buyer,
+            raw_payload: result.data as unknown as Record<string, unknown>,
+          });
+
+          await notifyPaymentInCrm(admin, {
+            accountId,
+            leadName: result.data.buyer?.name,
+            amount,
+            paymentId: result.data.id,
+            externalId: extId,
+          });
+
+          await admin
+            .from('webhook_events')
+            .update({
+              processing_status: 'COMPLETED',
+              payload: {
+                ...(event.payload || {}),
+                status: 'paid',
+                confirmed_at: new Date().toISOString(),
+              },
+            })
+            .eq('id', event.id);
+        }
+      }
+    }
+  } catch (reconcileErr) {
+    console.warn('[sync-realtime] Non-critical error reconciling pending payments:', reconcileErr);
   }
 }
 

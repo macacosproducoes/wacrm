@@ -1,5 +1,13 @@
 import { NextResponse } from 'next/server'
+import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { createWiinPayPayment } from '@/lib/wiinpay'
+
+function supabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) return null
+  return createAdminClient(url, key)
+}
 
 function formatPhone(phone?: string): string {
   const digits = String(phone || '').replace(/\D/g, '')
@@ -71,6 +79,31 @@ export async function POST(request: Request) {
         },
         { status: 400 }
       )
+    }
+
+    // Persist initiated transaction in webhook_events for auditing and status tracking
+    const admin = supabaseAdmin()
+    if (admin) {
+      try {
+        await admin.from('webhook_events').insert({
+          provider: 'wiinpay',
+          event_type: 'transaction.initiated',
+          external_event_id: external_id,
+          payload: {
+            external_id,
+            amount: numAmount,
+            buyer: { name: buyerName, phone: buyerPhone, email: buyerEmail },
+            transaction_id: result.data?.id,
+            pix: result.data?.pix,
+            status: 'pending',
+            created_at: Date.now(),
+          },
+          processing_status: 'RECEIVED',
+          trace_id: `wiinpay_init_${Date.now()}_${cleanRandom}`,
+        })
+      } catch (dbErr) {
+        console.warn('[mimos/pay] Erro ao registrar em webhook_events:', dbErr)
+      }
     }
 
     return NextResponse.json({

@@ -62,27 +62,49 @@ export function LeadPixSidebarCard({
 
   const numAmount = Number(amount) || 0;
 
-  // Restore saved PIX for this contact from localStorage (persists for 24h across tab/conversation switches)
+  // Restore saved PIX for this contact from server DB and localStorage
   useEffect(() => {
-    if (!contact?.id || typeof window === "undefined") {
+    if (!contact?.id) {
       setPixResult(null);
       return;
     }
-    try {
-      const saved = localStorage.getItem(`wacrm_pix_${contact.id}`);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && (!parsed.created_at || Date.now() - parsed.created_at < 24 * 60 * 60 * 1000)) {
-          setPixResult(parsed);
-          // If pending, do an immediate check
-          if (parsed.status === "pending" && parsed.external_id) {
-            void checkStatus(parsed.external_id);
+
+    let foundLocal = false;
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem(`wacrm_pix_${contact.id}`);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed && (!parsed.created_at || Date.now() - parsed.created_at < 24 * 60 * 60 * 1000)) {
+            setPixResult(parsed);
+            foundLocal = true;
+            if (parsed.status === "pending" && parsed.external_id) {
+              void checkStatus(parsed.external_id);
+            }
           }
-          return;
         }
-      }
-    } catch {}
-    setPixResult(null);
+      } catch {}
+    }
+
+    // Fetch latest generated PIX from server to sync with database
+    fetch(`/api/smm/latest-pix?contact_id=${encodeURIComponent(contact.id)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.success && data?.pix?.code) {
+          setPixResult(data.pix);
+          if (typeof window !== "undefined") {
+            try {
+              localStorage.setItem(`wacrm_pix_${contact.id}`, JSON.stringify(data.pix));
+            } catch {}
+          }
+          if (data.pix.status === "pending" && data.pix.external_id) {
+            void checkStatus(data.pix.external_id);
+          }
+        } else if (!foundLocal) {
+          setPixResult(null);
+        }
+      })
+      .catch(() => {});
   }, [contact?.id]);
 
   // Poll status when PIX is generated and pending

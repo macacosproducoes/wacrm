@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { processFirstPaymentAutomation } from '@/lib/automations/first-payment-engine'
+import { notifyPaymentInCrm } from '@/lib/notifications/payment-notification'
 
 function supabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -70,6 +71,16 @@ export async function POST(request: Request) {
         })
       } catch (autoErr) {
         console.warn('[WiinPay Webhook] Aviso no processamento de automação:', autoErr)
+      }
+
+      if (admin) {
+        await notifyPaymentInCrm(admin, {
+          accountId: 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f',
+          leadName: body.name || body.metadata?.donor_name,
+          amount,
+          paymentId: transactionId,
+          externalId,
+        })
       }
     }
 

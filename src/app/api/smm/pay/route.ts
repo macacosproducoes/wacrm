@@ -161,11 +161,14 @@ export async function POST(request: Request) {
             contact_id: contact_id || null,
             account_id: account_id || null,
             amount: numAmount,
+            service_name: service_name || 'Recarga de Saldo SMM',
             buyer: { name: buyerName, phone: buyerPhone, email: buyerEmail },
             transaction_id: result.data?.id,
             pix: result.data?.pix,
+            status: 'pending',
+            created_at: Date.now(),
           },
-          processing_status: 'PENDING',
+          processing_status: 'RECEIVED',
           trace_id: `buckpay_init_${Date.now()}_${cleanRandom}`,
         })
       } catch (dbErr) {

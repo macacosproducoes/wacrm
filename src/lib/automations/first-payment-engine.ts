@@ -20,6 +20,7 @@ import {
 } from '@/lib/whatsapp/uazapi-client';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
+import { notifyPaymentInCrm } from '@/lib/notifications/payment-notification';
 
 // In-memory concurrency locks to prevent race conditions during simultaneous payment webhooks
 const inFlightPaymentLocks = new Set<string>();
@@ -777,6 +778,20 @@ export async function processFirstPaymentAutomation(
       });
     } catch (inboxErr) {
       console.warn("[first-payment-engine] Warning syncing inbox:", inboxErr);
+    }
+
+    // 13. Notify payment in CRM (Notifications table + Bell badge + Real-time toast)
+    try {
+      await notifyPaymentInCrm(admin, {
+        accountId,
+        contactId,
+        leadName: contactName,
+        amount,
+        paymentId: payment_id,
+        externalId: external_id,
+      });
+    } catch (notifErr) {
+      console.warn("[first-payment-engine] Warning notifying CRM:", notifErr);
     }
 
     return {

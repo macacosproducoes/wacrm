@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { processFirstPaymentAutomation } from '@/lib/automations/first-payment-engine'
+import { notifyPaymentInCrm } from '@/lib/notifications/payment-notification'
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus'
 
 function supabaseAdmin() {
@@ -63,6 +64,17 @@ export async function POST(request: Request) {
       })
 
       console.log('[BuckPay Webhook] Resultado automação primeiro pagamento:', automationResult)
+
+      if (admin) {
+        await notifyPaymentInCrm(admin, {
+          accountId: 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f',
+          contactId: automationResult?.leadId,
+          leadName: data?.buyer?.name || body?.buyer?.name,
+          amount,
+          paymentId: transactionId,
+          externalId,
+        })
+      }
 
       // Emit realtime inbox event for instant UI update
       whatsappBus.emitInboxEvent({
