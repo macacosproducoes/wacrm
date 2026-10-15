@@ -3,6 +3,11 @@
 import { useEffect, useRef } from 'react';
 import { useUazApiSse } from '@/hooks/use-uazapi-sse';
 import { toast } from 'sonner';
+import { createClient } from '@/lib/supabase/client';
+import {
+  playPaymentNotificationSound,
+  unlockAudioOnFirstInteraction,
+} from '@/lib/audio/payment-sound';
 
 /**
  * Global Realtime Bridge for WhatsApp.
@@ -23,7 +28,13 @@ export function WhatsAppRealtimeBridge() {
     enabled: true,
   });
 
-  // 1b. Global celebration toast whenever any PIX payment is received in CRM
+  // 1a. Unlock audio for browser autoplay policy on first user gesture
+  useEffect(() => {
+    const cleanup = unlockAudioOnFirstInteraction();
+    return cleanup;
+  }, []);
+
+  // 1b. Global celebration toast & audio whenever any PIX payment is received in CRM
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -46,11 +57,40 @@ export function WhatsAppRealtimeBridge() {
           description: `Lead: ${leadName} — Áudio de confirmação liberado automaticamente!`,
           duration: 8000,
         });
+
+        // Reproduzir áudio dinheiro-caindo-na-conta.mp3 no painel
+        playPaymentNotificationSound();
       }
     };
 
     window.addEventListener('wacrm:realtime', handleRealtime);
-    return () => window.removeEventListener('wacrm:realtime', handleRealtime);
+
+    // Also listen directly to Supabase realtime table 'notifications' for payment rows
+    const supabase = createClient();
+    const channel = supabase
+      .channel('global-payment-notifications-sound')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notifications' },
+        (payload) => {
+          const row = payload.new as Record<string, any>;
+          const title = String(row?.title || '').toLowerCase();
+          const body = String(row?.body || '').toLowerCase();
+          if (title.includes('pagamento') || body.includes('pagamento') || body.includes('recebeu pagamento')) {
+            toast.success(row.title || '🎉 Pagamento Recebido!', {
+              description: row.body || 'Um novo pagamento foi confirmado no sistema.',
+              duration: 8000,
+            });
+            playPaymentNotificationSound();
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      window.removeEventListener('wacrm:realtime', handleRealtime);
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   // 2. Continuous lightweight background sync with smart throttling

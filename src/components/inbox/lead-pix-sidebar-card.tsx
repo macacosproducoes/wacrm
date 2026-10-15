@@ -27,6 +27,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { playPaymentNotificationSound } from "@/lib/audio/payment-sound";
 
 interface LeadPixSidebarCardProps {
   contact: Contact | null;
@@ -166,6 +167,7 @@ export function LeadPixSidebarCard({
             return updated;
           });
           toast.success("🎉 PIX Compensado! Pagamento recebido!");
+          playPaymentNotificationSound();
           if (pollingRef.current) {
             clearInterval(pollingRef.current);
             pollingRef.current = null;
