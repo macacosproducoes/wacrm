@@ -328,8 +328,14 @@ export class CreativeRenderer {
       }
     }
 
+    const fallbackCandidate =
+      el.fallbackUrl ||
+      (context.profile_image && context.profile_image !== sourceUrl ? (context.profile_image as string) : undefined) ||
+      (context.avatar_url as string) ||
+      (context.fallback_avatar as string);
+
     const dataUri = await ImageProvider.resolveImageDataUri(sourceUrl, {
-      fallbackUrl: el.fallbackUrl,
+      fallbackUrl: fallbackCandidate,
       timeoutMs: options.imageFetchTimeoutMs,
     });
 
@@ -377,8 +383,14 @@ export class CreativeRenderer {
       }
     }
 
+    const fallbackCandidate =
+      el.fallbackUrl ||
+      (context.profile_image && context.profile_image !== sourceUrl ? (context.profile_image as string) : undefined) ||
+      (context.avatar_url as string) ||
+      (context.fallback_avatar as string);
+
     const dataUri = await ImageProvider.resolveImageDataUri(sourceUrl, {
-      fallbackUrl: el.fallbackUrl,
+      fallbackUrl: fallbackCandidate,
       timeoutMs: options.imageFetchTimeoutMs,
     });
 

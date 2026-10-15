@@ -310,37 +310,43 @@ export async function handleFollowerOrder(
     }
   }
 
-  // Fetch updated contact (checking strictly profile_image_url, NOT avatar_url)
+  // Fetch updated contact (including both profile_image_url and WhatsApp avatar_url)
   const { data: contact } = await supabase
     .from('contacts')
-    .select('id, name, phone, profile_image_url, instagram_username, instagram_resolve_status, instagram_last_error')
+    .select('id, name, phone, profile_image_url, avatar_url, instagram_username, instagram_resolve_status, instagram_last_error')
     .eq('id', contactId)
     .single();
 
   const finalResolvedImage = contact?.profile_image_url || profileImageUrl;
-  const isImageAvailable = Boolean(finalResolvedImage && !finalResolvedImage.startsWith('data:image/svg'));
+  const isPlatformImageValid = Boolean(
+    finalResolvedImage &&
+    !finalResolvedImage.includes('zwdpytqizoodlcrhryvg') &&
+    !finalResolvedImage.startsWith('data:image/svg')
+  );
+  const isImageAvailable = isPlatformImageValid || Boolean(contact?.avatar_url);
 
   if (traceId) {
     if (isImageAvailable) {
       TraceLogger.log(traceId, 'T6', `${platformLabel.toUpperCase()} RESOLVED`, {
         username: parsed.username,
         status: 'IMAGE_AVAILABLE',
-        profileImageUrl: finalResolvedImage!.slice(0, 60) + '...',
+        profileImageUrl: (isPlatformImageValid ? finalResolvedImage! : contact?.avatar_url!).slice(0, 60) + '...',
       });
     } else {
       TraceLogger.log(traceId, 'T6', `${platformLabel.toUpperCase()}_IMAGE_UNAVAILABLE`, {
         username: parsed.username,
         status: 'IMAGE_UNAVAILABLE',
         reason: resolveError || contact?.instagram_last_error || `Foto pública indisponível ou inacessível no ${platformLabel}`,
-        fallbackAction: 'Silhueta neutra utilizada. Foto do WhatsApp mantida intacta sem substituição.',
+        fallbackAction: 'Silhueta neutra utilizada.',
       });
     }
   }
 
-  // Final template image: Use strictly the resolved platform photo if available.
-  // If unavailable, use the neutral platform silhouette - NEVER fall back to the contact's WhatsApp avatar!
+  // Final template image: Prioritize resolved Instagram/TikTok photo.
+  // If unavailable or inaccessible, fall back to the client's profile picture (avatar_url) as it was originally.
+  // Only fall back to neutral silhouette if neither is available.
   const neutralAvatar = isTikTok ? NEUTRAL_TIKTOK_AVATAR : NEUTRAL_INSTAGRAM_AVATAR;
-  const templateProfileImage = finalResolvedImage || neutralAvatar;
+  const templateProfileImage = (isPlatformImageValid ? finalResolvedImage : null) || contact?.avatar_url || neutralAvatar;
 
   const isVerifiedOrder = Boolean(
     parsed.isVerified ||

@@ -147,88 +147,150 @@ export async function checkAndDispatchWelcomeMessage(
 
   const lockKey = `${accountId}:${conversationId}`;
   if (inFlightWelcomeDispatches.has(lockKey)) {
-    console.log(`[welcome-engine] Lock active for conv ${conversationId}: duplicate inbound burst prevented.`);
+    console.log(`[welcome-engine] Memory lock active for conv ${conversationId}: duplicate inbound burst prevented.`);
     return { dispatched: false, reason: 'duplicate_inbound_burst_prevented' };
   }
   inFlightWelcomeDispatches.add(lockKey);
 
-  // 1. Get welcome config
+  let lockRowId: string | null = null;
+
   try {
-  const config = await getWelcomeConfig(accountId);
-  if (!config.is_active || !config.response_id) {
-    return { dispatched: false, reason: 'welcome_disabled' };
-  }
+    // 1. Clean up stale lock rows older than 3 minutes
+    try {
+      const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+      await admin
+        .from('welcome_message_logs')
+        .delete()
+        .or(`conversation_id.eq.${conversationId},contact_id.eq.${contactId}`)
+        .like('uazapi_message_id', 'welcome_lock_%')
+        .lt('sent_at', threeMinutesAgo);
+    } catch {}
 
-  // 2. Human active check
-  const { data: conv } = await admin
-    .from('conversations')
-    .select('id, assigned_agent_id, status, ai_autoreply_disabled')
-    .eq('id', conversationId)
-    .maybeSingle();
-
-  const isHumanActive = Boolean(
-    conv?.assigned_agent_id ||
-    conv?.status === 'human_active' ||
-    conv?.ai_autoreply_disabled
-  );
-
-  if (isHumanActive && !config.send_if_human_active) {
-    console.log(`[welcome-engine] Standing down for conversation ${conversationId}: human agent is active.`);
-    return { dispatched: false, reason: 'human_active_stand_down' };
-  }
-
-  // 3. Welcome log history & inactivity window check
-  // Clean up any stale welcome_lock rows older than 2 minutes for this conversation
-  try {
-    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-    await admin
+    // 2. Check for recent welcome dispatches or active locks
+    const { data: recentLogs } = await admin
       .from('welcome_message_logs')
-      .delete()
-      .eq('conversation_id', conversationId)
-      .like('uazapi_message_id', 'welcome_lock_%')
-      .lt('sent_at', twoMinutesAgo);
-  } catch {}
+      .select('id, sent_at, uazapi_message_id')
+      .or(`conversation_id.eq.${conversationId},contact_id.eq.${contactId}`)
+      .order('sent_at', { ascending: false })
+      .limit(1);
 
-  const { data: recentLogs } = await admin
-    .from('welcome_message_logs')
-    .select('id, sent_at, uazapi_message_id')
-    .eq('conversation_id', conversationId)
-    .not('uazapi_message_id', 'like', 'welcome_lock_%')
-    .order('sent_at', { ascending: false })
-    .limit(1);
+    const lastLog = recentLogs?.[0];
+    if (lastLog) {
+      const lastSentAt = new Date(lastLog.sent_at).getTime();
+      const now = Date.now();
 
-  const lastLog = recentLogs?.[0];
-  if (lastLog) {
-    const lastSentAt = new Date(lastLog.sent_at).getTime();
-    const now = Date.now();
+      // If an active lock exists from less than 3 minutes ago, a sequence is CURRENTLY in flight!
+      if (lastLog.uazapi_message_id?.startsWith('welcome_lock_')) {
+        if (now - lastSentAt < 3 * 60 * 1000) {
+          console.log(`[welcome-engine] Active DB lock found for conv ${conversationId}: sequence in progress. Aborting duplicate burst.`);
+          return { dispatched: false, reason: 'duplicate_inbound_burst_prevented' };
+        }
+      }
 
-    // Idempotency: prevent duplicate dispatch within 60 seconds
-    if (now - lastSentAt < 60 * 1000) {
-      return { dispatched: false, reason: 'duplicate_inbound_burst_prevented' };
+      // Idempotency: prevent duplicate dispatch within 10 minutes (covers multi-message bursts at start)
+      if (now - lastSentAt < 10 * 60 * 1000) {
+        console.log(`[welcome-engine] Welcome message already sent recently (${Math.round((now - lastSentAt) / 1000)}s ago) for conv ${conversationId}. Duplicate prevented.`);
+        return { dispatched: false, reason: 'duplicate_inbound_burst_prevented' };
+      }
     }
 
-    if (config.inactivity_window_days === 0) {
-      return { dispatched: false, reason: 'strictly_first_message_already_sent' };
+    // 3. Immediately reserve atomic lock in DB before doing any heavy operations
+    const lockKeyId = `welcome_lock_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const { data: insertedLock } = await admin
+      .from('welcome_message_logs')
+      .insert({
+        account_id: accountId,
+        conversation_id: conversationId,
+        contact_id: contactId,
+        uazapi_message_id: lockKeyId,
+        sent_at: new Date().toISOString(),
+      })
+      .select('id')
+      .maybeSingle();
+
+    lockRowId = insertedLock?.id || null;
+
+    // Race-check: if two requests inserted locks at the exact same millisecond window,
+    // verify if we are the winner (earliest row)
+    if (lockRowId) {
+      const tenSecondsAgo = new Date(Date.now() - 10 * 1000).toISOString();
+      const { data: activeLocks } = await admin
+        .from('welcome_message_logs')
+        .select('id, sent_at')
+        .or(`conversation_id.eq.${conversationId},contact_id.eq.${contactId}`)
+        .like('uazapi_message_id', 'welcome_lock_%')
+        .gte('sent_at', tenSecondsAgo)
+        .order('sent_at', { ascending: true });
+
+      if (activeLocks && activeLocks.length > 1 && activeLocks[0].id !== lockRowId) {
+        console.log(`[welcome-engine] Lost lock race condition to ${activeLocks[0].id} for conv ${conversationId}. Aborting duplicate.`);
+        await admin.from('welcome_message_logs').delete().eq('id', lockRowId);
+        lockRowId = null;
+        return { dispatched: false, reason: 'duplicate_inbound_burst_prevented' };
+      }
     }
 
-    const elapsedDays = (now - lastSentAt) / (86400 * 1000);
-    if (elapsedDays < config.inactivity_window_days) {
-      return { dispatched: false, reason: `within_inactivity_window_${Math.floor(elapsedDays)}d` };
+    // 4. Get welcome config
+    const config = await getWelcomeConfig(accountId);
+    if (!config.is_active || !config.response_id) {
+      if (lockRowId) await admin.from('welcome_message_logs').delete().eq('id', lockRowId);
+      lockRowId = null;
+      return { dispatched: false, reason: 'welcome_disabled' };
     }
-  }
 
-  // 4. Fetch the configured quick reply
-  const { data: replyRow } = await admin
-    .from('quick_replies')
-    .select('*')
-    .eq('id', config.response_id)
-    .eq('account_id', accountId)
-    .maybeSingle();
+    // 5. Human active check
+    const { data: conv } = await admin
+      .from('conversations')
+      .select('id, assigned_agent_id, status, ai_autoreply_disabled')
+      .eq('id', conversationId)
+      .maybeSingle();
 
-  if (!replyRow) {
-    console.warn(`[welcome-engine] Configured response ${config.response_id} not found.`);
-    return { dispatched: false, reason: 'configured_response_missing' };
-  }
+    const isHumanActive = Boolean(
+      conv?.assigned_agent_id ||
+      conv?.status === 'human_active' ||
+      conv?.ai_autoreply_disabled
+    );
+
+    if (isHumanActive && !config.send_if_human_active) {
+      console.log(`[welcome-engine] Standing down for conversation ${conversationId}: human agent is active.`);
+      if (lockRowId) await admin.from('welcome_message_logs').delete().eq('id', lockRowId);
+      lockRowId = null;
+      return { dispatched: false, reason: 'human_active_stand_down' };
+    }
+
+    // 6. Inactivity window check for past completed sends
+    if (lastLog && !lastLog.uazapi_message_id?.startsWith('welcome_lock_')) {
+      const lastSentAt = new Date(lastLog.sent_at).getTime();
+      const now = Date.now();
+
+      if (config.inactivity_window_days === 0) {
+        if (lockRowId) await admin.from('welcome_message_logs').delete().eq('id', lockRowId);
+        lockRowId = null;
+        return { dispatched: false, reason: 'strictly_first_message_already_sent' };
+      }
+
+      const elapsedDays = (now - lastSentAt) / (86400 * 1000);
+      if (elapsedDays < config.inactivity_window_days) {
+        if (lockRowId) await admin.from('welcome_message_logs').delete().eq('id', lockRowId);
+        lockRowId = null;
+        return { dispatched: false, reason: `within_inactivity_window_${Math.floor(elapsedDays)}d` };
+      }
+    }
+
+    // 7. Fetch the configured quick reply
+    const { data: replyRow } = await admin
+      .from('quick_replies')
+      .select('*')
+      .eq('id', config.response_id)
+      .eq('account_id', accountId)
+      .maybeSingle();
+
+    if (!replyRow) {
+      console.warn(`[welcome-engine] Configured response ${config.response_id} not found.`);
+      if (lockRowId) await admin.from('welcome_message_logs').delete().eq('id', lockRowId);
+      lockRowId = null;
+      return { dispatched: false, reason: 'configured_response_missing' };
+    }
 
   // 5. Fetch contact info to resolve variables
   const { data: contactRow } = await admin
@@ -309,17 +371,6 @@ export async function checkAndDispatchWelcomeMessage(
 
   const isSequence = effectiveKind === 'sequence';
   const messageCreatedAt = new Date().toISOString();
-
-  // Pre-insert welcome log to establish database lock against concurrent instances
-  const preLogTime = messageCreatedAt;
-  await admin.from('welcome_message_logs').insert({
-    account_id: accountId,
-    conversation_id: conversationId,
-    contact_id: contactId,
-    response_id: replyRow.id,
-    uazapi_message_id: `welcome_lock_${Date.now()}`,
-    sent_at: preLogTime,
-  });
 
   try {
     if (isSequence) {
@@ -460,11 +511,12 @@ export async function checkAndDispatchWelcomeMessage(
   } catch (err) {
     console.error('[welcome-engine] Failed to send welcome message via provider:', err);
     try {
-      await admin
-        .from('welcome_message_logs')
-        .delete()
-        .eq('conversation_id', conversationId)
-        .eq('sent_at', preLogTime);
+      if (lockRowId) {
+        await admin
+          .from('welcome_message_logs')
+          .delete()
+          .eq('id', lockRowId);
+      }
     } catch {}
     return { dispatched: false, reason: 'provider_send_failed' };
   }
@@ -519,11 +571,25 @@ export async function checkAndDispatchWelcomeMessage(
 
   // 8. Update pre-inserted welcome_message_logs record with final message ID
   try {
-    await admin
-      .from('welcome_message_logs')
-      .update({ uazapi_message_id: uazapiMessageId })
-      .eq('conversation_id', conversationId)
-      .eq('sent_at', preLogTime);
+    if (lockRowId) {
+      await admin
+        .from('welcome_message_logs')
+        .update({
+          response_id: replyRow.id,
+          uazapi_message_id: uazapiMessageId,
+          sent_at: new Date().toISOString(),
+        })
+        .eq('id', lockRowId);
+    } else {
+      await admin.from('welcome_message_logs').insert({
+        account_id: accountId,
+        conversation_id: conversationId,
+        contact_id: contactId,
+        response_id: replyRow.id,
+        uazapi_message_id: uazapiMessageId,
+        sent_at: new Date().toISOString(),
+      });
+    }
   } catch {}
 
   // 9. Increment usage counter

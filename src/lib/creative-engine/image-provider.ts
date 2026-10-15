@@ -65,17 +65,41 @@ export class ImageProvider {
       return cleanSource;
     }
 
+    // Suspended Supabase project domain: bypass directly to fallback
+    if (cleanSource.includes('zwdpytqizoodlcrhryvg.supabase.co')) {
+      console.warn('[Creative Engine:ImageProvider] Suspended supabase domain, skipping to fallback:', cleanSource);
+      if (options.fallbackUrl) {
+        return this.resolveImageDataUri(options.fallbackUrl, {
+          ...options,
+          fallbackUrl: undefined,
+        });
+      }
+      return createSvgPlaceholder(200, 200, 'Sem Imagem');
+    }
+
     // 2. Validate URL protocol
     let parsedUrl: URL;
     try {
       parsedUrl = new URL(cleanSource);
     } catch {
       console.warn('[Creative Engine:ImageProvider] Invalid URL syntax:', cleanSource);
+      if (options.fallbackUrl) {
+        return this.resolveImageDataUri(options.fallbackUrl, {
+          ...options,
+          fallbackUrl: undefined,
+        });
+      }
       return createSvgPlaceholder(200, 200, 'URL Inválida');
     }
 
     if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
       console.warn('[Creative Engine:ImageProvider] Unsupported protocol:', parsedUrl.protocol);
+      if (options.fallbackUrl) {
+        return this.resolveImageDataUri(options.fallbackUrl, {
+          ...options,
+          fallbackUrl: undefined,
+        });
+      }
       return createSvgPlaceholder(200, 200, 'Protocolo Inválido');
     }
 
@@ -83,6 +107,12 @@ export class ImageProvider {
     const isDeliverable = await isDeliverableUrl(cleanSource);
     if (!isDeliverable) {
       console.warn('[Creative Engine:ImageProvider] SSRF block: refusing non-public or internal URL:', cleanSource);
+      if (options.fallbackUrl) {
+        return this.resolveImageDataUri(options.fallbackUrl, {
+          ...options,
+          fallbackUrl: undefined,
+        });
+      }
       return createSvgPlaceholder(200, 200, 'Origem Bloqueada');
     }
 
@@ -99,6 +129,12 @@ export class ImageProvider {
         const isDeliverable = await isDeliverableUrl(currentUrl);
         if (!isDeliverable) {
           console.warn('[Creative Engine:ImageProvider] SSRF block: refusing non-public or internal URL:', currentUrl);
+          if (options.fallbackUrl) {
+            return this.resolveImageDataUri(options.fallbackUrl, {
+              ...options,
+              fallbackUrl: undefined,
+            });
+          }
           return createSvgPlaceholder(200, 200, 'Origem Bloqueada');
         }
 
@@ -106,8 +142,8 @@ export class ImageProvider {
           signal: controller.signal,
           redirect: 'manual',
           headers: {
-            'User-Agent': 'CreativeEngine/1.0',
-            'Accept': 'image/png,image/jpeg,image/webp,image/svg+xml,*/*',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
           },
         });
 
