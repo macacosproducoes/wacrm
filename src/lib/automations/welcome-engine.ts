@@ -153,6 +153,7 @@ export async function checkAndDispatchWelcomeMessage(
   inFlightWelcomeDispatches.add(lockKey);
 
   let lockRowId: string | null = null;
+  const welcomeSequenceStartTime = new Date().toISOString();
 
   try {
     // 1. Clean up stale lock rows older than 3 minutes
@@ -599,6 +600,20 @@ export async function checkAndDispatchWelcomeMessage(
 
   // 11. Schedule linked follow-up steps if any
   if (Array.isArray(config.follow_ups) && config.follow_ups.length > 0) {
+    // Check if the customer replied while the welcome message or sequence was being delivered!
+    const { data: customerRepliedDuringSequence } = await admin
+      .from('messages')
+      .select('id')
+      .eq('conversation_id', conversationId)
+      .eq('sender_type', 'customer')
+      .gte('created_at', welcomeSequenceStartTime)
+      .limit(1);
+
+    if (customerRepliedDuringSequence && customerRepliedDuringSequence.length > 0) {
+      console.log(`[welcome-engine] Customer replied during sequence for conv ${conversationId}. Skipping follow-ups.`);
+      return { dispatched: true, uazapiMessageId };
+    }
+
     const followUpsToInsert = config.follow_ups
       .filter((step) => Boolean(step.response_id && step.delay_minutes > 0))
       .map((step) => {

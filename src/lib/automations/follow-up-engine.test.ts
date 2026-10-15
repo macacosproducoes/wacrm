@@ -140,5 +140,43 @@ describe("follow-up-engine logic & rules", () => {
     };
     expect(detectKind(realText)).toBe('text');
   });
+
+  it("evaluates stop condition: customer spoke last in conversation", () => {
+    function shouldStopDueToCustomerReply(
+      cancelOnClientReply: boolean,
+      recentMsgs: Array<{ sender_type: string; created_at: string }>,
+      followUpCreatedAt: string
+    ) {
+      if (!cancelOnClientReply) return false;
+      if (recentMsgs.length > 0 && recentMsgs[0].sender_type === 'customer') {
+        return true;
+      }
+      const checkAfter = new Date(new Date(followUpCreatedAt).getTime() - 90 * 1000).toISOString();
+      return recentMsgs.some(
+        (m) => m.sender_type === 'customer' && new Date(m.created_at).getTime() >= new Date(checkAfter).getTime()
+      );
+    }
+
+    // Case 1: Customer sent message 5 seconds after bot message
+    const msgsWithRecentCustomer = [
+      { sender_type: 'customer', created_at: '2026-10-15T13:50:53.000Z' },
+      { sender_type: 'bot', created_at: '2026-10-15T13:50:48.000Z' },
+    ];
+    expect(shouldStopDueToCustomerReply(true, msgsWithRecentCustomer, '2026-10-15T13:51:00.000Z')).toBe(true);
+
+    // Case 2: Customer sent message 10 minutes ago, bot sent message, customer never replied
+    const msgsWithNoCustomerReply = [
+      { sender_type: 'bot', created_at: '2026-10-15T13:50:48.000Z' },
+      { sender_type: 'customer', created_at: '2026-10-15T13:40:00.000Z' },
+    ];
+    expect(shouldStopDueToCustomerReply(true, msgsWithNoCustomerReply, '2026-10-15T13:51:00.000Z')).toBe(false);
+
+    // Case 3: Customer replied at 30 seconds into follow-up period
+    const msgsCustomerRepliedLater = [
+      { sender_type: 'customer', created_at: '2026-10-15T13:51:30.000Z' },
+      { sender_type: 'bot', created_at: '2026-10-15T13:50:48.000Z' },
+    ];
+    expect(shouldStopDueToCustomerReply(true, msgsCustomerRepliedLater, '2026-10-15T13:51:00.000Z')).toBe(true);
+  });
 });
 

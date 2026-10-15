@@ -982,7 +982,11 @@ export async function processUazApiEvent(
 
   // For inbound customer messages, cancel any pending follow-ups and refresh ai counter
   if (!fromMe) {
-    void cancelPendingFollowUps(conversationId, 'client_replied');
+    try {
+      await cancelPendingFollowUps(conversationId, 'client_replied');
+    } catch (cancelErr) {
+      console.warn('[uazapi-event-processor] Error cancelling pending follow-ups:', cancelErr);
+    }
     void admin
       .from('conversations')
       .update({ ai_reply_count: 0 })

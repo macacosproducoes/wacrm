@@ -81,9 +81,6 @@ export async function cancelPendingFollowUps(
 
     if (reason === 'client_replied') {
       query = query.eq('cancel_on_client_reply', true);
-      // Grace window: do not cancel follow-ups scheduled less than 90s ago (protects against greeting bursts)
-      const graceCutoff = new Date(Date.now() - 90 * 1000).toISOString();
-      query = query.lte('created_at', graceCutoff);
     } else if (reason === 'agent_replied') {
       query = query.eq('cancel_on_agent_reply', true);
     }
@@ -202,19 +199,57 @@ export async function processDueFollowUps(): Promise<{ processed: number; sent: 
     if (!claimed) continue; // Claim lost to concurrent worker
 
     try {
-      // 2. Validate Stop Conditions: Did client send a message since this follow-up was scheduled?
-      if (row.cancel_on_client_reply) {
-        // Only evaluate customer messages sent after the 90s initial greeting grace period
-        const checkAfter = new Date(new Date(row.created_at).getTime() + 90 * 1000).toISOString();
-        const { data: recentClientMsgs } = await admin
-          .from('messages')
-          .select('id')
-          .eq('conversation_id', row.conversation_id)
-          .eq('sender_type', 'customer')
-          .gte('created_at', checkAfter)
-          .limit(1);
+      // 2. Validate Conversation State: If conversation is assigned to human, human_active, or closed
+      const { data: conv } = await admin
+        .from('conversations')
+        .select('id, assigned_agent_id, status')
+        .eq('id', row.conversation_id)
+        .maybeSingle();
 
-        if (recentClientMsgs && recentClientMsgs.length > 0) {
+      if (conv?.assigned_agent_id || conv?.status === 'human_active' || conv?.status === 'closed') {
+        console.log(`[follow-up-engine] Cancelling follow-up ${row.id}: conversation state is ${conv?.status} (assigned: ${conv?.assigned_agent_id || 'none'})`);
+        await admin.from('conversation_follow_ups').update({
+          status: 'cancelled',
+          cancelled_at: new Date().toISOString(),
+          cancel_reason: conv?.status === 'closed' ? 'conversation_closed' : 'human_active',
+          updated_at: new Date().toISOString(),
+        }).eq('id', row.id);
+        cancelled++;
+        continue;
+      }
+
+      // 3. Fetch recent messages in this conversation to validate customer/agent replies
+      const { data: recentMsgs } = await admin
+        .from('messages')
+        .select('id, sender_type, created_at')
+        .eq('conversation_id', row.conversation_id)
+        .order('created_at', { ascending: false })
+        .limit(10);
+
+      // 4. Validate Stop Conditions: Did client send a message since this follow-up was scheduled?
+      if (row.cancel_on_client_reply) {
+        // A) If the latest message in the conversation is from the customer, they already replied!
+        if (recentMsgs && recentMsgs.length > 0 && recentMsgs[0].sender_type === 'customer') {
+          console.log(`[follow-up-engine] Cancelling follow-up ${row.id}: customer spoke last in conv ${row.conversation_id}`);
+          await admin.from('conversation_follow_ups').update({
+            status: 'cancelled',
+            cancelled_at: new Date().toISOString(),
+            cancel_reason: 'client_replied',
+            updated_at: new Date().toISOString(),
+          }).eq('id', row.id);
+          cancelled++;
+          continue;
+        }
+
+        // B) Check if customer sent ANY message around or after this follow-up was scheduled
+        // Subtract 90s from row.created_at to account for multi-step sequence delivery delays
+        const checkAfter = new Date(new Date(row.created_at).getTime() - 90 * 1000).toISOString();
+        const hasCustomerReplied = (recentMsgs || []).some(
+          (m) => m.sender_type === 'customer' && new Date(m.created_at).getTime() >= new Date(checkAfter).getTime()
+        );
+
+        if (hasCustomerReplied) {
+          console.log(`[follow-up-engine] Cancelling follow-up ${row.id}: customer replied since sequence started in conv ${row.conversation_id}`);
           await admin.from('conversation_follow_ups').update({
             status: 'cancelled',
             cancelled_at: new Date().toISOString(),
@@ -226,17 +261,15 @@ export async function processDueFollowUps(): Promise<{ processed: number; sent: 
         }
       }
 
-      // 3. Stop condition: Did an agent send a manual message?
+      // 5. Stop condition: Did an agent send a message?
       if (row.cancel_on_agent_reply) {
-        const { data: recentAgentMsgs } = await admin
-          .from('messages')
-          .select('id')
-          .eq('conversation_id', row.conversation_id)
-          .eq('sender_type', 'agent')
-          .gte('created_at', row.created_at)
-          .limit(1);
+        const checkAfter = new Date(new Date(row.created_at).getTime() - 90 * 1000).toISOString();
+        const hasAgentReplied = (recentMsgs || []).some(
+          (m) => m.sender_type === 'agent' && new Date(m.created_at).getTime() >= new Date(checkAfter).getTime()
+        );
 
-        if (recentAgentMsgs && recentAgentMsgs.length > 0) {
+        if (hasAgentReplied) {
+          console.log(`[follow-up-engine] Cancelling follow-up ${row.id}: agent sent message in conv ${row.conversation_id}`);
           await admin.from('conversation_follow_ups').update({
             status: 'cancelled',
             cancelled_at: new Date().toISOString(),
