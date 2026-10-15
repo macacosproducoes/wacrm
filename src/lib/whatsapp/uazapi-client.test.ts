@@ -171,4 +171,47 @@ describe('uazapi-client', () => {
       );
     });
   });
+
+  describe('sendUazApiMedia', () => {
+    it('omits url when media is resolved to base64 data URI', async () => {
+      // First fetch is resolveMediaPayload fetching the audio buffer
+      const mockAudioBuffer = Buffer.from('mock ogg opus audio data');
+      const fetchSpy = vi.spyOn(global, 'fetch')
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: new Headers({ 'content-type': 'audio/ogg' }),
+          arrayBuffer: async () => mockAudioBuffer.buffer,
+        } as Response)
+        // Second fetch is the POST /send/media call
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            id: 'uaz_audio_123',
+            status: 'sent',
+          }),
+        } as Response);
+
+      const res = await sendUazApiMedia('https://zap.parceirozapplus.com.br', 'tok_test', {
+        number: '+55 11 99999-1234',
+        url: 'https://storage.example.com/audio/2_RESTRICOES.ogg',
+        type: 'audio',
+      });
+
+      expect(res.messageId).toBe('uaz_audio_123');
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+      const sendCall = fetchSpy.mock.calls[1];
+      expect(sendCall[0]).toBe('https://zap.parceirozapplus.com.br/send/media');
+      const sentBody = JSON.parse(sendCall[1]?.body as string);
+
+      expect(sentBody.number).toBe('5511999991234');
+      expect(sentBody.type).toBe('ptt');
+      expect(sentBody.ptt).toBe(true);
+      expect(sentBody.file).toContain('data:audio/ogg');
+      // Crucial: body.url MUST be undefined so UazAPI doesn't try to fetch remote URL!
+      expect(sentBody.url).toBeUndefined();
+      expect(sentBody.mediaUrl).toBeUndefined();
+    });
+  });
 });
+

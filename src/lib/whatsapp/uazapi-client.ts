@@ -339,6 +339,116 @@ export async function sendUazApiText(
 }
 
 /**
+ * Resolves remote media URL to a complete Base64 data URL with multi-tier fallbacks:
+ * 1. Primary remote storage URL
+ * 2. Local public/audio filesystem (instant, zero network latency)
+ * 3. Vercel public static CDN (/audio/<filename>)
+ * When converted to Base64, UazAPI receives full media in-memory without needing remote HTTP GET.
+ */
+export async function resolveMediaPayload(
+  mediaUrl: string,
+  opts: { type: string; ptt?: boolean }
+): Promise<{ payload: string; isDataUrl: boolean }> {
+  if (!mediaUrl || typeof mediaUrl !== 'string') {
+    return { payload: mediaUrl, isDataUrl: false };
+  }
+
+  if (mediaUrl.startsWith('data:')) {
+    return { payload: mediaUrl, isDataUrl: true };
+  }
+
+  let defaultContentType = 'image/jpeg';
+  if (opts.type === 'audio' || opts.type === 'ptt' || opts.ptt) {
+    defaultContentType = 'audio/ogg; codecs=opus';
+  } else if (opts.type === 'video') {
+    defaultContentType = 'video/mp4';
+  } else if (opts.type === 'document') {
+    defaultContentType = 'application/pdf';
+  } else if (mediaUrl.toLowerCase().endsWith('.png')) {
+    defaultContentType = 'image/png';
+  }
+
+  // 1. Try primary HTTP URL
+  if (mediaUrl.startsWith('http://') || mediaUrl.startsWith('https://')) {
+    try {
+      const fileRes = await fetch(mediaUrl, { signal: AbortSignal.timeout(15000) });
+      if (fileRes.ok) {
+        const arrayBuf = await fileRes.arrayBuffer();
+        if (arrayBuf.byteLength > 0 && arrayBuf.byteLength <= 25 * 1024 * 1024) {
+          const headerType = fileRes.headers.get('content-type');
+          const ct = (!headerType || headerType === 'application/octet-stream') ? defaultContentType : headerType;
+          const b64 = Buffer.from(arrayBuf).toString('base64');
+          return { payload: `data:${ct};base64,${b64}`, isDataUrl: true };
+        }
+      }
+    } catch (fetchErr) {
+      console.warn('[resolveMediaPayload] Primary fetch error, trying fallbacks:', fetchErr);
+    }
+  }
+
+  // 2. Try Node filesystem fallback (process.cwd()/public/audio/)
+  if (typeof window === 'undefined') {
+    try {
+      const fs = await import('node:fs');
+      const path = await import('node:path');
+      const rawFilename = decodeURIComponent(mediaUrl.split('/').pop()?.split('?')[0] || '');
+      const candidates = [
+        rawFilename,
+        rawFilename.replace(/ /g, '_'),
+        rawFilename.replace(/_/g, ' '),
+        rawFilename.replace(/%20/g, ' '),
+      ];
+
+      for (const cand of candidates) {
+        if (!cand) continue;
+        const candidatePaths = [
+          path.join(process.cwd(), 'public', 'audio', cand),
+          path.join(process.cwd(), 'public', cand),
+        ];
+        for (const p of candidatePaths) {
+          if (fs.existsSync(p)) {
+            const fileBuf = await fs.promises.readFile(p);
+            if (fileBuf.byteLength > 0) {
+              const b64 = fileBuf.toString('base64');
+              return { payload: `data:${defaultContentType};base64,${b64}`, isDataUrl: true };
+            }
+          }
+        }
+      }
+    } catch (fsErr) {
+      console.warn('[resolveMediaPayload] Node fs fallback error:', fsErr);
+    }
+  }
+
+  // 3. Try Vercel Static CDN fallback
+  try {
+    const rawFilename = decodeURIComponent(mediaUrl.split('/').pop()?.split('?')[0] || '');
+    if (rawFilename) {
+      const vercelFallbacks = [
+        `https://wacrm-khaki-three.vercel.app/audio/${encodeURIComponent(rawFilename)}`,
+        `https://wacrm-khaki-three.vercel.app/audio/${encodeURIComponent(rawFilename.replace(/ /g, '_'))}`,
+      ];
+      for (const vUrl of vercelFallbacks) {
+        try {
+          const vRes = await fetch(vUrl, { signal: AbortSignal.timeout(10000) });
+          if (vRes.ok) {
+            const arrayBuf = await vRes.arrayBuffer();
+            if (arrayBuf.byteLength > 0) {
+              const b64 = Buffer.from(arrayBuf).toString('base64');
+              return { payload: `data:${defaultContentType};base64,${b64}`, isDataUrl: true };
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch (cdnErr) {
+    console.warn('[resolveMediaPayload] CDN fallback error:', cdnErr);
+  }
+
+  return { payload: mediaUrl, isDataUrl: false };
+}
+
+/**
  * Send media message via UazAPI.
  *
  * UazAPI uses the `/send/media` endpoint and requires the `file` field
@@ -366,41 +476,16 @@ export async function sendUazApiMedia(
 
   const mediaUrl = normalizeMediaUrl(opts.url);
 
-  // Resolve remote HTTP(S) media to complete Base64 data URLs whenever feasible.
-  // When UazAPI downloads remote URLs (like Supabase Storage), chunked transfer or
-  // network throttling frequently truncates the stream, causing corrupted 100x100
-  // thumbnails (gray boxes over pricing tables) or failed MMS3 uploads on WhatsApp.
-  // Pre-buffering in Node ensures 100% complete byte integrity, crisp thumbnails, and reliable delivery.
-  let mediaPayload = mediaUrl;
-  if (typeof mediaUrl === 'string' && (mediaUrl.startsWith('http://') || mediaUrl.startsWith('https://'))) {
-    try {
-      const fileRes = await fetch(mediaUrl, { signal: AbortSignal.timeout(15000) });
-      if (fileRes.ok) {
-        const arrayBuf = await fileRes.arrayBuffer();
-        if (arrayBuf.byteLength > 0 && arrayBuf.byteLength <= 15 * 1024 * 1024) {
-          const headerType = fileRes.headers.get('content-type');
-          let contentType = headerType;
-          if (!contentType || contentType === 'application/octet-stream') {
-            if (opts.type === 'audio' || opts.ptt) contentType = 'audio/ogg; codecs=opus';
-            else if (opts.type === 'video') contentType = 'video/mp4';
-            else if (opts.type === 'document') contentType = 'application/pdf';
-            else contentType = 'image/jpeg';
-          }
-          const b64 = Buffer.from(arrayBuf).toString('base64');
-          mediaPayload = `data:${contentType};base64,${b64}`;
-        }
-      }
-    } catch (fetchErr) {
-      console.warn('[sendUazApiMedia] Could not pre-fetch media buffer, falling back to raw URL:', fetchErr);
-    }
-  }
-
-  // UazAPI media endpoints accept 'file', 'url', 'media'.
-  // If mediaPayload is a data: base64 string, set it on 'file' and 'media',
-  // while keeping 'url' as the genuine HTTP URL fallback (or omitting if not an HTTP URL)
-  // to prevent UazAPI fetch(data:...) crashes.
-  const isDataUrl = typeof mediaPayload === 'string' && mediaPayload.startsWith('data:');
-  const isHttpUrl = typeof mediaUrl === 'string' && (mediaUrl.startsWith('http://') || mediaUrl.startsWith('https://'));
+  // Resolve remote HTTP(S) media to complete Base64 data URLs with multi-tier fallbacks:
+  // 1. Primary storage URL
+  // 2. Local public/audio filesystem
+  // 3. Vercel public static CDN
+  // When converted to Base64, UazAPI doesn't have to perform any external HTTP GET,
+  // preventing "error fetching file from URL" crashes entirely.
+  const { payload: mediaPayload, isDataUrl } = await resolveMediaPayload(mediaUrl, {
+    type: opts.type,
+    ptt: opts.ptt,
+  });
 
   const body: Record<string, unknown> = {
     number: formattedNumber,
@@ -409,12 +494,14 @@ export async function sendUazApiMedia(
     type: opts.type,
   };
 
-  if (isHttpUrl) {
+  // CRITICAL: When mediaPayload is already a complete Base64 data URI (isDataUrl),
+  // DO NOT pass `url` or `mediaUrl` to UazAPI!
+  // Passing `url` alongside `file` causes UazAPI to ignore base64 and attempt
+  // an external HTTP download, throwing "HTTP 400 Bad Request" if the remote URL fails.
+  // Only attach `url` if we could NOT resolve to Base64 and must rely on remote URL.
+  if (!isDataUrl && (mediaUrl.startsWith('http://') || mediaUrl.startsWith('https://'))) {
     body.url = mediaUrl;
     body.mediaUrl = mediaUrl;
-  } else if (!isDataUrl) {
-    body.url = mediaPayload;
-    body.mediaUrl = mediaPayload;
   }
 
   if (opts.type === 'image') {

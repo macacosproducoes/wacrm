@@ -12,7 +12,7 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import { createClient as createAdminClient } from '@supabase/supabase-js';
 import { isRealWhatsAppContact } from '@/lib/whatsapp/phone-utils';
-import { formatUazApiNumber } from '@/lib/whatsapp/uazapi-client';
+import { formatUazApiNumber, resolveMediaPayload } from '@/lib/whatsapp/uazapi-client';
 import { notifyClientPresence } from '@/lib/ai/auto-reply-debouncer';
 
 function getAdminClient() {
@@ -889,15 +889,28 @@ export async function sendBaileysMedia(
 
   let messageContent: Record<string, unknown> = {};
 
+  const resolved = await resolveMediaPayload(mediaUrl, {
+    type: mediaType,
+    ptt: mediaType === 'audio',
+  }).catch(() => ({ payload: mediaUrl, isDataUrl: false }));
+
+  const mediaSource = resolved.isDataUrl
+    ? Buffer.from(resolved.payload.split(',')[1], 'base64')
+    : { url: mediaUrl };
+
   if (mediaType === 'image') {
-    messageContent = { image: { url: mediaUrl }, caption: caption || undefined };
+    messageContent = { image: mediaSource, caption: caption || undefined };
   } else if (mediaType === 'video') {
-    messageContent = { video: { url: mediaUrl }, caption: caption || undefined };
+    messageContent = { video: mediaSource, caption: caption || undefined };
   } else if (mediaType === 'audio') {
-    messageContent = { audio: { url: mediaUrl }, ptt: true };
+    messageContent = {
+      audio: mediaSource,
+      ptt: true,
+      mimetype: 'audio/ogg; codecs=opus',
+    };
   } else {
     messageContent = {
-      document: { url: mediaUrl },
+      document: mediaSource,
       caption: caption || undefined,
       fileName: 'arquivo',
       mimetype: 'application/octet-stream',
