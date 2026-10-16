@@ -93,9 +93,10 @@ async function generateKie(args: ProviderArgs): Promise<ProviderResult> {
   // PATH 1: DeepSeek on Kie.ai (uses /openai/v1/responses endpoint)
   const isDeepSeek = cleanModel.toLowerCase().includes('deepseek')
   if (isDeepSeek) {
-    const input: Array<{ role: 'system' | 'user' | 'assistant'; content: Array<{ type: 'input_text' | 'output_text'; text: string }> }> = []
+    const input: Array<{ type: 'message'; role: 'system' | 'user' | 'assistant'; content: Array<{ type: 'input_text' | 'output_text'; text: string }> }> = []
     if (systemPrompt?.trim()) {
       input.push({
+        type: 'message',
         role: 'system',
         content: [{ type: 'input_text', text: systemPrompt.trim() }],
       })
@@ -103,11 +104,13 @@ async function generateKie(args: ProviderArgs): Promise<ProviderResult> {
     for (const m of trimmed) {
       if (m.role === 'assistant') {
         input.push({
+          type: 'message',
           role: 'assistant',
           content: [{ type: 'output_text', text: m.content }],
         })
       } else {
         input.push({
+          type: 'message',
           role: 'user',
           content: [{ type: 'input_text', text: m.content }],
         })

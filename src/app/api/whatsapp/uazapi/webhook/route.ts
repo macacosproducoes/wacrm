@@ -157,8 +157,7 @@ export async function POST(request: Request) {
     const hasAiTask = Boolean(
       processResult.shouldTriggerAi &&
       processResult.conversationId &&
-      processResult.accountId &&
-      processResult.userId
+      processResult.accountId
     );
     const hasWelcomeTask = Boolean(processResult.welcomeDispatchParams);
 
@@ -211,7 +210,7 @@ export async function POST(request: Request) {
               accountId: processResult.accountId!,
               conversationId: processResult.conversationId!,
               contactId: processResult.contactId!,
-              configOwnerUserId: processResult.userId!,
+              configOwnerUserId: processResult.userId || processResult.accountId!,
               messageId: processResult.messageId,
               debounceMs: 2500,
               immediate: followerOrderHandled,
