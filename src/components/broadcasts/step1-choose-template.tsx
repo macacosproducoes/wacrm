@@ -230,9 +230,11 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
       setEditMediaUrl(tpl.header_media_url || '');
 
       // Load up to 4 variations (Var 1 is main body, Vars 2, 3, 4 are alternative options)
-      const existingVars = Array.isArray(tpl.variations) && tpl.variations.length > 0
+      const existingVars: string[] = Array.isArray(tpl.variations) && tpl.variations.length > 0
         ? tpl.variations
-        : [tpl.body_text || ''];
+        : Array.isArray((tpl as any).sample_values?.variations) && (tpl as any).sample_values.variations.length > 0
+          ? (tpl as any).sample_values.variations
+          : [tpl.body_text || ''];
 
       const v0 = existingVars[0] || tpl.body_text || '';
       const v1 = existingVars[1] || '';
@@ -398,9 +400,11 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
             const isSelected = selectedTemplate?.id === template.id;
             const catColor = categoryColors[template.category] ?? categoryColors.Utility;
 
-            const tplVariations = Array.isArray(template.variations) && template.variations.length > 0
+            const tplVariations: string[] = Array.isArray(template.variations) && template.variations.length > 0
               ? template.variations
-              : [template.body_text];
+              : Array.isArray((template as any).sample_values?.variations) && (template as any).sample_values.variations.length > 0
+                ? (template as any).sample_values.variations
+                : [template.body_text];
 
             const previewIdx = previewVarMap[template.id] ?? 0;
             const currentPreviewText = tplVariations[previewIdx] || template.body_text;

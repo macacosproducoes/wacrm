@@ -381,6 +381,7 @@ export type TemplateButton =
 export interface TemplateSampleValues {
   body?: string[];
   header?: string[];
+  variations?: string[];
 }
 
 export interface MessageTemplate {

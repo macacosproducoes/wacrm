@@ -20,7 +20,17 @@ export async function GET() {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ templates: templates ?? [] });
+    const mappedTemplates = (templates ?? []).map((t: any) => ({
+      ...t,
+      variations:
+        Array.isArray(t.variations) && t.variations.length > 0
+          ? t.variations
+          : Array.isArray(t.sample_values?.variations) && t.sample_values.variations.length > 0
+            ? t.sample_values.variations
+            : [t.body_text],
+    }));
+
+    return NextResponse.json({ templates: mappedTemplates });
   } catch (err) {
     return toErrorResponse(err);
   }
@@ -97,6 +107,11 @@ export async function POST(request: Request) {
       headerType = inputHeaderType;
     }
 
+    // Variations are safely stored in sample_values (JSONB) to prevent schema cache errors
+    const sampleValuesData = {
+      variations: cleanedVariations,
+    };
+
     let savedTemplate: MessageTemplate | null = null;
 
     // 1. If an existing database UUID was passed, update it
@@ -115,7 +130,7 @@ export async function POST(request: Request) {
           category: validCategory,
           language,
           body_text: body_text.trim(),
-          variations: cleanedVariations,
+          sample_values: sampleValuesData,
           header_type: headerType,
           header_content: header_content?.trim() || null,
           header_media_url: effectiveMediaUrl,
@@ -128,7 +143,10 @@ export async function POST(request: Request) {
         .maybeSingle();
 
       if (!updateErr && updated) {
-        savedTemplate = updated as MessageTemplate;
+        savedTemplate = {
+          ...(updated as MessageTemplate),
+          variations: cleanedVariations,
+        };
       }
     }
 
@@ -148,7 +166,7 @@ export async function POST(request: Request) {
             category: validCategory,
             language,
             body_text: body_text.trim(),
-            variations: cleanedVariations,
+            sample_values: sampleValuesData,
             header_type: headerType,
             header_content: header_content?.trim() || null,
             header_media_url: effectiveMediaUrl,
@@ -161,7 +179,10 @@ export async function POST(request: Request) {
           .single();
 
         if (!updateErr && updated) {
-          savedTemplate = updated as MessageTemplate;
+          savedTemplate = {
+            ...(updated as MessageTemplate),
+            variations: cleanedVariations,
+          };
         }
       }
     }
@@ -177,7 +198,7 @@ export async function POST(request: Request) {
           category: validCategory,
           language,
           body_text: body_text.trim(),
-          variations: cleanedVariations,
+          sample_values: sampleValuesData,
           header_type: headerType,
           header_content: header_content?.trim() || null,
           header_media_url: effectiveMediaUrl,
@@ -192,7 +213,10 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: insertErr.message }, { status: 500 });
       }
 
-      savedTemplate = inserted as MessageTemplate;
+      savedTemplate = {
+        ...(inserted as MessageTemplate),
+        variations: cleanedVariations,
+      };
     }
 
     return NextResponse.json({

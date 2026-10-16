@@ -673,11 +673,15 @@ export async function processBroadcastQueueTick(
           if (templateRow?.body_text && templateRow.body_text.trim()) {
             allVariations.push(templateRow.body_text.trim());
           }
-          if (Array.isArray(templateRow?.variations)) {
-            for (const v of templateRow.variations) {
-              if (typeof v === 'string' && v.trim() && !allVariations.includes(v.trim())) {
-                allVariations.push(v.trim());
-              }
+          const rawTemplateVars = Array.isArray(templateRow?.variations) && templateRow.variations.length > 0
+            ? templateRow.variations
+            : Array.isArray((templateRow as any)?.sample_values?.variations)
+              ? (templateRow as any).sample_values.variations
+              : [];
+
+          for (const v of rawTemplateVars) {
+            if (typeof v === 'string' && v.trim() && !allVariations.includes(v.trim())) {
+              allVariations.push(v.trim());
             }
           }
           const variationsList = campaignVars?._variations;
