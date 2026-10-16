@@ -29,6 +29,11 @@ import {
   Info,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { useAuth } from '@/hooks/use-auth';
+import {
+  AudienceConfig,
+  resolveBroadcastContacts,
+} from '@/lib/broadcasts/audience-resolver';
 
 export interface CooldownSettings {
   cooldownIntervalSeconds: number;
@@ -49,12 +54,6 @@ export const DEFAULT_COOLDOWN_SETTINGS: CooldownSettings = {
   windowEndTime: '20:00',
   timezone: 'America/Sao_Paulo',
 };
-
-interface AudienceConfig {
-  type: string;
-  tagIds?: string[];
-  csvContacts?: { phone: string; name?: string }[];
-}
 
 interface Step4Props {
   name: string;
@@ -95,6 +94,7 @@ export function Step4ScheduleSend({
   progress,
 }: Step4Props) {
   const t = useTranslations('Broadcasts.wizard');
+  const { accountId } = useAuth();
   const [showConfirm, setShowConfirm] = useState(false);
   const [estimatedReach, setEstimatedReach] = useState<number>(0);
   const [loadingReach, setLoadingReach] = useState(true);
@@ -114,7 +114,7 @@ export function Step4ScheduleSend({
     }
   }
 
-    const [tagNames, setTagNames] = useState<string[]>([]);
+  const [tagNames, setTagNames] = useState<string[]>([]);
 
   useEffect(() => {
     if (audience.type === 'tags' && audience.tagIds && audience.tagIds.length > 0) {
@@ -137,31 +137,26 @@ export function Step4ScheduleSend({
       try {
         const supabase = createClient();
 
-        if (audience.type === 'all') {
-          const { count } = await supabase
-            .from('contacts')
-            .select('*', { count: 'exact', head: true });
-          setEstimatedReach(count ?? 0);
-        } else if (audience.type === 'tags' && audience.tagIds && audience.tagIds.length > 0) {
-          const { data: contactTags } = await supabase
-            .from('contact_tags')
-            .select('contact_id')
-            .in('tag_id', audience.tagIds);
-
-          const uniqueIds = new Set((contactTags ?? []).map((ct) => ct.contact_id));
-          setEstimatedReach(uniqueIds.size);
-        } else if (audience.type === 'csv' && audience.csvContacts) {
+        if (audience.type === 'csv' && audience.csvContacts) {
           setEstimatedReach(audience.csvContacts.length);
         } else {
-          setEstimatedReach(0);
+          const contacts = await resolveBroadcastContacts(
+            supabase,
+            audience,
+            accountId
+          );
+          setEstimatedReach(contacts.length);
         }
+      } catch (err) {
+        console.error('Error calculating reach in step4:', err);
+        setEstimatedReach(0);
       } finally {
         setLoadingReach(false);
       }
     }
 
     calculateReach();
-  }, [audience]);
+  }, [audience, accountId]);
 
   // Calculate completion estimate
   const etaCalculation = useMemo(() => {
@@ -196,11 +191,17 @@ export function Step4ScheduleSend({
   const audienceLabel =
     audience.type === 'all'
       ? t('scheduleSend.audienceAll')
-      : audience.type === 'tags'
-        ? t('scheduleSend.audienceTags')
-        : audience.type === 'csv'
-          ? t('scheduleSend.audienceCsv')
-          : t('scheduleSend.audienceField');
+      : audience.type === 'unpaid'
+        ? 'Não Finalizaram / Não Pagaram'
+        : audience.type === 'new_24h'
+          ? 'Novos Leads (Últimas 24h)'
+          : audience.type === 'new_24h_unpaid'
+            ? 'Novos (24h) Que Não Pagaram'
+            : audience.type === 'tags'
+              ? t('scheduleSend.audienceTags')
+              : audience.type === 'csv'
+                ? t('scheduleSend.audienceCsv')
+                : t('scheduleSend.audienceField');
 
   return (
     <div className="space-y-6">
@@ -235,7 +236,19 @@ export function Step4ScheduleSend({
           <div>
             <p className="text-xs text-muted-foreground">{t('scheduleSend.audience')}</p>
             <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-              {audience.type === 'tags' && tagNames.length > 0 ? (
+              {audience.type === 'unpaid' ? (
+                <span className="rounded-md bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 text-xs font-bold text-amber-300">
+                  🛒 Não Finalizaram / Não Pagaram
+                </span>
+              ) : audience.type === 'new_24h' ? (
+                <span className="rounded-md bg-blue-500/20 border border-blue-500/30 px-2 py-0.5 text-xs font-bold text-blue-300">
+                  ⚡ Novos Leads (Últimas 24h)
+                </span>
+              ) : audience.type === 'new_24h_unpaid' ? (
+                <span className="rounded-md bg-emerald-500/20 border border-emerald-500/30 px-2 py-0.5 text-xs font-bold text-emerald-300">
+                  🎯 Novos (24h) Que Não Pagaram
+                </span>
+              ) : audience.type === 'tags' && tagNames.length > 0 ? (
                 tagNames.map((tName) => (
                   <span
                     key={tName}
@@ -245,11 +258,16 @@ export function Step4ScheduleSend({
                   </span>
                 ))
               ) : audience.type === 'all' ? (
-                <span className="rounded-md bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 text-xs font-bold text-amber-300">
-                  ⚠️ Todos os Contatos
+                <span className="rounded-md bg-purple-500/20 border border-purple-500/30 px-2 py-0.5 text-xs font-bold text-purple-300">
+                  👥 Toda a Base
                 </span>
               ) : (
                 <p className="font-medium text-foreground">{audienceLabel}</p>
+              )}
+              {audience.excludeTagIds && audience.excludeTagIds.length > 0 && (
+                <span className="rounded-md bg-red-500/20 border border-red-500/30 px-1.5 py-0.5 text-[10px] font-bold text-red-300">
+                  🚫 {audience.excludeTagIds.length} excluída(s)
+                </span>
               )}
             </div>
           </div>
@@ -261,7 +279,7 @@ export function Step4ScheduleSend({
               ) : (
                 <>
                   <Users className="h-3.5 w-3.5 text-primary" />
-                  <p className="font-medium text-foreground">{estimatedReach.toLocaleString()}</p>
+                  <p className="font-medium text-foreground">{estimatedReach.toLocaleString()} contatos</p>
                 </>
               )}
             </div>
@@ -350,14 +368,14 @@ export function Step4ScheduleSend({
               />
               <span className="absolute right-3 top-2.5 text-xs text-muted-foreground">msgs</span>
             </div>
-            <p className="text-[11px] text-muted-foreground">Quantidade disparada antes da pausa</p>
+            <p className="text-[11px] text-muted-foreground">Quantidade antes de uma pausa maior</p>
           </div>
 
-          {/* Tempo de pausa entre lotes */}
+          {/* Pausa entre lotes */}
           <div className="space-y-1.5">
             <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
               <Clock className="h-3.5 w-3.5 text-primary" />
-              Pausa entre os lotes
+              Pausa entre lotes
             </label>
             <div className="relative">
               <Input
@@ -375,14 +393,14 @@ export function Step4ScheduleSend({
               />
               <span className="absolute right-3 top-2.5 text-xs text-muted-foreground">seg</span>
             </div>
-            <p className="text-[11px] text-muted-foreground">Espera programada antes do próximo lote</p>
+            <p className="text-[11px] text-muted-foreground">Descanso para proteger o número</p>
           </div>
 
-          {/* Limite diário de envios */}
+          {/* Limite diário */}
           <div className="space-y-1.5">
             <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
               <ShieldCheck className="h-3.5 w-3.5 text-primary" />
-              Limite diário da conta
+              Limite diário
             </label>
             <div className="relative">
               <Input
@@ -395,14 +413,14 @@ export function Step4ScheduleSend({
                 }
                 className="border-border bg-card pr-12 text-sm"
               />
-              <span className="absolute right-3 top-2.5 text-xs text-muted-foreground">envios</span>
+              <span className="absolute right-3 top-2.5 text-xs text-muted-foreground">msgs/dia</span>
             </div>
-            <p className="text-[11px] text-muted-foreground">Teto máximo por dia para esta conta</p>
+            <p className="text-[11px] text-muted-foreground">Teto máximo de disparos por dia</p>
           </div>
         </div>
 
-        {/* Janela de Horário e Fuso */}
-        <div className="grid grid-cols-1 gap-4 pt-2 sm:grid-cols-3 border-t border-border/40">
+        {/* Janela de envio */}
+        <div className="grid grid-cols-1 gap-4 border-t border-border/40 pt-3 sm:grid-cols-3">
           <div className="space-y-1.5">
             <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
               <Calendar className="h-3.5 w-3.5 text-primary" />
@@ -534,6 +552,7 @@ export function Step4ScheduleSend({
                     <span className="font-semibold text-foreground">{template.name}</span>.
                   </p>
                   <div className="rounded-lg border border-border bg-muted/50 p-3 text-xs text-foreground space-y-1">
+                    <p><strong>Público:</strong> {audienceLabel}</p>
                     <p><strong>Cooldown:</strong> {settings.cooldownIntervalSeconds}s entre mensagens</p>
                     <p><strong>Lote:</strong> {settings.batchSize} msgs (pausa de {settings.batchPauseSeconds}s)</p>
                     <p><strong>Janela:</strong> {settings.windowStartTime} às {settings.windowEndTime} ({settings.timezone})</p>

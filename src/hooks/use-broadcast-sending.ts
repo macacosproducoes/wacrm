@@ -10,6 +10,13 @@ import {
 import { normalizeKey } from '@/lib/contacts/dedupe';
 import { Contact, MessageTemplate } from '@/types';
 import type { CooldownSettings } from '@/components/broadcasts/step4-schedule-send';
+import {
+  resolveBroadcastContacts,
+  type AudienceType,
+  type AudienceConfig,
+} from '@/lib/broadcasts/audience-resolver';
+
+export type { AudienceType, AudienceConfig };
 
 export type CustomFieldOperator = 'is' | 'is_not' | 'contains';
 
@@ -17,15 +24,6 @@ export interface CustomFieldFilter {
   fieldId: string;
   operator: CustomFieldOperator;
   value: string;
-}
-
-export interface AudienceConfig {
-  type: 'all' | 'tags' | 'custom_field' | 'csv';
-  tagIds?: string[];
-  customField?: CustomFieldFilter;
-  csvContacts?: { phone: string; name?: string }[];
-  /** Contacts carrying any of these tags are subtracted from the result. */
-  excludeTagIds?: string[];
 }
 
 /**
@@ -167,65 +165,11 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
   async function resolveAudience(audience: AudienceConfig): Promise<Contact[]> {
     const supabase = createClient();
 
-    let contacts: Contact[] = [];
-
-    if (audience.type === 'all') {
-      let q = supabase.from('contacts').select('*');
-      if (accountId) q = q.eq('account_id', accountId);
-      const { data, error } = await q;
-      if (error) throw new Error(`Failed to fetch contacts: ${error.message}`);
-      contacts = data ?? [];
-    } else if (
-      audience.type === 'tags' &&
-      audience.tagIds &&
-      audience.tagIds.length > 0
-    ) {
-      const { data: contactTags, error: tagError } = await supabase
-        .from('contact_tags')
-        .select('contact_id')
-        .in('tag_id', audience.tagIds);
-
-      if (tagError)
-        throw new Error(`Failed to fetch contact tags: ${tagError.message}`);
-
-      if (contactTags && contactTags.length > 0) {
-        const uniqueContactIds = [
-          ...new Set(contactTags.map((ct) => ct.contact_id)),
-        ];
-
-        contacts = [];
-        const CHUNK_SIZE = 100;
-        for (let i = 0; i < uniqueContactIds.length; i += CHUNK_SIZE) {
-          const chunk = uniqueContactIds.slice(i, i + CHUNK_SIZE);
-          let q = supabase
-            .from('contacts')
-            .select('*')
-            .in('id', chunk);
-          if (accountId) q = q.eq('account_id', accountId);
-          const { data, error } = await q;
-
-          if (error) throw new Error(`Failed to fetch contacts: ${error.message}`);
-          if (data) contacts.push(...data);
-        }
-      }
-    } else if (audience.type === 'custom_field' && audience.customField) {
-      contacts = await resolveCustomFieldAudience(supabase, audience.customField);
-    } else if (audience.type === 'csv' && audience.csvContacts) {
-      contacts = await upsertCsvContacts(supabase, audience.csvContacts);
+    if (audience.type === 'csv' && audience.csvContacts) {
+      return await upsertCsvContacts(supabase, audience.csvContacts);
     }
 
-    // Apply exclude tags (works across all contact-derived audience
-    // types). CSV contacts are synthetic so exclusion doesn't apply.
-    if (audience.excludeTagIds && audience.excludeTagIds.length > 0) {
-      const { data: excludeRows } = await supabase
-        .from('contact_tags')
-        .select('contact_id')
-        .in('tag_id', audience.excludeTagIds);
-      const excludedIds = new Set((excludeRows ?? []).map((r) => r.contact_id));
-      contacts = contacts.filter((c) => !excludedIds.has(c.id));
-    }
-
-    return contacts;
+    return await resolveBroadcastContacts(supabase, audience, accountId);
   }
 
   /**
