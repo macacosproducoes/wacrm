@@ -2,7 +2,28 @@ import { NextResponse } from 'next/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { processFirstPaymentAutomation } from '@/lib/automations/first-payment-engine'
 import { notifyPaymentInCrm } from '@/lib/notifications/payment-notification'
-import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus'
+import { checkPaymentEligibility } from '@/lib/payments/payment-eligibility'
+
+// In-memory cache to prevent duplicate processing from burst webhooks (TTL: 15 minutes)
+const processedBuckpayPayments = new Map<string, number>()
+
+function isDuplicate(key: string): boolean {
+  const now = Date.now()
+  const ts = processedBuckpayPayments.get(key)
+  if (ts && now - ts < 15 * 60 * 1000) {
+    return true
+  }
+  if (processedBuckpayPayments.size > 500) {
+    for (const [k, t] of processedBuckpayPayments.entries()) {
+      if (now - t >= 15 * 60 * 1000) processedBuckpayPayments.delete(k)
+    }
+  }
+  return false
+}
+
+function markProcessed(key: string) {
+  processedBuckpayPayments.set(key, Date.now())
+}
 
 function supabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -32,10 +53,91 @@ export async function POST(request: Request) {
       external_id: externalId,
       status: rawStatus,
       amount,
+      buyer: data?.buyer || body?.buyer,
     })
 
-    // 1. Audit log into webhook_events
+    // 1. FAST DEDUPLICATION: check in-memory cache
+    if (isPaid) {
+      if (isDuplicate(transactionId) || (externalId && isDuplicate(externalId))) {
+        console.log(`[BuckPay Webhook] Ignorando webhook repetido em memória para transação ${transactionId}`)
+        return NextResponse.json({ received: true, deduplicated: true, status: 'already_processed' }, { status: 200 })
+      }
+    }
+
     const admin = supabaseAdmin()
+
+    // 2. DATABASE DEDUPLICATION: check if this payment was already processed as COMPLETED
+    if (isPaid && admin) {
+      try {
+        const { data: existingCompleted } = await admin
+          .from('webhook_events')
+          .select('id')
+          .eq('provider', 'buckpay')
+          .eq('processing_status', 'COMPLETED')
+          .or(`external_event_id.eq.${externalId},payload->data->>id.eq.${transactionId}`)
+          .limit(1)
+          .maybeSingle()
+
+        if (existingCompleted) {
+          console.log(`[BuckPay Webhook] Transação ${transactionId} já completada anteriormente no banco. Ignorando duplicação.`)
+          markProcessed(transactionId)
+          if (externalId) markProcessed(externalId)
+          return NextResponse.json({ received: true, deduplicated: true, status: 'already_completed' }, { status: 200 })
+        }
+      } catch (checkErr) {
+        console.warn('[BuckPay Webhook] Aviso ao checar duplicidade:', checkErr)
+      }
+    }
+
+    // 3. PRODUCT & LEAD ELIGIBILITY FILTER
+    // Rule: Only SMM / Edgar products and existing CRM leads trigger audios, notifications, and contacts.
+    // Third-party products (e.g. Close Friends, other checkouts) MUST NOT trigger audio or CRM notifications!
+    const eligibility = await checkPaymentEligibility(admin, {
+      paymentId: transactionId,
+      externalId,
+      amount,
+      buyer: data?.buyer || body?.buyer,
+      offer: data?.offer || body?.offer,
+      product: data?.product || body?.product,
+      rawPayload: body,
+      accountId: 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f',
+    })
+
+    if (!eligibility.isEligible) {
+      console.log(`[BuckPay Webhook] 🛑 Produto ignorado pelo CRM: ${eligibility.reason}`, {
+        transactionId,
+        externalId,
+        buyer: data?.buyer || body?.buyer,
+      })
+
+      // Audit log into webhook_events as SKIPPED
+      if (admin) {
+        try {
+          await admin.from('webhook_events').insert({
+            provider: 'buckpay',
+            event_type: event || 'payment.status',
+            external_event_id: externalId,
+            payload: body,
+            processing_status: 'SKIPPED_EXTERNAL_PRODUCT',
+            trace_id: `buckpay_skip_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          })
+        } catch {}
+      }
+
+      return NextResponse.json({
+        received: true,
+        skipped: true,
+        reason: eligibility.reason,
+      }, { status: 200 })
+    }
+
+    // Mark as processed in-memory immediately to block concurrent webhooks
+    if (isPaid) {
+      markProcessed(transactionId)
+      if (externalId) markProcessed(externalId)
+    }
+
+    // 4. Audit log into webhook_events
     if (admin) {
       try {
         await admin.from('webhook_events').insert({
@@ -51,15 +153,17 @@ export async function POST(request: Request) {
       }
     }
 
+    // 5. Process Payment Automation and CRM Notification
     if (isPaid) {
-      console.log(`🎉 [BuckPay Webhook] Pagamento confirmado! Transação ID: ${transactionId}`)
-      
+      console.log(`🎉 [BuckPay Webhook] Pagamento confirmado (SMM/Edgar)! Transação ID: ${transactionId} — Motivo: ${eligibility.reason}`)
+
       const automationResult = await processFirstPaymentAutomation({
         payment_id: transactionId,
         external_id: externalId,
+        contact_id: eligibility.contactId,
         status: 'paid',
         amount,
-        buyer: data?.buyer,
+        buyer: data?.buyer || body?.buyer,
         raw_payload: body,
       })
 
@@ -68,36 +172,18 @@ export async function POST(request: Request) {
       if (admin) {
         await notifyPaymentInCrm(admin, {
           accountId: 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f',
-          contactId: automationResult?.leadId,
+          contactId: automationResult?.leadId || eligibility.contactId,
           leadName: data?.buyer?.name || body?.buyer?.name,
           amount,
           paymentId: transactionId,
           externalId,
         })
       }
-
-      // Emit realtime inbox event for instant UI update
-      whatsappBus.emitInboxEvent({
-        accountId: 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f',
-        eventType: 'UPDATE',
-        conversation: {
-          last_message_text: `🎉 PIX Compensado: R$ ${amount?.toFixed(2) || '0,00'}`,
-          last_message_at: new Date().toISOString(),
-        },
-        message: {
-          type: 'payment_received',
-          payment_id: transactionId,
-          external_id: externalId,
-          amount,
-          buyer: data?.buyer,
-          status: 'paid',
-        },
-      })
     } else if (event === 'transaction.created') {
       console.log(`ℹ️ [BuckPay Webhook] Transação criada: ${transactionId}`)
     }
 
-    return NextResponse.json({ received: true, event, isPaid }, { status: 200 })
+    return NextResponse.json({ received: true, event, isPaid, eligible: true }, { status: 200 })
   } catch (err: any) {
     console.error('[BuckPay Webhook Error]:', err)
     return NextResponse.json({ error: 'Formato de webhook inválido' }, { status: 400 })

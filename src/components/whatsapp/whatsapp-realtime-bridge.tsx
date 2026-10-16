@@ -38,6 +38,40 @@ export function WhatsAppRealtimeBridge() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
+    // Tracker to prevent double-firing between SSE event and Supabase postgres_changes
+    const handledCelebrations = new Set<string>();
+    let lastSoundPlayedAt = 0;
+
+    const triggerPaymentCelebration = (
+      uniqueId: string | undefined,
+      title: string,
+      description: string
+    ) => {
+      const now = Date.now();
+      // If we already handled this specific payment/notification within the last 60s, skip
+      if (uniqueId && handledCelebrations.has(uniqueId)) {
+        return;
+      }
+
+      // Enforce minimum 4 seconds gap between sound plays to avoid acoustic echo/repetition
+      if (now - lastSoundPlayedAt < 4000) {
+        return;
+      }
+
+      if (uniqueId) {
+        handledCelebrations.add(uniqueId);
+        setTimeout(() => handledCelebrations.delete(uniqueId), 60000);
+      }
+      lastSoundPlayedAt = now;
+
+      toast.success(title, {
+        description,
+        duration: 8000,
+      });
+
+      playPaymentNotificationSound();
+    };
+
     const handleRealtime = (e: any) => {
       const detail = e.detail;
       if (!detail) return;
@@ -49,17 +83,16 @@ export function WhatsAppRealtimeBridge() {
         (msg?.status === 'paid' && (msg?.external_id || msg?.payment_id));
 
       if (isPayment) {
+        const paymentKey = String(msg?.payment_id || msg?.external_id || detail.conversationId || 'pix_' + Date.now());
         const amountNum = typeof msg?.amount === 'number' ? msg.amount : Number(msg?.amount || 0);
         const amountStr = amountNum > 0 ? `R$ ${amountNum.toFixed(2).replace('.', ',')}` : 'PIX';
         const leadName = msg?.buyer?.name || msg?.lead_name || msg?.leadName || 'Cliente';
 
-        toast.success(`🎉 PIX Compensado! Pagamento de ${amountStr} confirmado!`, {
-          description: `Lead: ${leadName} — Áudio de confirmação liberado automaticamente!`,
-          duration: 8000,
-        });
-
-        // Reproduzir áudio dinheiro-caindo-na-conta.mp3 no painel
-        playPaymentNotificationSound();
+        triggerPaymentCelebration(
+          paymentKey,
+          `🎉 PIX Compensado! Pagamento de ${amountStr} confirmado!`,
+          `Lead: ${leadName} — Áudio de confirmação liberado automaticamente!`
+        );
       }
     };
 
@@ -77,11 +110,12 @@ export function WhatsAppRealtimeBridge() {
           const title = String(row?.title || '').toLowerCase();
           const body = String(row?.body || '').toLowerCase();
           if (title.includes('pagamento') || body.includes('pagamento') || body.includes('recebeu pagamento')) {
-            toast.success(row.title || '🎉 Pagamento Recebido!', {
-              description: row.body || 'Um novo pagamento foi confirmado no sistema.',
-              duration: 8000,
-            });
-            playPaymentNotificationSound();
+            const notifKey = String(row?.id || row?.contact_id || 'notif_' + Date.now());
+            triggerPaymentCelebration(
+              notifKey,
+              row.title || '🎉 Pagamento Recebido!',
+              row.body || 'Um novo pagamento foi confirmado no sistema.'
+            );
           }
         }
       )

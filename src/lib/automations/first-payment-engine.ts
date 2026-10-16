@@ -21,6 +21,7 @@ import {
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { whatsappBus } from '@/lib/whatsapp/whatsapp-bus';
 import { notifyPaymentInCrm } from '@/lib/notifications/payment-notification';
+import { checkPaymentEligibility } from '@/lib/payments/payment-eligibility';
 
 // In-memory concurrency locks to prevent race conditions during simultaneous payment webhooks
 const inFlightPaymentLocks = new Set<string>();
@@ -360,8 +361,28 @@ export async function processFirstPaymentAutomation(
     };
   }
 
+  // 1b. Check Eligibility: Only SMM / Edgar products and existing CRM leads
+  const eligibility = await checkPaymentEligibility(admin, {
+    paymentId: payment_id,
+    externalId: external_id,
+    amount,
+    buyer,
+    rawPayload: input.raw_payload,
+    accountId: input.account_id || 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f',
+  });
+
+  if (!eligibility.isEligible && !force_retry) {
+    console.log(`[first-payment-engine] Skipping payment ${payment_id}: not eligible for CRM (${eligibility.reason})`);
+    return {
+      success: true,
+      dispatched: false,
+      skipped: true,
+      reason: 'ineligible_product_or_lead',
+    };
+  }
+
   // 2. Identify stable Lead ID (contact_id)
-  let contactId: string | null = input.contact_id || null;
+  let contactId: string | null = input.contact_id || eligibility.contactId || null;
   let accountId: string = input.account_id || 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f';
   let contactPhone = buyer?.phone || '';
   let contactName = buyer?.name || 'Cliente';
@@ -429,12 +450,33 @@ export async function processFirstPaymentAutomation(
     }
   }
 
+  // Only create a new contact if this is genuinely an SMM / Edgar product AND has a valid mobile phone
   if (!contactId) {
-    try {
-      const rawDigits = contactPhone ? contactPhone.replace(/\D/g, "") : "";
-      const cleanDigits = rawDigits ? (rawDigits.startsWith("55") ? rawDigits : "55" + rawDigits) : "55119" + Date.now().toString().slice(-8);
-      const finalPhone = contactPhone || cleanDigits;
+    if (!eligibility.isSmmOrEdgarProduct && !force_retry) {
+      console.log(`[first-payment-engine] Skipping contact creation for payment ${payment_id}: not an SMM/Edgar product.`);
+      return {
+        success: true,
+        dispatched: false,
+        skipped: true,
+        reason: "not_smm_or_edgar_product",
+      };
+    }
 
+    const rawDigits = contactPhone ? contactPhone.replace(/\D/g, "") : "";
+    if (rawDigits.length < 10) {
+      console.log(`[first-payment-engine] Skipping audio dispatch for payment ${payment_id}: buyer does not have a valid WhatsApp phone.`);
+      return {
+        success: true,
+        dispatched: false,
+        skipped: true,
+        reason: "missing_valid_phone_number",
+      };
+    }
+
+    const cleanDigits = rawDigits.startsWith("55") ? rawDigits : "55" + rawDigits;
+    const finalPhone = cleanDigits;
+
+    try {
       const { data: acc } = await admin
         .from('accounts')
         .select('id, owner_id')
@@ -449,7 +491,7 @@ export async function processFirstPaymentAutomation(
           user_id: userId,
           name: contactName,
           phone: finalPhone,
-                    email: buyer?.email || null,
+          email: buyer?.email || null,
         })
         .select('id, account_id, phone, name')
         .single();

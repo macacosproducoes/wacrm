@@ -34,54 +34,48 @@ export async function GET(request: Request) {
       const amount = typeof result.data.total_amount === 'number' ? result.data.total_amount / 100 : undefined
       const admin = supabaseAdmin()
 
-      processFirstPaymentAutomation({
-        payment_id: result.data.id,
-        external_id,
-        status: 'paid',
-        amount,
-        raw_payload: result.data as unknown as Record<string, unknown>,
-      }).catch((err) =>
-        console.error('[API /api/smm/status] Erro assíncrono na automação de primeiro pagamento:', err)
-      )
-
       if (admin) {
-        notifyPaymentInCrm(admin, {
-          accountId: 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f',
-          amount,
-          paymentId: result.data.id,
-          externalId: external_id,
-        }).catch((err) => console.warn('[smm/status] Erro notificando CRM:', err))
-
-        // Update webhook_events record if exists
-        admin
+        // Check if already processed by webhook to avoid duplicate executions
+        const { data: existingEvent } = await admin
           .from('webhook_events')
-          .update({
-            processing_status: 'COMPLETED',
-            payload: {
-              ...(result.data as any),
-              status: 'paid',
-              confirmed_at: new Date().toISOString(),
-            },
-          })
+          .select('id, processing_status')
           .eq('external_event_id', external_id)
-          .then(() => {})
-      }
+          .maybeSingle()
 
-      whatsappBus.emitInboxEvent({
-        accountId: 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f',
-        eventType: 'UPDATE',
-        conversation: {
-          last_message_text: `🎉 PIX Compensado: R$ ${amount?.toFixed(2) || '0,00'}`,
-          last_message_at: new Date().toISOString(),
-        },
-        message: {
-          type: 'payment_received',
-          payment_id: result.data.id,
-          external_id,
-          amount,
-          status: 'paid',
-        },
-      })
+        if (existingEvent?.processing_status !== 'COMPLETED') {
+          // Mark as COMPLETED immediately
+          await admin
+            .from('webhook_events')
+            .update({
+              processing_status: 'COMPLETED',
+              payload: {
+                ...(result.data as any),
+                status: 'paid',
+                confirmed_at: new Date().toISOString(),
+              },
+            })
+            .eq('external_event_id', external_id)
+
+          processFirstPaymentAutomation({
+            payment_id: result.data.id,
+            external_id,
+            status: 'paid',
+            amount,
+            buyer: result.data.buyer,
+            raw_payload: result.data as unknown as Record<string, unknown>,
+          }).catch((err) =>
+            console.error('[API /api/smm/status] Erro assíncrono na automação de primeiro pagamento:', err)
+          )
+
+          notifyPaymentInCrm(admin, {
+            accountId: 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f',
+            amount,
+            leadName: result.data.buyer?.name,
+            paymentId: result.data.id,
+            externalId: external_id,
+          }).catch((err) => console.warn('[smm/status] Erro notificando CRM:', err))
+        }
+      }
     }
 
     return NextResponse.json({

@@ -16,6 +16,7 @@ import { processDueFollowUps } from '@/lib/automations/follow-up-engine';
 import { getBuckPayTransaction } from '@/lib/buckpay';
 import { processFirstPaymentAutomation } from '@/lib/automations/first-payment-engine';
 import { notifyPaymentInCrm } from '@/lib/notifications/payment-notification';
+import { checkPaymentEligibility } from '@/lib/payments/payment-eligibility';
 
 export const dynamic = 'force-dynamic';
 
@@ -527,25 +528,26 @@ async function reconcilePendingPayments(admin: any, accountId: string) {
       if (event.provider === 'buckpay') {
         const result = await getBuckPayTransaction(extId);
         if (result?.data?.status === 'paid') {
-          const amount = typeof result.data.total_amount === 'number' ? result.data.total_amount / 100 : undefined;
-
-          await processFirstPaymentAutomation({
-            payment_id: result.data.id,
-            external_id: extId,
-            status: 'paid',
-            amount,
-            buyer: result.data.buyer,
-            raw_payload: result.data as unknown as Record<string, unknown>,
-          });
-
-          await notifyPaymentInCrm(admin, {
-            accountId,
-            leadName: result.data.buyer?.name,
-            amount,
+          // Check eligibility first: only SMM/Edgar products and CRM clients
+          const eligibility = await checkPaymentEligibility(admin, {
             paymentId: result.data.id,
             externalId: extId,
+            buyer: result.data.buyer,
+            offer: (result.data as any).offer,
+            product: (result.data as any).product,
+            rawPayload: result.data as unknown as Record<string, unknown>,
+            accountId,
           });
 
+          if (!eligibility.isEligible) {
+            await admin
+              .from('webhook_events')
+              .update({ processing_status: 'SKIPPED_EXTERNAL_PRODUCT' })
+              .eq('id', event.id);
+            continue;
+          }
+
+          // Mark as COMPLETED before triggering to prevent concurrent race conditions
           await admin
             .from('webhook_events')
             .update({
@@ -557,6 +559,27 @@ async function reconcilePendingPayments(admin: any, accountId: string) {
               },
             })
             .eq('id', event.id);
+
+          const amount = typeof result.data.total_amount === 'number' ? result.data.total_amount / 100 : undefined;
+
+          await processFirstPaymentAutomation({
+            payment_id: result.data.id,
+            external_id: extId,
+            contact_id: eligibility.contactId,
+            status: 'paid',
+            amount,
+            buyer: result.data.buyer,
+            raw_payload: result.data as unknown as Record<string, unknown>,
+          });
+
+          await notifyPaymentInCrm(admin, {
+            accountId,
+            contactId: eligibility.contactId,
+            leadName: result.data.buyer?.name,
+            amount,
+            paymentId: result.data.id,
+            externalId: extId,
+          });
         }
       }
     }

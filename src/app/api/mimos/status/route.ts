@@ -51,20 +51,27 @@ export async function GET(request: Request) {
         const isPaid = rawStatus === 'PAID' || rawStatus.toLowerCase() === 'paid' || match.processing_status === 'COMPLETED'
 
         if (isPaid) {
-          processFirstPaymentAutomation({
-            payment_id: String(p.id || external_id),
-            external_id,
-            status: 'paid',
-            amount: typeof p.value === 'number' ? p.value : typeof p.amount === 'number' ? p.amount : undefined,
-            buyer: {
-              name: p.name || p.metadata?.donor_name,
-              email: p.email,
-              phone: p.phone,
-            },
-            raw_payload: (match.payload || {}) as Record<string, unknown>,
-          }).catch((err) =>
-            console.error('[API /api/mimos/status] Erro na automação de primeiro pagamento:', err)
-          );
+          if (match.processing_status !== 'COMPLETED') {
+            await admin
+              .from('webhook_events')
+              .update({ processing_status: 'COMPLETED' })
+              .eq('id', match.id)
+
+            processFirstPaymentAutomation({
+              payment_id: String(p.id || external_id),
+              external_id,
+              status: 'paid',
+              amount: typeof p.value === 'number' ? p.value : typeof p.amount === 'number' ? p.amount : undefined,
+              buyer: {
+                name: p.name || p.metadata?.donor_name,
+                email: p.email,
+                phone: p.phone,
+              },
+              raw_payload: (match.payload || {}) as Record<string, unknown>,
+            }).catch((err) =>
+              console.error('[API /api/mimos/status] Erro na automação de primeiro pagamento:', err)
+            );
+          }
 
           return NextResponse.json({
             success: true,
