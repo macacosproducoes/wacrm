@@ -1,1 +1,1 @@
-export { GET } from '@/app/api/mimos/status/route'
+export { GET, OPTIONS } from '@/app/api/mimos/status/route'

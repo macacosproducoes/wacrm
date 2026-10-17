@@ -16,6 +16,16 @@ function formatPhone(phone?: string): string {
   return `55119${Math.floor(Math.random() * 90000000 + 10000000)}`
 }
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS })
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}))
@@ -26,14 +36,14 @@ export async function POST(request: Request) {
     if (isNaN(numAmount) || numAmount < 3) {
       return NextResponse.json(
         { error: 'O valor mínimo para o Apoio VIP é R$ 3,00.' },
-        { status: 400 }
+        { status: 400, headers: CORS_HEADERS }
       )
     }
 
     if (numAmount > 3000) {
       return NextResponse.json(
         { error: 'O valor máximo por transação é R$ 3.000,00.' },
-        { status: 400 }
+        { status: 400, headers: CORS_HEADERS }
       )
     }
 
@@ -115,12 +125,12 @@ export async function POST(request: Request) {
         message: message || '',
         amount: numAmount,
       },
-    })
+    }, { headers: CORS_HEADERS })
   } catch (err: any) {
     console.error('[API /api/mimos/pay] Unexpected error:', err)
     return NextResponse.json(
       { error: 'Falha interna ao processar o Apoio VIP via WiinPay. Tente novamente.' },
-      { status: 500 }
+      { status: 500, headers: CORS_HEADERS }
     )
   }
 }

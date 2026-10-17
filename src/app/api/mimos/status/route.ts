@@ -9,12 +9,22 @@ function supabaseAdmin() {
   return createAdminClient(url, key)
 }
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS })
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const external_id = searchParams.get('external_id')
 
   if (!external_id) {
-    return NextResponse.json({ error: 'external_id é obrigatório.' }, { status: 400 })
+    return NextResponse.json({ error: 'external_id é obrigatório.' }, { status: 400, headers: CORS_HEADERS })
   }
 
   try {
@@ -23,11 +33,11 @@ export async function GET(request: Request) {
       return NextResponse.json({
         success: true,
         status: 'pending',
-      })
+      }, { headers: CORS_HEADERS })
     }
 
     // Check webhook_events to see if a PAID webhook arrived for this transaction
-    const { data: events, error } = await admin
+    const { data: events } = await admin
       .from('webhook_events')
       .select('id, payload, processing_status, created_at')
       .eq('provider', 'wiinpay')
@@ -77,7 +87,7 @@ export async function GET(request: Request) {
             success: true,
             status: 'paid',
             data: match.payload,
-          });
+          }, { headers: CORS_HEADERS });
         }
       }
     }
@@ -86,12 +96,12 @@ export async function GET(request: Request) {
     return NextResponse.json({
       success: true,
       status: 'pending',
-    })
+    }, { headers: CORS_HEADERS })
   } catch (err: any) {
     console.error('[API /api/mimos/status] Error:', err)
     return NextResponse.json(
       { error: 'Erro ao consultar status da transação' },
-      { status: 500 }
+      { status: 500, headers: CORS_HEADERS }
     )
   }
 }

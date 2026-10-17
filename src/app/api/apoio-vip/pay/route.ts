@@ -1,1 +1,1 @@
-export { POST } from '@/app/api/mimos/pay/route'
+export { POST, OPTIONS } from '@/app/api/mimos/pay/route'
