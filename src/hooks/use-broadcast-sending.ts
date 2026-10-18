@@ -375,7 +375,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
           batch_pause_seconds: payload.cooldownSettings?.batchPauseSeconds ?? 60,
           daily_limit: payload.cooldownSettings?.dailyLimit ?? 1000,
           window_start_time: payload.cooldownSettings?.windowStartTime ?? '08:00',
-          window_end_time: payload.cooldownSettings?.windowEndTime ?? '20:00',
+          window_end_time: payload.cooldownSettings?.windowEndTime ?? '23:59',
           timezone: payload.cooldownSettings?.timezone ?? 'America/Sao_Paulo',
         })
         .select()

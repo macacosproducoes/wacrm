@@ -271,11 +271,15 @@ export default function BroadcastDetailPage() {
       await fetchData(true);
       // Heartbeat queue tick trigger
       try {
-        await fetch(`/api/whatsapp/broadcast/${broadcastId}/tick`, {
+        const tickRes = await fetch(`/api/whatsapp/broadcast/${broadcastId}/tick`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ maxMessages: 5 }),
+          body: JSON.stringify({ maxMessages: 2 }),
         });
+        const tickJson = await tickRes.json().catch(() => ({}));
+        if (tickJson?.result?.status === 'outside_window') {
+          setCountdownLabel(`Aguardando janela de envio (${broadcast.window_start_time} às ${broadcast.window_end_time})`);
+        }
       } catch {
         // Ignored
       }

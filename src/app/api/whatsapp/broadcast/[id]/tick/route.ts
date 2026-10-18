@@ -13,7 +13,7 @@ export async function POST(
     const { accountId } = await requireRole('agent');
     const { id: broadcastId } = await params;
     const body = await request.json().catch(() => ({}));
-    const maxMessages = typeof body?.maxMessages === 'number' ? body.maxMessages : undefined;
+    const maxMessages = typeof body?.maxMessages === 'number' ? Math.min(Math.max(1, body.maxMessages), 3) : undefined;
     const forceResume = Boolean(body?.forceResume);
 
     const admin = supabaseAdmin();

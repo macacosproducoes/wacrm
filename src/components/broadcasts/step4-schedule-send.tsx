@@ -51,7 +51,7 @@ export const DEFAULT_COOLDOWN_SETTINGS: CooldownSettings = {
   batchPauseSeconds: 60,
   dailyLimit: 1000,
   windowStartTime: '08:00',
-  windowEndTime: '20:00',
+  windowEndTime: '23:59',
   timezone: 'America/Sao_Paulo',
 };
 

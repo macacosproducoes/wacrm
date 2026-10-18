@@ -246,7 +246,7 @@ export function classifyBroadcastError(errorMessage: string): {
 export async function claimQueueLock(
   db: SupabaseClient,
   broadcastId: string,
-  timeoutMinutes = 5
+  timeoutMinutes = 2
 ): Promise<boolean> {
   const cutoff = new Date(Date.now() - timeoutMinutes * 60 * 1000).toISOString();
   const { data, error } = await db
@@ -560,7 +560,8 @@ export async function processBroadcastQueueTick(
     const templateRow = resolvedTemplate.row;
 
     // Determine how many messages to attempt in this execution tick
-    const maxMessages = options.maxMessagesThisTick || batchSize;
+    // In serverless environments, avoid sleeping across multiple long cooldowns
+    const maxMessages = options.maxMessagesThisTick ?? (cooldownSec >= 10 ? 1 : Math.min(batchSize, 5));
 
     while (processedCount < maxMessages) {
       // Re-check if broadcast was paused or cancelled by an outside call during the loop
