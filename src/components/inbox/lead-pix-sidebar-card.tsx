@@ -19,8 +19,6 @@ import {
   ChevronDown,
   ChevronUp,
   Maximize2,
-  User,
-  Settings2,
 } from "lucide-react";
 import {
   Dialog,
@@ -30,13 +28,11 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { playPaymentNotificationSound } from "@/lib/audio/payment-sound";
-import { type PixKeyType, validatePixKey, detectPixKeyType } from "@/lib/pix/pix-validator";
 
 interface LeadPixSidebarCardProps {
   contact: Contact | null;
   conversationId?: string | null;
   onContactUpdated?: (updated: Contact) => void;
-  onOpenSendPixModal?: (tab?: "custom" | "company") => void;
 }
 
 const PRESET_AMOUNTS = [10, 20, 25, 50, 100];
@@ -44,27 +40,16 @@ const PRESET_AMOUNTS = [10, 20, 25, 50, 100];
 export function LeadPixSidebarCard({
   contact,
   conversationId,
-  onOpenSendPixModal,
 }: LeadPixSidebarCardProps) {
-  // Mode: "custom" (Minha Chave Personalizada) or "api" (Gerar Cobrança API SMM)
-  const [cardMode, setCardMode] = useState<"custom" | "api">("custom");
-  const [isCollapsed, setIsCollapsed] = useState(false);
-
-  // Custom key state
-  const [customKey, setCustomKey] = useState<string>("");
-  const [customKeyType, setCustomKeyType] = useState<PixKeyType>("CPF");
-  const [customAmount, setCustomAmount] = useState<string>("");
-  const [customSending, setCustomSending] = useState(false);
-
-  // API SMM state
   const [amount, setAmount] = useState<number | string>(25);
   const [serviceName, setServiceName] = useState("Recarga SMM");
+  const [isCollapsed, setIsCollapsed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [sendingToChat, setSendingToChat] = useState(false);
   const [copied, setCopied] = useState(false);
   const [qrModalOpen, setQrModalOpen] = useState(false);
 
-  // Result state for API PIX
+  // Result state
   const [pixResult, setPixResult] = useState<{
     code: string;
     qrcode_base64?: string;
@@ -78,21 +63,7 @@ export function LeadPixSidebarCard({
 
   const numAmount = Number(amount) || 0;
 
-  // Restore remembered custom key from localStorage
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("wacrm_last_custom_pix");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed?.key) {
-          setCustomKey(parsed.key);
-          setCustomKeyType(parsed.type || "CPF");
-        }
-      }
-    } catch {}
-  }, []);
-
-  // Restore saved API PIX for this contact from server DB and localStorage
+  // Restore saved PIX for this contact from server DB and localStorage
   useEffect(() => {
     if (!contact?.id) {
       setPixResult(null);
@@ -165,77 +136,76 @@ export function LeadPixSidebarCard({
     }
   }, [contact?.id]);
 
-  // Handle custom key change with auto-detect
-  const handleCustomKeyChange = (val: string) => {
-    setCustomKey(val);
-    const detected = detectPixKeyType(val);
-    if (detected) {
-      setCustomKeyType(detected);
-    }
-  };
+  // Listen to global Realtime SSE event from WhatsAppRealtimeBridge
+  useEffect(() => {
+    if (typeof window === "undefined") return;
 
-  // Send custom PIX directly from sidebar
-  const handleSendCustomPix = async () => {
-    if (!customKey.trim()) {
-      toast.error("Informe a sua chave PIX personalizada.");
-      return;
-    }
-    if (!conversationId) {
-      toast.error("Abra uma conversa ativa com o lead para enviar no chat.");
-      return;
-    }
+    const handleRealtime = (e: any) => {
+      const detail = e.detail;
+      if (!detail) return;
+      const msg = detail.message;
+      const isPayment =
+        msg?.type === "payment_received" ||
+        msg?.payment_confirmed === true ||
+        detail.eventType === "PAYMENT_RECEIVED" ||
+        (msg?.status === "paid" && (msg?.external_id || msg?.payment_id));
 
-    const validation = validatePixKey(customKey, customKeyType);
-    if (!validation.valid) {
-      toast.error(validation.error || "Chave PIX inválida.");
-      return;
-    }
+      if (isPayment) {
+        const matchesContact =
+          (contact?.id && (msg?.contact_id === contact.id || msg?.contactId === contact.id)) ||
+          (contact?.phone && msg?.buyer?.phone && String(msg.buyer.phone).includes(contact.phone.replace(/\D/g, "").slice(-8))) ||
+          (pixResult?.external_id && (msg?.external_id === pixResult.external_id || detail.conversationId === conversationId));
 
-    setCustomSending(true);
-    try {
-      try {
-        localStorage.setItem(
-          "wacrm_last_custom_pix",
-          JSON.stringify({ key: validation.formattedKey, type: customKeyType })
-        );
-      } catch {}
-
-      const res = await fetch("/api/whatsapp/send-pix", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          conversationId,
-          pixKey: validation.formattedKey,
-          pixKeyType: customKeyType,
-          amount: customAmount ? parseFloat(customAmount.replace(",", ".")) : undefined,
-          sendMode: "both",
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Falha ao enviar chave PIX pelo WhatsApp.");
+        if (matchesContact) {
+          setPixResult((prev) => {
+            const updated = prev ? { ...prev, status: "paid" as const } : null;
+            if (contact?.id && updated && typeof window !== "undefined") {
+              try {
+                localStorage.setItem(`wacrm_pix_${contact.id}`, JSON.stringify(updated));
+              } catch {}
+            }
+            return updated;
+          });
+          toast.success("🎉 PIX Compensado! Pagamento recebido!");
+          playPaymentNotificationSound();
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+        }
       }
+    };
 
-      toast.success("✅ Chave PIX personalizada enviada no WhatsApp com sucesso!");
-    } catch (err: any) {
-      console.error("[LeadPixSidebarCard:SendCustom] Error:", err);
-      toast.error(err.message || "Erro ao enviar chave personalizada.");
-    } finally {
-      setCustomSending(false);
+    window.addEventListener("wacrm:realtime", handleRealtime);
+    return () => window.removeEventListener("wacrm:realtime", handleRealtime);
+  }, [contact?.id, contact?.phone, conversationId, pixResult?.external_id]);
+
+  useEffect(() => {
+    if (pixResult?.external_id && pixResult.status === "pending") {
+      pollingRef.current = setInterval(() => {
+        checkStatus(pixResult.external_id);
+      }, 4000);
     }
-  };
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [pixResult?.external_id, pixResult?.status, checkStatus]);
 
-  // Generate PIX via BuckPay API
-  const handleGenerateApiPix = async (customVal?: number) => {
-    const val = customVal !== undefined ? customVal : numAmount;
+  const handleGenerate = async (targetAmount?: number) => {
+    const val = targetAmount ?? numAmount;
     if (val < 6) {
-      toast.error("O valor mínimo é R$ 6,00.");
+      toast.error("O valor mínimo para gerar a chave é R$ 6,00.");
       return;
     }
 
     setLoading(true);
-    setPixResult(null);
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
 
     try {
       const res = await fetch("/api/smm/pay", {
@@ -252,8 +222,13 @@ export function LeadPixSidebarCard({
       });
 
       const data = await res.json();
+
       if (!res.ok || data.error) {
-        throw new Error(data.detail ? `${data.error}: ${data.detail}` : (data.error || "Erro ao gerar PIX"));
+        throw new Error(
+          data.detail
+            ? `${data.error}: ${data.detail}`
+            : data.error || "Erro ao comunicar com a API PIX"
+        );
       }
 
       const pixData = data.data?.pix;
@@ -287,7 +262,7 @@ export function LeadPixSidebarCard({
     }
   };
 
-  const handleCopyApiPix = async () => {
+  const handleCopy = async () => {
     if (!pixResult?.code) return;
     try {
       await navigator.clipboard.writeText(pixResult.code);
@@ -299,7 +274,7 @@ export function LeadPixSidebarCard({
     }
   };
 
-  const handleSendApiPixToChat = async () => {
+  const handleSendToChat = async () => {
     if (!pixResult?.code) return;
     if (!conversationId) {
       toast.error("Abra uma conversa ativa com o lead para enviar no chat.");
@@ -328,12 +303,17 @@ export function LeadPixSidebarCard({
 
       const data = await res.json();
       if (!res.ok || data.error) {
+        // Fallback to text send if native button is not supported
         const fallbackRes = await fetch("/api/whatsapp/send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             conversationId,
-            content: `🔑 *Chave PIX Copia e Cola (R$ ${pixResult.amount.toFixed(2).replace(".", ",")})*:\n\n${pixResult.code}\n\n_Copie o código acima e pague no app do seu banco._`,
+            content: `🔑 *Chave PIX Copia e Cola (R$ ${pixResult.amount.toFixed(2).replace(".", ",")})*:
+
+${pixResult.code}
+
+_Copie o código acima e pague no app do seu banco._`,
           }),
         });
         const fallbackData = await fallbackRes.json();
@@ -351,7 +331,7 @@ export function LeadPixSidebarCard({
     }
   };
 
-  const handleResetApiPix = () => {
+  const handleReset = () => {
     if (pollingRef.current) {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
@@ -365,30 +345,18 @@ export function LeadPixSidebarCard({
   };
 
   return (
-    <div className={`rounded-xl border p-2.5 shadow-sm transition-all ${
-      cardMode === "custom"
-        ? "border-emerald-500/30 bg-gradient-to-b from-emerald-950/20 via-background/90 to-background"
-        : "border-cyan-500/30 bg-gradient-to-b from-cyan-950/30 via-background/90 to-blue-950/20"
-    }`}>
-      {/* Header Compacto com Botão de Recolher e Seletor de Modo */}
+    <div className="rounded-xl border border-cyan-500/30 bg-gradient-to-b from-cyan-950/30 via-background/90 to-blue-950/20 p-2.5 shadow-sm transition-all">
+      {/* Header Compacto com Botão de Recolher */}
       <div className="flex items-center justify-between">
         <button
           type="button"
           onClick={() => setIsCollapsed(!isCollapsed)}
-          className="flex items-center gap-1.5 text-left group cursor-pointer"
+          className="flex items-center gap-1.5 text-left group"
         >
-          <div className={`flex h-5 w-5 items-center justify-center rounded-md border ${
-            cardMode === "custom"
-              ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
-              : "bg-cyan-500/20 text-cyan-400 border-cyan-500/30"
-          }`}>
-            {cardMode === "custom" ? (
-              <QrCode className="h-3 w-3" />
-            ) : (
-              <Zap className="h-3 w-3 fill-cyan-400" />
-            )}
+          <div className="flex h-5 w-5 items-center justify-center rounded-md bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
+            <Zap className="h-3 w-3 fill-cyan-400" />
           </div>
-          <span className="text-xs font-semibold text-foreground group-hover:text-emerald-400 transition-colors">
+          <span className="text-xs font-semibold text-foreground group-hover:text-cyan-400 transition-colors">
             Chave PIX
           </span>
           {isCollapsed ? (
@@ -398,273 +366,229 @@ export function LeadPixSidebarCard({
           )}
         </button>
 
-        {/* Mode switcher pills */}
-        <div className="flex items-center gap-0.5 bg-muted/70 p-0.5 rounded-lg border border-border/60">
-          <button
-            type="button"
-            onClick={() => {
-              setCardMode("custom");
-              setIsCollapsed(false);
-            }}
-            className={`px-1.5 py-0.5 rounded-md text-[9px] font-semibold transition-all cursor-pointer ${
-              cardMode === "custom"
-                ? "bg-emerald-600 text-white shadow-xs"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Personalizada
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setCardMode("api");
-              setIsCollapsed(false);
-            }}
-            className={`px-1.5 py-0.5 rounded-md text-[9px] font-semibold transition-all cursor-pointer ${
-              cardMode === "api"
-                ? "bg-cyan-600 text-white shadow-xs"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
+        <div className="flex items-center gap-1.5">
+          {pixResult && (
+            <span className={`text-[9px] font-mono font-bold px-1.5 py-0.2 rounded ${
+              pixResult.status === "paid"
+                ? "bg-emerald-500/20 text-emerald-300"
+                : "bg-amber-500/20 text-amber-300 animate-pulse"
+            }`}>
+              R$ {pixResult.amount}
+            </span>
+          )}
+          <Badge
+            variant="outline"
+            className="border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0 text-[8px] font-semibold text-cyan-300 uppercase tracking-wider"
           >
             API
-          </button>
+          </Badge>
         </div>
       </div>
 
       {!isCollapsed && (
         <div className="mt-2 pt-1.5 border-t border-border/40">
-          {/* MODO 1: CHAVE PERSONALIZADA */}
-          {cardMode === "custom" ? (
-            <div className="space-y-2">
-              <div className="grid grid-cols-3 gap-1.5">
-                <div className="col-span-1">
-                  <select
-                    value={customKeyType}
-                    onChange={(e) => setCustomKeyType(e.target.value as PixKeyType)}
-                    className="w-full h-7 px-1 text-[10px] rounded-md border border-border bg-background text-foreground font-medium"
-                  >
-                    <option value="CPF">CPF/CNPJ</option>
-                    <option value="PHONE">Telefone</option>
-                    <option value="EMAIL">E-mail</option>
-                    <option value="EVP">Aleatória</option>
-                    <option value="COPIA_E_COLA">Copia/Cola</option>
-                  </select>
-                </div>
-                <div className="col-span-2">
-                  <Input
-                    type="text"
-                    value={customKey}
-                    onChange={(e) => handleCustomKeyChange(e.target.value)}
-                    placeholder="Sua chave PIX..."
-                    className="h-7 text-[11px] font-mono px-2"
-                  />
-                </div>
+          {!pixResult ? (
+            /* State 1: Compact Selector & Generate Row */
+            <div className="space-y-1.5">
+              {/* Presets em Linha Única */}
+              <div className="flex items-center justify-between gap-1">
+                {PRESET_AMOUNTS.map((p) => {
+                  const isSelected = numAmount === p;
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setAmount(p)}
+                      className={`flex-1 rounded border py-1 text-[10px] font-semibold transition-all ${
+                        isSelected
+                          ? "border-cyan-400 bg-cyan-500/20 text-cyan-300"
+                          : "border-border/50 bg-muted/30 text-muted-foreground hover:bg-muted"
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  );
+                })}
               </div>
 
+              {/* Linha Compacta: Input de Valor + Botão Gerar */}
               <div className="flex items-center gap-1.5">
-                <div className="relative w-20 shrink-0">
-                  <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[9px] font-bold text-muted-foreground">
+                <div className="relative w-22 shrink-0">
+                  <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-muted-foreground">
                     R$
                   </span>
                   <Input
-                    type="text"
-                    value={customAmount}
-                    onChange={(e) => setCustomAmount(e.target.value)}
-                    placeholder="Livre"
-                    className="h-7 pl-6 pr-1 font-mono text-[10px]"
+                    type="number"
+                    min="6"
+                    max="3000"
+                    step="1"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    placeholder="25"
+                    className="h-7 pl-6 pr-1 font-mono text-[11px] border-border/70"
                   />
                 </div>
 
                 <Button
                   type="button"
                   size="sm"
-                  onClick={handleSendCustomPix}
-                  disabled={customSending || !customKey.trim()}
-                  className="flex-1 h-7 gap-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[11px] px-2 shadow-xs cursor-pointer"
+                  onClick={() => handleGenerate()}
+                  disabled={loading || numAmount < 6}
+                  className="flex-1 h-7 gap-1 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-semibold text-[11px] px-2 shadow-sm"
                 >
-                  {customSending ? (
+                  {loading ? (
                     <Loader2 className="h-3 w-3 animate-spin" />
                   ) : (
-                    <Send className="h-3 w-3" />
+                    <Zap className="h-3 w-3 fill-current" />
                   )}
-                  <span>Enviar no Chat</span>
+                  <span>Gerar PIX</span>
                 </Button>
               </div>
-
-              {onOpenSendPixModal && (
-                <div className="flex justify-end pt-0.5">
-                  <button
-                    type="button"
-                    onClick={() => onOpenSendPixModal("custom")}
-                    className="text-[10px] text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 cursor-pointer"
-                  >
-                    <Settings2 className="h-2.5 w-2.5" /> Abrir Modal Completo (Opções Avançadas)
-                  </button>
-                </div>
-              )}
             </div>
           ) : (
-            /* MODO 2: GERAR VIA API BUCKPAY SMM */
-            !pixResult ? (
-              <div className="space-y-1.5">
-                {/* Presets em Linha Única */}
-                <div className="flex items-center justify-between gap-1">
-                  {PRESET_AMOUNTS.map((p) => {
-                    const isSelected = numAmount === p;
-                    return (
-                      <button
-                        key={p}
-                        type="button"
-                        onClick={() => setAmount(p)}
-                        className={`flex-1 rounded border py-1 text-[10px] font-semibold transition-all ${
-                          isSelected
-                            ? "border-cyan-400 bg-cyan-500/20 text-cyan-300"
-                            : "border-border/50 bg-muted/30 text-muted-foreground hover:bg-muted"
-                        }`}
-                      >
-                        {p}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Linha Compacta: Input de Valor + Botão Gerar */}
-                <div className="flex items-center gap-1.5">
-                  <div className="relative w-22 shrink-0">
-                    <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-muted-foreground">
-                      R$
-                    </span>
-                    <Input
-                      type="number"
-                      min="6"
-                      max="3000"
-                      step="1"
-                      value={amount}
-                      onChange={(e) => setAmount(e.target.value)}
-                      placeholder="25"
-                      className="h-7 pl-6 pr-1 font-mono text-[11px] border-border/70"
+            /* State 2: Super Compact Result (Lado a Lado) */
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                {/* QR Code Miniatura (64x64px) com Clique para Expandir */}
+                {pixResult.qrcode_base64 && (
+                  <button
+                    type="button"
+                    onClick={() => setQrModalOpen(true)}
+                    className="relative shrink-0 rounded-lg border border-border bg-white p-1 hover:ring-2 hover:ring-cyan-400 transition-all group"
+                    title="Clique para ampliar o QR Code"
+                  >
+                    <img
+                      src={`data:image/png;base64,${pixResult.qrcode_base64}`}
+                      alt="QR Code"
+                      className="h-16 w-16 object-contain"
                     />
+                    <div className="absolute inset-0 bg-black/30 rounded-md opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                      <Maximize2 className="h-3 w-3 text-white" />
+                    </div>
+                  </button>
+                )}
+
+                {/* Coluna Direita: Código Truncado + Botões de Ação */}
+                <div className="flex-1 min-w-0 space-y-1">
+                  <div className="flex items-center justify-between">
+                    {pixResult.status === "paid" ? (
+                      <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">
+                        <CheckCircle2 className="h-3 w-3" /> Pago!
+                      </span>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-semibold text-amber-300 flex items-center gap-1 animate-pulse">
+                          <Clock className="h-2.5 w-2.5" /> Aguardando...
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => checkStatus(pixResult.external_id)}
+                          title="Verificar status do PIX agora"
+                          className="text-[9px] text-cyan-400 hover:text-cyan-300 flex items-center gap-0.5 hover:underline"
+                        >
+                          <RefreshCw className="h-2.5 w-2.5" />
+                          <span>Verificar</span>
+                        </button>
+                      </div>
+                    )}
+                    <span className="text-[10px] font-mono font-bold text-foreground">
+                      R$ {pixResult.amount.toFixed(2).replace(".", ",")}
+                    </span>
                   </div>
 
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => handleGenerateApiPix()}
-                    disabled={loading || numAmount < 6}
-                    className="flex-1 h-7 gap-1 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-semibold text-[11px] px-2 shadow-sm cursor-pointer"
-                  >
-                    {loading ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <Zap className="h-3 w-3 fill-current" />
-                    )}
-                    <span>Gerar PIX</span>
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              /* State 2: Super Compact Result API */
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  {pixResult.qrcode_base64 && (
-                    <button
-                      type="button"
-                      onClick={() => setQrModalOpen(true)}
-                      className="relative shrink-0 rounded-lg border border-border bg-white p-1 hover:ring-2 hover:ring-cyan-400 transition-all group"
-                      title="Clique para ampliar o QR Code"
-                    >
-                      <img
-                        src={`data:image/png;base64,${pixResult.qrcode_base64}`}
-                        alt="QR Code"
-                        className="h-16 w-16 object-contain"
-                      />
-                      <div className="absolute inset-0 bg-black/30 rounded-md opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                        <Maximize2 className="h-3 w-3 text-white" />
-                      </div>
-                    </button>
-                  )}
-
-                  <div className="flex-1 min-w-0 space-y-1">
-                    <div className="flex items-center justify-between">
-                      {pixResult.status === "paid" ? (
-                        <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">
-                          <CheckCircle2 className="h-3 w-3" /> Pago!
-                        </span>
-                      ) : (
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[10px] font-semibold text-amber-300 flex items-center gap-1 animate-pulse">
-                            <Clock className="h-3 w-3" /> Aguardando
-                          </span>
-                        </div>
-                      )}
-                      <button
-                        type="button"
-                        onClick={handleResetApiPix}
-                        className="text-[9px] text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        Novo
-                      </button>
-                    </div>
-
-                    <p className="font-mono text-[9px] text-muted-foreground truncate bg-muted/40 p-1 rounded">
+                  {/* Código Copia e Cola em 1 Linha com Botão Integrado */}
+                  <div className="flex items-center gap-1 rounded bg-muted/40 p-1 border border-border/50">
+                    <p className="flex-1 font-mono text-[9px] text-muted-foreground truncate select-all">
                       {pixResult.code}
                     </p>
+                    <button
+                      type="button"
+                      onClick={handleCopy}
+                      className="shrink-0 p-1 rounded bg-cyan-500/20 text-cyan-300 hover:bg-cyan-500/30 transition-colors"
+                      title="Copiar Código PIX"
+                    >
+                      {copied ? (
+                        <Check className="h-3 w-3 text-emerald-400" />
+                      ) : (
+                        <Copy className="h-3 w-3" />
+                      )}
+                    </button>
+                  </div>
 
-                    <div className="flex items-center gap-1">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={handleCopyApiPix}
-                        className="h-6 text-[10px] px-2 flex-1 border-border/80"
-                      >
-                        {copied ? (
-                          <Check className="h-2.5 w-2.5 text-emerald-400" />
-                        ) : (
-                          <Copy className="h-2.5 w-2.5" />
-                        )}
-                        <span>{copied ? "Copiado" : "Copiar"}</span>
-                      </Button>
-
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={handleSendApiPixToChat}
-                        disabled={sendingToChat}
-                        className="h-6 text-[10px] px-2 flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
-                      >
-                        {sendingToChat ? (
-                          <Loader2 className="h-2.5 w-2.5 animate-spin" />
-                        ) : (
-                          <Send className="h-2.5 w-2.5" />
-                        )}
-                        <span>Enviar</span>
-                      </Button>
-                    </div>
+                  {/* Botões Lado a Lado Compactos */}
+                  <div className="flex items-center gap-1 pt-0.5">
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleCopy}
+                      className="flex-1 h-6 px-1.5 text-[10px] font-semibold border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300"
+                      variant="outline"
+                    >
+                      {copied ? "Copiado!" : "Copiar"}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleSendToChat}
+                      disabled={sendingToChat || !conversationId}
+                      className="flex-1 h-6 px-1.5 text-[10px] font-semibold bg-emerald-600 hover:bg-emerald-500 text-white gap-1"
+                    >
+                      {sendingToChat ? (
+                        <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                      ) : (
+                        <Send className="h-2.5 w-2.5" />
+                      )}
+                      <span>Enviar</span>
+                    </Button>
                   </div>
                 </div>
               </div>
-            )
+
+              {/* Botão sutil para resetar */}
+              <div className="flex justify-between items-center pt-1 border-t border-border/30 text-[9px] text-muted-foreground">
+                <span>Clique no QR Code para ampliar</span>
+                <button
+                  type="button"
+                  onClick={handleReset}
+                  className="hover:text-cyan-400 flex items-center gap-1 transition-colors"
+                >
+                  <RefreshCw className="h-2.5 w-2.5" />
+                  <span>Novo valor</span>
+                </button>
+              </div>
+            </div>
           )}
         </div>
       )}
 
-      {/* QR Code Zoom Modal */}
+      {/* Modal para Visualizar QR Code Ampliado se o atendente quiser */}
       <Dialog open={qrModalOpen} onOpenChange={setQrModalOpen}>
-        <DialogContent className="sm:max-w-xs p-4 flex flex-col items-center text-center">
+        <DialogContent className="max-w-xs p-5 bg-background border-border text-center">
           <DialogHeader>
-            <DialogTitle className="text-sm">QR Code PIX</DialogTitle>
+            <DialogTitle className="text-sm font-semibold">
+              QR Code PIX (R$ {pixResult?.amount.toFixed(2).replace(".", ",")})
+            </DialogTitle>
           </DialogHeader>
           {pixResult?.qrcode_base64 && (
-            <img
-              src={`data:image/png;base64,${pixResult.qrcode_base64}`}
-              alt="QR Code"
-              className="h-56 w-56 object-contain my-2"
-            />
+            <div className="mt-2 flex justify-center">
+              <div className="rounded-xl border border-border bg-white p-3 shadow-md">
+                <img
+                  src={`data:image/png;base64,${pixResult.qrcode_base64}`}
+                  alt="QR Code PIX Ampliado"
+                  className="h-48 w-48 object-contain"
+                />
+              </div>
+            </div>
           )}
-          <p className="text-xs text-muted-foreground font-mono">
-            R$ {pixResult?.amount.toFixed(2).replace(".", ",")}
-          </p>
+          <Button
+            type="button"
+            size="sm"
+            onClick={handleCopy}
+            className="mt-3 w-full gap-1.5 text-xs font-semibold"
+          >
+            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+            <span>Copiar Código Copia e Cola</span>
+          </Button>
         </DialogContent>
       </Dialog>
     </div>
