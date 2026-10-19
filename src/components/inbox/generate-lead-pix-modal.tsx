@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   QrCode,
   Zap,
+  User,
   Copy,
   Check,
   Send,
@@ -33,6 +34,7 @@ interface GenerateLeadPixModalProps {
   onOpenChange: (open: boolean) => void;
   contact: Contact | null;
   conversationId?: string | null;
+  onSwitchToCustomPix?: () => void;
 }
 
 const PRESET_AMOUNTS = [10, 20, 25, 50, 100, 200];
@@ -42,6 +44,7 @@ export function GenerateLeadPixModal({
   onOpenChange,
   contact,
   conversationId,
+  onSwitchToCustomPix,
 }: GenerateLeadPixModalProps) {
   const [amount, setAmount] = useState<number | string>(25);
   const [serviceName, setServiceName] = useState("Recarga de Saldo SMM");
@@ -193,6 +196,22 @@ export function GenerateLeadPixModal({
             </div>
           </div>
         </DialogHeader>
+
+        {onSwitchToCustomPix && (
+          <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/25 p-2 text-xs flex items-center justify-between">
+            <span className="text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5 font-medium">
+              <User className="h-3.5 w-3.5 text-emerald-500" />
+              Deseja enviar sua chave PIX personalizada?
+            </span>
+            <button
+              type="button"
+              onClick={onSwitchToCustomPix}
+              className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+            >
+              Usar Minha Chave →
+            </button>
+          </div>
+        )}
 
         {contact && (
           <div className="rounded-lg bg-muted/50 p-2.5 text-xs text-muted-foreground border border-border flex items-center justify-between">

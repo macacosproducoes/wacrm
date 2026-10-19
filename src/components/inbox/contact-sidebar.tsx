@@ -32,6 +32,7 @@ import { InstagramDiagnosticModal } from "@/components/contacts/instagram-diagno
 import { FollowerOrderCard } from "./follower-order-card";
 import { LeadPixSidebarCard } from "./lead-pix-sidebar-card";
 import { GenerateLeadPixModal } from "./generate-lead-pix-modal";
+import { SendPixModal } from "./send-pix-modal";
 
 interface ContactSidebarProps {
   contact: Contact | null;
@@ -48,6 +49,8 @@ export function ContactSidebar({ contact, conversationId, onContactUpdated }: Co
   const [deals, setDeals] = useState<Deal[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
   const [leadPixModalOpen, setLeadPixModalOpen] = useState(false);
+  const [sendPixModalOpen, setSendPixModalOpen] = useState(false);
+  const [sendPixModalTab, setSendPixModalTab] = useState<"custom" | "company">("custom");
   const [tags, setTags] = useState<(Tag & { contact_tag_id: string })[]>([]);
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
@@ -346,6 +349,10 @@ export function ContactSidebar({ contact, conversationId, onContactUpdated }: Co
             contact={contact}
             conversationId={conversationId}
             onContactUpdated={onContactUpdated}
+            onOpenSendPixModal={(tab) => {
+              setSendPixModalTab(tab || "custom");
+              setSendPixModalOpen(true);
+            }}
           />
 
           {/* Follower Order Confirmation Card (Realtime Preview & One-Click Send) */}
@@ -490,6 +497,23 @@ export function ContactSidebar({ contact, conversationId, onContactUpdated }: Co
               </div>
             </div>
           </div>
+
+      {/* Send Native / Custom WhatsApp PIX Modal */}
+      <SendPixModal
+        open={sendPixModalOpen}
+        onOpenChange={setSendPixModalOpen}
+        conversationId={conversationId || ""}
+        contactName={contact?.name}
+        defaultTab={sendPixModalTab}
+      />
+
+      {/* Generate Dynamic BuckPay PIX Modal */}
+      <GenerateLeadPixModal
+        open={leadPixModalOpen}
+        onOpenChange={setLeadPixModalOpen}
+        contact={contact}
+        conversationId={conversationId}
+      />
       </div>
     </div>
   );

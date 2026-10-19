@@ -32,6 +32,7 @@ import {
   User,
   Loader2,
   Smartphone,
+  QrCode,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { useTranslations } from "next-intl";
@@ -78,6 +79,7 @@ import { SequenceRunnerBanner, useSequenceRunner } from "./sequence-runner";
 import { QuickReplyCreateModal } from "./quick-reply-create-modal";
 import { ManualFollowUpModal } from "./manual-follow-up-modal";
 import { GenerateLeadPixModal } from "./generate-lead-pix-modal";
+import { SendPixModal } from "./send-pix-modal";
 import { FollowUpsBanner } from "./follow-ups-banner";
 import type { QuickReply, QuickReplyKind } from "@/types";
 import type { InsertedTextPayload, ExternalAudioActionPayload } from "./message-composer";
@@ -264,6 +266,7 @@ export function MessageThread({
   // Manual Follow-up Modal & banner refresh state
   const [manualFollowUpModalOpen, setManualFollowUpModalOpen] = useState(false);
   const [leadPixModalOpen, setLeadPixModalOpen] = useState(false);
+  const [sendPixModalOpen, setSendPixModalOpen] = useState(false);
   const [followUpsRefreshTrigger, setFollowUpsRefreshTrigger] = useState(0);
 
   const handleSaveContactFromModal = useCallback(async () => {
@@ -1519,12 +1522,23 @@ export function MessageThread({
             />
           </button>
 
-                    {/* Botão Gerar Chave PIX (BuckPay API) */}
+                    {/* Botão Enviar Chave PIX Personalizada */}
+          <button
+            type="button"
+            onClick={() => setSendPixModalOpen(true)}
+            title="Enviar Chave PIX Personalizada no WhatsApp com botão nativo"
+            className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 text-xs font-semibold text-emerald-400 hover:bg-emerald-500/20 hover:text-emerald-300 transition-all shadow-sm cursor-pointer"
+          >
+            <QrCode className="h-3.5 w-3.5 text-emerald-400" />
+            <span className="font-mono">Chave PIX</span>
+          </button>
+
+          {/* Botão Gerar Chave PIX (BuckPay API) */}
           <button
             type="button"
             onClick={() => setLeadPixModalOpen(true)}
             title="Gerar Chave PIX / Cobrança via API (QR Code e Copia e Cola)"
-            className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-2.5 text-xs font-semibold text-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-300 transition-all shadow-sm"
+            className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-2.5 text-xs font-semibold text-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-300 transition-all shadow-sm cursor-pointer"
           >
             <Zap className="h-3.5 w-3.5 fill-cyan-400" />
             <span className="font-mono">Gerar PIX</span>
@@ -1971,6 +1985,17 @@ export function MessageThread({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+            {/* Modal Enviar Chave PIX Personalizada */}
+      {conversation?.id && (
+        <SendPixModal
+          open={sendPixModalOpen}
+          onOpenChange={setSendPixModalOpen}
+          conversationId={conversation.id}
+          contactName={contact?.name}
+          defaultTab="custom"
+        />
+      )}
 
             {/* Modal Gerar Chave PIX para o Lead (API BuckPay) */}
       <GenerateLeadPixModal

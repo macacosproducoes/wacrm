@@ -25,6 +25,9 @@ import {
   Zap,
   Check,
   QrCode,
+  ChevronDown,
+  Building,
+  User,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
@@ -192,6 +195,7 @@ export function MessageComposer({
   const [savingQuickReply, setSavingQuickReply] = useState(false);
   const [quickReplyOpen, setQuickReplyOpen] = useState(false);
   const [pixModalOpen, setPixModalOpen] = useState(false);
+  const [pixModalDefaultTab, setPixModalDefaultTab] = useState<"custom" | "company">("custom");
   const [leadPixModalOpen, setLeadPixModalOpen] = useState(false);
 
   // Quick replies list & slash command autocomplete
@@ -1223,19 +1227,71 @@ export function MessageComposer({
             </Button>
           )}
 
-          {/* PIX Native Message Trigger Button */}
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={inputsDisabled}
-            title="Gerar Chave PIX via API (QR Code e Copia e Cola instantâneo)"
-            onClick={() => setLeadPixModalOpen(true)}
-            className="h-9 px-2.5 text-xs font-semibold text-teal-600 dark:text-teal-400 bg-teal-500/10 hover:bg-teal-500/20 hover:text-teal-700 dark:hover:text-teal-300 rounded-lg flex items-center gap-1.5 shrink-0 transition-colors border border-teal-500/20 shadow-sm"
-          >
-            <QrCode className="h-4 w-4 text-teal-500" />
-            <span className="hidden sm:inline font-mono font-bold tracking-tight">PIX</span>
-          </Button>
+          {/* PIX Quick Action: Custom key, Company key, or API */}
+          <div className="inline-flex items-center rounded-lg shadow-xs">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={inputsDisabled}
+              title="Enviar Chave PIX Personalizada (Minha Chave)"
+              onClick={() => {
+                setPixModalDefaultTab("custom");
+                setPixModalOpen(true);
+              }}
+              className="h-9 px-2.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 hover:text-emerald-700 dark:hover:text-emerald-300 rounded-l-lg rounded-r-none flex items-center gap-1.5 shrink-0 transition-colors border border-r-0 border-emerald-500/20 cursor-pointer"
+            >
+              <QrCode className="h-4 w-4 text-emerald-500" />
+              <span className="hidden sm:inline font-mono font-bold tracking-tight">PIX</span>
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                disabled={inputsDisabled}
+                title="Opções de envio de PIX"
+                className="h-9 px-1.5 text-xs text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 rounded-r-lg rounded-l-none border border-emerald-500/20 flex items-center justify-center cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <ChevronDown className="h-3 w-3" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="border-border bg-popover w-60 p-1">
+                <DropdownMenuItem
+                  onClick={() => {
+                    setPixModalDefaultTab("custom");
+                    setPixModalOpen(true);
+                  }}
+                  className="cursor-pointer py-2"
+                >
+                  <User className="mr-2 h-4 w-4 text-emerald-500" />
+                  <div>
+                    <span className="font-semibold text-xs text-foreground block">Chave Personalizada</span>
+                    <span className="text-[10px] text-muted-foreground block">Digitar minha própria chave</span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    setPixModalDefaultTab("company");
+                    setPixModalOpen(true);
+                  }}
+                  className="cursor-pointer py-2"
+                >
+                  <Building className="mr-2 h-4 w-4 text-blue-500" />
+                  <div>
+                    <span className="font-semibold text-xs text-foreground block">Chave da Empresa</span>
+                    <span className="text-[10px] text-muted-foreground block">Usar chave cadastrada</span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => setLeadPixModalOpen(true)}
+                  className="cursor-pointer py-2 border-t border-border/50"
+                >
+                  <Zap className="mr-2 h-4 w-4 text-cyan-500" />
+                  <div>
+                    <span className="font-semibold text-xs text-foreground block">Gerar Cobrança API</span>
+                    <span className="text-[10px] text-muted-foreground block">Recarga de Saldo (BuckPay)</span>
+                  </div>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
 
           {/* + menu — interactive messages */}
           <DropdownMenu>
@@ -1247,9 +1303,32 @@ export function MessageComposer({
               <Plus className="h-4 w-4" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="border-border bg-popover">
-              <DropdownMenuItem onClick={() => setPixModalOpen(true)}>
-                <QrCode className="mr-2 h-4 w-4 text-teal-500" />
-                Enviar Chave PIX (Nativo)
+              <DropdownMenuItem
+                onClick={() => {
+                  setPixModalDefaultTab("custom");
+                  setPixModalOpen(true);
+                }}
+                className="cursor-pointer"
+              >
+                <QrCode className="mr-2 h-4 w-4 text-emerald-500" />
+                Enviar Chave PIX Personalizada
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => {
+                  setPixModalDefaultTab("company");
+                  setPixModalOpen(true);
+                }}
+                className="cursor-pointer"
+              >
+                <Building className="mr-2 h-4 w-4 text-blue-500" />
+                Enviar Chave PIX da Empresa
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => setLeadPixModalOpen(true)}
+                className="cursor-pointer"
+              >
+                <Zap className="mr-2 h-4 w-4 text-cyan-500" />
+                Gerar Cobrança PIX API (BuckPay)
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => openInteractiveBuilder()}>
                 <MessageSquareDashed className="mr-2 h-4 w-4" />
@@ -1389,6 +1468,7 @@ export function MessageComposer({
         onOpenChange={setPixModalOpen}
         conversationId={conversationId}
         contactName={contactName}
+        defaultTab={pixModalDefaultTab}
       />
       {/* Generate Dynamic BuckPay PIX Modal */}
       <GenerateLeadPixModal
