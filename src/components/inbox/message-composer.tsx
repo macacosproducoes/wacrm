@@ -66,6 +66,7 @@ import { replaceQuickReplyVariables, type VariableContext } from "@/lib/inbox/qu
 import { useAudioRecording } from "@/context/audio-recording-context";
 import { SendPixModal } from "./send-pix-modal";
 import { GenerateLeadPixModal } from "./generate-lead-pix-modal";
+import { type PixKeyType, detectPixKeyType } from "@/lib/pix/pix-validator";
 
 /** Media content types an agent can send from the composer. */
 export type ComposerMediaKind = "image" | "video" | "document" | "audio";
@@ -284,14 +285,15 @@ export function MessageComposer({
     el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
   }, []);
 
-  const isPixCopiaECola = useMemo(() => {
+  const detectedPixType = useMemo<PixKeyType | null>(() => {
     const trimmed = text.trim();
-    return trimmed.startsWith("000201") || (trimmed.length >= 25 && /br\.gov\.bcb\.pix/i.test(trimmed));
+    if (!trimmed || trimmed.includes("\n") || trimmed.length > 500) return null;
+    return detectPixKeyType(trimmed);
   }, [text]);
 
   const handleSendPixDirect = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending) return;
+    if (!trimmed || sending || !detectedPixType) return;
 
     setSending(true);
     try {
@@ -301,8 +303,8 @@ export function MessageComposer({
         body: JSON.stringify({
           conversationId,
           pixKey: trimmed,
-          pixKeyType: "COPIA_E_COLA",
-          sendMode: "button",
+          pixKeyType: detectedPixType,
+          sendMode: "both",
         }),
       });
 
@@ -311,7 +313,7 @@ export function MessageComposer({
         throw new Error(data.error || "Falha ao enviar chave PIX.");
       }
 
-      toast.success("✅ PIX enviado com botão nativo com sucesso!");
+      toast.success("✅ PIX enviado com botão nativo e código Copia e Cola!");
       setText("");
       if (textareaRef.current) {
         textareaRef.current.style.height = "auto";
@@ -322,13 +324,13 @@ export function MessageComposer({
     } finally {
       setSending(false);
     }
-  }, [text, sending, conversationId]);
+  }, [text, sending, conversationId, detectedPixType]);
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
     if (!trimmed || sending || effectivelyExpired) return;
 
-    if (trimmed.startsWith("000201") || (trimmed.length >= 25 && /br\.gov\.bcb\.pix/i.test(trimmed))) {
+    if (detectedPixType) {
       await handleSendPixDirect();
       return;
     }
@@ -1124,15 +1126,17 @@ export function MessageComposer({
         </div>
       ) : (
         <>
-          {/* Smart PIX Copia e Cola Auto-Detection Banner */}
-          {isPixCopiaECola && !draft && !recording && (
+          {/* Smart PIX Auto-Detection Banner (EVP, Copia e Cola, CPF, Telefone, Email) */}
+          {detectedPixType && !draft && !recording && (
             <div className="mb-2 flex items-center justify-between rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs animate-in fade-in slide-in-from-bottom-1">
               <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-semibold">
                 <div className="flex h-6 w-6 items-center justify-center rounded-md bg-emerald-500/20 text-emerald-600 dark:text-emerald-400">
                   <QrCode className="h-3.5 w-3.5" />
                 </div>
                 <div>
-                  <span className="block font-bold">Chave PIX Copia e Cola detectada!</span>
+                  <span className="block font-bold">
+                    Chave PIX {detectedPixType === "EVP" ? "Aleatória (EVP)" : detectedPixType} detectada!
+                  </span>
                   <span className="block text-[10px] text-muted-foreground font-normal">
                     Será enviada no formato da função PIX com botão nativo automaticamente.
                   </span>
