@@ -123,15 +123,13 @@ function isValidEmail(email: string): boolean {
  */
 function isValidCopiaECola(code: string): boolean {
   const clean = code.trim().replace(/[\r\n\t]/g, '');
-  if (clean.length < 15) return false;
+  if (clean.length < 25) return false;
   // Standard BR Code starts with 000201
   if (clean.startsWith('000201')) return true;
   // Official BACEN PIX domain in URL or payload
   if (/br\.gov\.bcb\.pix/i.test(clean) || /pix\.bcb\.gov\.br/i.test(clean)) return true;
-  // Payment gateway generated dynamic PIX URL or code
-  if (/^https?:\/\/.*pix/i.test(clean)) return true;
-  // Generic payload with at least 25 characters
-  if (clean.length >= 25 && /^[a-zA-Z0-9.+*:@/_\s=-]+$/.test(clean)) return true;
+  // Payment gateway generated dynamic PIX URL
+  if (/^https?:\/\/[^\s]+pix[^\s]*/i.test(clean)) return true;
   return false;
 }
 
@@ -140,18 +138,38 @@ function isValidCopiaECola(code: string): boolean {
  */
 export function detectPixKeyType(key: string): PixKeyType | null {
   const trimmed = key.trim();
-  if (trimmed.startsWith('000201') || /br\.gov\.bcb\.pix/i.test(trimmed)) return 'COPIA_E_COLA';
-  if (isValidEmail(trimmed)) return 'EMAIL';
+  if (!trimmed) return null;
+
+  // 1. Copia e Cola BR Code
+  if (trimmed.startsWith('000201') || /br\.gov\.bcb\.pix/i.test(trimmed) || /pix\.bcb\.gov\.br/i.test(trimmed)) {
+    return 'COPIA_E_COLA';
+  }
+
+  // 2. Random Key (UUID / EVP)
   if (isValidEvp(trimmed)) return 'EVP';
 
+  // 3. Email
+  if (isValidEmail(trimmed)) return 'EMAIL';
+
+  // 4. CPF / CNPJ (clean digits only or formatted)
   const digitsOnly = trimmed.replace(/\D/g, '');
-  if (digitsOnly.length === 11 && isValidCpf(digitsOnly)) return 'CPF';
-  if (digitsOnly.length === 14 && isValidCnpj(digitsOnly)) return 'CPF';
+  const isOnlyDigitsAndPunct = /^[\d.\-/]+$/.test(trimmed);
+  if (isOnlyDigitsAndPunct) {
+    if (digitsOnly.length === 11 && isValidCpf(digitsOnly)) return 'CPF';
+    if (digitsOnly.length === 14 && isValidCnpj(digitsOnly)) return 'CPF';
+  }
 
-  const phoneCheck = isValidPhone(trimmed);
-  if (phoneCheck.valid) return 'PHONE';
+  // 5. Phone number (must be strictly numbers/phone formatting, never mixed text)
+  const isPhoneFormat = /^\+?[\d\s().-]{10,18}$/.test(trimmed);
+  if (isPhoneFormat) {
+    const phoneCheck = isValidPhone(trimmed);
+    if (phoneCheck.valid) return 'PHONE';
+  }
 
-  if (trimmed.length >= 25 && isValidCopiaECola(trimmed)) return 'COPIA_E_COLA';
+  // 6. Dynamic PIX URL
+  if (trimmed.length >= 25 && isValidCopiaECola(trimmed)) {
+    return 'COPIA_E_COLA';
+  }
 
   return null;
 }

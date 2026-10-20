@@ -286,7 +286,7 @@ export function MessageComposer({
 
   const isPixCopiaECola = useMemo(() => {
     const trimmed = text.trim();
-    return trimmed.startsWith("000201") || (trimmed.length >= 25 && /br\.gov\.bcb\.pix/i.test(trimmed));
+    return trimmed.startsWith("000201") && trimmed.length >= 30;
   }, [text]);
 
   const handleSendPixDirect = useCallback(async () => {
@@ -328,7 +328,7 @@ export function MessageComposer({
     const trimmed = text.trim();
     if (!trimmed || sending || effectivelyExpired) return;
 
-    if (trimmed.startsWith("000201") || (trimmed.length >= 25 && /br\.gov\.bcb\.pix/i.test(trimmed))) {
+    if (trimmed.startsWith("000201") && trimmed.length >= 30) {
       await handleSendPixDirect();
       return;
     }

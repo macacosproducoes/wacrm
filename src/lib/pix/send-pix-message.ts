@@ -129,7 +129,18 @@ export async function sendPixMessage(params: SendPixMessageParams): Promise<Send
     .eq('is_active', true)
     .order('updated_at', { ascending: false });
 
-  const uazConn = (activeConns || []).find((c) => c.provider === 'uazapi') || (activeConns || [])[0];
+  const uazConn =
+    (activeConns || []).find((c) => {
+      const cfg = (c.provider_config || {}) as Record<string, any>;
+      return c.provider === 'uazapi' && c.status === 'connected' && Boolean(cfg.token);
+    }) ||
+    (activeConns || []).find((c) => {
+      const cfg = (c.provider_config || {}) as Record<string, any>;
+      return Boolean(cfg.token);
+    }) ||
+    (activeConns || []).find((c) => c.provider === 'uazapi') ||
+    (activeConns || [])[0];
+
   if (!uazConn) {
     throw new Error('Nenhuma conexão ativa de WhatsApp encontrada para esta conta.');
   }

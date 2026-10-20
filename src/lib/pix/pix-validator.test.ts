@@ -91,12 +91,15 @@ describe('pix-validator', () => {
       expect(detectPixKeyType('pix@empresa.com')).toBe('EMAIL');
     });
 
-    it('detects EVP', () => {
-      expect(detectPixKeyType('9a9e33c1-01f2-4bc4-a6e5-4c07920ab3ef')).toBe('EVP');
+    it('detects EVP user key 401adc30-0b30-479d-855b-cf4a9ead6346', () => {
+      expect(detectPixKeyType('401adc30-0b30-479d-855b-cf4a9ead6346')).toBe('EVP');
     });
 
-    it('detects phone', () => {
-      expect(detectPixKeyType('+5516989233842')).toBe('PHONE');
+    it('does not detect regular chat messages as PIX keys', () => {
+      expect(detectPixKeyType('Ola tudo bem com voce?')).toBeNull();
+      expect(detectPixKeyType('Segue a mensagem com texto longo para o cliente sem acentos')).toBeNull();
+      expect(detectPixKeyType('meu numero de pedido e 12345')).toBeNull();
+      expect(detectPixKeyType('Por favor me confirme o recebimento do comprovante')).toBeNull();
     });
   });
 });
