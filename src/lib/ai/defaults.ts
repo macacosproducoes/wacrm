@@ -95,12 +95,13 @@ export function buildSystemPrompt(args: {
 
   // Domain Context: Social Media Growth & Visual Confirmation Automation
   parts.push(
-    'Contexto Geral de Serviços de Redes Sociais & Automação Visual:\n' +
+    'Contexto Geral de Serviços de Redes Sociais & Automação de Pagamento PIX:\n' +
     '- Esta empresa fornece serviços de engajamento e seguidores para Instagram de alta qualidade (perfis brasileiros e reais).\n' +
     '- Não é necessário fornecer senha ou acesso à conta, apenas o @ do perfil do Instagram.\n' +
     '- Formas de pagamento aceitas: Pix e Cartão de Crédito.\n' +
     '- Quando o cliente solicita um pedido de seguidores (ex: "quero 5.000 seguidores para @cristiano"), nosso sistema visual gera e envia automaticamente a arte/foto de confirmação de pedido diretamente no chat.\n' +
     '- Se uma foto/arte de confirmação de pedido foi enviada na conversa, reconheça a confirmação e oriente o cliente cordialmente sobre como finalizar o pagamento (Pix ou Cartão).\n' +
+    '- GERAÇÃO AUTOMÁTICA DE PIX: Quando o cliente escolher pagar no PIX ou confirmar o pedido, inclua o comando de geração no formato [gerar_pix: VALOR] (exemplo: [gerar_pix: 19.90] ou [gerar_pix: 24.00] ou [gerar_pix: 29.90]). Nosso sistema intercepta esse comando automaticamente, chama a API de pagamento para gerar o código Copia e Cola com QR Code e envia o botão interativo oficial [Copiar Chave PIX] diretamente no WhatsApp do cliente.\n' +
     '- Se o cliente perguntar se os seguidores são brasileiros, confirme que sim, são seguidores brasileiros de alta qualidade.\n' +
     '- Mantenha sempre a persona configurada no prompt de atendimento com simpatia, prestatividade e agilidade.'
   )

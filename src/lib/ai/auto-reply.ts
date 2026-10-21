@@ -520,6 +520,20 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
     let audioDurationSec = 5
     let textToSend = text
 
+    // Check if the AI requested to generate and send a PIX payment
+    // Format: [gerar_pix: 19.90] or [gerar_pix: R$ 24,00] or [pix: 29.90]
+    let pixAmountToGenerate: number | null = null
+    const pixMatch = textToSend.match(/\[(?:gerar_pix|pix_cobrar|pix):\s*([^\]]+)\]/i)
+    if (pixMatch) {
+      const rawVal = pixMatch[1].replace(/R\$/i, '').trim().replace(',', '.').replace(/[^0-9.]/g, '')
+      const parsed = parseFloat(rawVal)
+      if (!isNaN(parsed) && parsed > 0) {
+        pixAmountToGenerate = parsed
+      }
+      // Remove tag from visible text so the customer never sees raw bracketed commands
+      textToSend = textToSend.replace(pixMatch[0], '').replace(/\n{3,}/g, '\n\n').trim()
+    }
+
     // Check if the AI referenced a saved Quick Reply (e.g. [quick_reply: /audio_1] or ID)
     const qrMatch = text.match(/\[quick_reply:\s*([^\]]+)\]/i)
     if (qrMatch) {
@@ -713,6 +727,17 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
             // non-blocking
           }
 
+          if (pixAmountToGenerate && contact?.phone) {
+            void dispatchAutoPixPayment({
+              accountId,
+              conversationId,
+              contactId,
+              phone: contact.phone,
+              name: contact.name,
+              amount: pixAmountToGenerate,
+            });
+          }
+
           void sendWhatsAppPresence({
             accountId,
             phoneNumber: contact.phone,
@@ -858,6 +883,18 @@ export async function executeAiReplyProcess(args: AutoReplyDebounceArgs): Promis
               .is('ai_processed_at', null)
           } catch {
             // non-blocking
+          }
+
+          // Trigger automatic PIX payment generation if requested by AI
+          if (pixAmountToGenerate && contact?.phone) {
+            void dispatchAutoPixPayment({
+              accountId,
+              conversationId,
+              contactId,
+              phone: contact.phone,
+              name: contact.name,
+              amount: pixAmountToGenerate,
+            });
           }
 
           void sendWhatsAppPresence({
@@ -1042,4 +1079,99 @@ export async function dispatchInboundToAiReply(
   }
 
   return executeDebouncedAiReply(args);
+}
+
+/**
+ * Automatically creates and dispatches a native WhatsApp PIX payment message with button
+ * when the AI output includes a `[gerar_pix: VALOR]` action tag.
+ */
+async function dispatchAutoPixPayment(args: {
+  accountId: string;
+  conversationId: string;
+  contactId?: string | null;
+  phone: string;
+  name?: string | null;
+  amount: number;
+}): Promise<void> {
+  const { accountId, conversationId, contactId, phone, name, amount } = args;
+  const db = supabaseAdmin();
+  try {
+    console.log(`[ai auto-reply:pix] Dispatching auto PIX for conv ${conversationId}, amount: R$ ${amount}`);
+    let dynamicPixCode = '';
+    let dynamicExternalId = '';
+
+    // 1. Try BuckPay API if configured
+    if (process.env.BUCKPAY_API_TOKEN) {
+      try {
+        const { createBuckPayTransaction } = await import('@/lib/buckpay');
+        const cleanRandom = Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(0, 8);
+        const extId = `smm_${contactId || 'lead'}_${Date.now()}_${cleanRandom}`;
+        const amountCents = Math.round(amount * 100);
+
+        const bpRes = await createBuckPayTransaction({
+          external_id: extId,
+          payment_method: 'pix',
+          amount: amountCents,
+          buyer: {
+            name: (name || 'Cliente').trim(),
+            phone,
+            email: `lead_${cleanRandom}@painelsmm.com`,
+          },
+          product: {
+            name: `Pedido SMM R$ ${amount.toFixed(2).replace('.', ',')}`,
+          },
+        });
+
+        if (bpRes?.data?.pix?.code) {
+          dynamicPixCode = bpRes.data.pix.code;
+          dynamicExternalId = extId;
+
+          // Record in webhook_events for automated status tracking
+          try {
+            await db.from('webhook_events').insert({
+              provider: 'buckpay',
+              event_type: 'transaction.initiated',
+              external_event_id: extId,
+              payload: {
+                external_id: extId,
+                contact_id: contactId || null,
+                account_id: accountId,
+                amount,
+                service_name: 'Pedido SMM Automático',
+                buyer: { name, phone },
+                transaction_id: bpRes.data.id,
+                pix: bpRes.data.pix,
+                status: 'pending',
+                created_at: Date.now(),
+              },
+              processing_status: 'RECEIVED',
+              trace_id: `buckpay_ai_${Date.now()}_${cleanRandom}`,
+            });
+          } catch {
+            // non-blocking
+          }
+        }
+      } catch (bpErr) {
+        console.warn('[ai auto-reply:pix] BuckPay dynamic generation error, falling back to BACEN PIX:', bpErr);
+      }
+    }
+
+    // 2. Dispatch PIX button via sendPixMessage
+    const { sendPixMessage } = await import('@/lib/pix/send-pix-message');
+    await sendPixMessage({
+      accountId,
+      conversationId,
+      number: phone,
+      amount,
+      pixKey: dynamicPixCode || undefined,
+      pixKeyType: dynamicPixCode ? 'COPIA_E_COLA' : undefined,
+      externalId: dynamicExternalId || undefined,
+      merchantName: 'Larissa - Engajamento Real',
+      text: `Segue a chave PIX no valor de R$ ${amount.toFixed(2).replace('.', ',')}:`,
+      sendMode: 'both',
+    });
+    console.log(`[ai auto-reply:pix] PIX dispatched successfully to ${phone}!`);
+  } catch (err) {
+    console.error('[ai auto-reply:pix] Error dispatching PIX:', err);
+  }
 }
