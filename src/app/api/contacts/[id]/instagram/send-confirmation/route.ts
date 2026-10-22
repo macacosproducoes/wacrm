@@ -16,7 +16,28 @@ export async function POST(request: Request, context: RouteContext) {
     const { id: contactId } = await context.params;
 
     const body = await request.json().catch(() => ({}));
-    const customQuantity = body.quantity ? Number(body.quantity) : 5000;
+    const isCustomRequested = Boolean(
+      body.is_custom ||
+      body.badge_type === 'custom' ||
+      String(body.quantity).toUpperCase().includes('PERSONALIZAD')
+    );
+    const isVerifiedRequested = Boolean(
+      body.is_verified ||
+      body.isVerified ||
+      isCustomRequested ||
+      String(body.quantity).toUpperCase().includes('VERIFICAD')
+    );
+    const requestedBadgeType: 'instagram' | 'custom' | undefined = isCustomRequested
+      ? 'custom'
+      : (isVerifiedRequested ? 'instagram' : undefined);
+    const requestedBadgeColor = body.custom_badge_color || undefined;
+    const requestedBadgeText = body.custom_badge_text || undefined;
+
+    const customQuantity = isCustomRequested
+      ? 'PERSONALIZADO'
+      : isVerifiedRequested
+      ? 'VERIFICADO'
+      : (body.quantity ? Number(String(body.quantity).replace(/\D/g, '')) || 5000 : 5000);
     const admin = supabaseAdmin();
 
     // 1. Fetch Contact
@@ -72,13 +93,19 @@ export async function POST(request: Request, context: RouteContext) {
 
     const traceId = TraceLogger.generateTraceId('trc_manual');
     const syntheticMessageId = `manual_send_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    const syntheticMessageText = `Quero ${customQuantity} seguidores para @${username}`;
+    const syntheticMessageText = isCustomRequested
+      ? `Quero selo personalizado para @${username}`
+      : isVerifiedRequested
+      ? `Quero selo verificado para @${username}`
+      : `Quero ${customQuantity} seguidores para @${username}`;
 
     TraceLogger.log(traceId, 'T0', 'MANUAL SEND INITIATED', {
       contactId,
       username,
       quantity: customQuantity,
       phone: contact.phone,
+      isVerified: isVerifiedRequested,
+      badgeType: requestedBadgeType,
     });
 
     // 3. Check if an existing creative job already exists with a valid render
@@ -92,11 +119,12 @@ export async function POST(request: Request, context: RouteContext) {
 
     const existingJob = (existingJobs || []).find((j) => {
       const d = (j.input_data || {}) as Record<string, any>;
-      return (
-        d.contact_id === contact.id ||
-        d.recipient === contact.phone ||
-        (d.instagram_username?.toLowerCase() === username.toLowerCase() && Number(d.quantity) === customQuantity)
-      );
+      const matchUsername = (d.instagram_username || d.username || '').toLowerCase() === username.toLowerCase();
+      const matchContact = d.contact_id === contact.id || d.recipient === contact.phone;
+      const matchVerified = Boolean(d.is_verified || d.verified) === isVerifiedRequested;
+      const matchCustom = Boolean(d.is_custom_badge || d.badge_type === 'custom') === isCustomRequested;
+      const matchQuantity = isVerifiedRequested || Number(d.quantity) === Number(customQuantity);
+      return (matchContact || matchUsername) && matchVerified && matchCustom && matchQuantity;
     });
 
     const { sendFollowerOrderCreative } = await import('@/lib/orders/follower-order-handler');
@@ -154,6 +182,15 @@ export async function POST(request: Request, context: RouteContext) {
       messageId: syntheticMessageId,
       pushName: contact.name,
       traceId,
+      overrideUsername: username,
+      overrideQuantity: customQuantity,
+      overrideIsVerified: isVerifiedRequested,
+      overrideBadgeType: requestedBadgeType,
+      overrideBadgeColor: requestedBadgeColor,
+      overrideBadgeText: requestedBadgeText,
+      overrideIsCustomBadge: isCustomRequested,
+      overridePlatform: 'instagram',
+      forceResend: true,
     });
 
     if (!result.handled) {

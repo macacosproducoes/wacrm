@@ -18,6 +18,7 @@ import {
   Sparkles,
   Info,
   ShieldCheck,
+  Star,
   AlertTriangle,
 } from "lucide-react";
 import {
@@ -79,6 +80,8 @@ export function InstagramDiagnosticModal({
   const [isResolving, setIsResolving] = useState(false);
   const [isSendingOrder, setIsSendingOrder] = useState(false);
   const [orderQuantity, setOrderQuantity] = useState("5000");
+  const [customBadgeColor, setCustomBadgeColor] = useState("#EAB308");
+  const [customBadgeText, setCustomBadgeText] = useState("★");
   const [editingUsername, setEditingUsername] = useState(false);
   const [usernameInput, setUsernameInput] = useState(contact.instagram_username || "");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -175,13 +178,26 @@ export function InstagramDiagnosticModal({
 
     setIsSendingOrder(true);
     try {
+      const isCustom = orderQuantity === "PERSONALIZADA";
+      const isVerified = orderQuantity === "VERIFICADO" || isCustom;
+
+      const payload: Record<string, any> = {
+        username,
+        quantity: isCustom ? "PERSONALIZADO" : isVerified ? "VERIFICADO" : (parseInt(orderQuantity, 10) || 5000),
+        is_verified: isVerified,
+        is_custom: isCustom,
+        badge_type: isCustom ? "custom" : isVerified ? "instagram" : undefined,
+      };
+
+      if (isCustom) {
+        payload.custom_badge_color = customBadgeColor;
+        payload.custom_badge_text = customBadgeText;
+      }
+
       const res = await fetch(`/api/contacts/${contact.id}/instagram/send-confirmation`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          quantity: parseInt(orderQuantity, 10) || 5000,
-          username,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -502,45 +518,105 @@ export function InstagramDiagnosticModal({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <div className="w-36">
-              <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-                Seguidores
-              </label>
-              <select
-                value={orderQuantity}
-                onChange={(e) => setOrderQuantity(e.target.value)}
-                className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none font-medium"
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <div className="w-52">
+                <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
+                  Opção do Pedido
+                </label>
+                <select
+                  value={orderQuantity}
+                  onChange={(e) => setOrderQuantity(e.target.value)}
+                  className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none font-medium"
+                >
+                  <optgroup label="Selos & Verificação">
+                    <option value="VERIFICADO">✓ Selo Verificado (Oficial Instagram)</option>
+                    <option value="PERSONALIZADA">★ Selo Personalizado</option>
+                  </optgroup>
+                  <optgroup label="Seguidores">
+                    <option value="500">500 seguidores</option>
+                    <option value="1000">1.000 seguidores</option>
+                    <option value="2000">2.000 seguidores</option>
+                    <option value="5000">5.000 seguidores</option>
+                    <option value="10000">10.000 seguidores</option>
+                    <option value="20000">20.000 seguidores</option>
+                    <option value="30000">30.000 seguidores</option>
+                    <option value="50000">50.000 seguidores</option>
+                    <option value="100000">100.000 seguidores</option>
+                  </optgroup>
+                </select>
+              </div>
+
+              <Button
+                className="flex-1 mt-3.5 h-8 gap-1.5 bg-primary text-primary-foreground font-bold hover:bg-primary/90 shadow-sm"
+                onClick={handleSendConfirmation}
+                disabled={isSendingOrder || !username || !contact.phone}
               >
-                <option value="500">500 seguidores</option>
-                <option value="1000">1.000 seguidores</option>
-                <option value="2000">2.000 seguidores</option>
-                <option value="5000">5.000 seguidores</option>
-                <option value="10000">10.000 seguidores</option>
-                <option value="20000">20.000 seguidores</option>
-                <option value="30000">30.000 seguidores</option>
-                <option value="50000">50.000 seguidores</option>
-                <option value="100000">100.000 seguidores</option>
-              </select>
+                {isSendingOrder ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>Gerando & Enviando Arte...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="h-3.5 w-3.5" />
+                    <span>⚡ Gerar e Enviar Confirmação</span>
+                  </>
+                )}
+              </Button>
             </div>
 
-            <Button
-              className="flex-1 mt-3.5 h-8 gap-1.5 bg-primary text-primary-foreground font-bold hover:bg-primary/90 shadow-sm"
-              onClick={handleSendConfirmation}
-              disabled={isSendingOrder || !username || !contact.phone}
-            >
-              {isSendingOrder ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  <span>Gerando & Enviando Arte...</span>
-                </>
-              ) : (
-                <>
-                  <Send className="h-3.5 w-3.5" />
-                  <span>⚡ Gerar e Enviar Confirmação</span>
-                </>
-              )}
-            </Button>
+            {orderQuantity === "VERIFICADO" && (
+              <div className="rounded-md border border-sky-500/30 bg-sky-500/10 p-2 text-xs text-sky-700 dark:text-sky-300 flex items-center gap-1.5">
+                <ShieldCheck className="h-4 w-4 shrink-0 text-sky-500" />
+                <span>
+                  <strong>Modo Selo Verificado Ativo:</strong> Arte gerada com o selo azul oficial de verificação sobre o perfil.
+                </span>
+              </div>
+            )}
+
+            {orderQuantity === "PERSONALIZADA" && (
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-800 dark:text-amber-300 space-y-2">
+                <div className="flex items-center gap-1.5 font-semibold">
+                  <Star className="h-3.5 w-3.5 text-amber-500" />
+                  <span>Modo Selo Personalizado: Defina cor e símbolo da arte</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] uppercase font-bold text-muted-foreground block mb-1">
+                      Cor do Selo
+                    </label>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="color"
+                        value={customBadgeColor}
+                        onChange={(e) => setCustomBadgeColor(e.target.value)}
+                        className="w-7 h-7 rounded border border-border cursor-pointer bg-transparent"
+                      />
+                      <input
+                        type="text"
+                        value={customBadgeColor}
+                        onChange={(e) => setCustomBadgeColor(e.target.value)}
+                        className="flex-1 h-7 text-[11px] px-2 rounded border border-input bg-background font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase font-bold text-muted-foreground block mb-1">
+                      Símbolo / Texto
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={4}
+                      placeholder="★ ou VIP"
+                      value={customBadgeText}
+                      onChange={(e) => setCustomBadgeText(e.target.value)}
+                      className="w-full h-7 text-[11px] px-2 rounded border border-input bg-background font-bold text-center"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
