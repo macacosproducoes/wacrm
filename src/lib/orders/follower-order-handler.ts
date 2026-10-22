@@ -174,6 +174,10 @@ export interface HandleFollowerOrderParams {
   overridePlatform?: 'instagram' | 'tiktok';
   overrideTemplateId?: string;
   overrideIsVerified?: boolean;
+  overrideBadgeType?: 'instagram' | 'custom';
+  overrideBadgeColor?: string;
+  overrideBadgeText?: string;
+  overrideIsCustomBadge?: boolean;
   forceResend?: boolean;
 }
 
@@ -348,17 +352,33 @@ export async function handleFollowerOrder(
   const neutralAvatar = isTikTok ? NEUTRAL_TIKTOK_AVATAR : NEUTRAL_INSTAGRAM_AVATAR;
   const templateProfileImage = (isPlatformImageValid ? finalResolvedImage : null) || contact?.avatar_url || neutralAvatar;
 
+  const isCustomBadgeOrder = Boolean(
+    params.overrideBadgeType === 'custom' ||
+    params.overrideIsCustomBadge ||
+    /personalizad[oa]|custom/i.test(String(overrideQuantity)) ||
+    /personalizad[oa]|custom/i.test(String(messageText))
+  );
+
   const isVerifiedOrder = Boolean(
     parsed.isVerified ||
     params.overrideIsVerified ||
+    isCustomBadgeOrder ||
     String(overrideQuantity).toUpperCase().includes('VERIFICAD')
   );
 
+  const finalBadgeType: 'instagram' | 'custom' | undefined = isCustomBadgeOrder
+    ? 'custom'
+    : (isVerifiedOrder ? 'instagram' : undefined);
+  const finalBadgeColor = params.overrideBadgeColor || (isCustomBadgeOrder ? '#EAB308' : '#0095F6');
+  const finalBadgeText = params.overrideBadgeText || (isCustomBadgeOrder ? '★' : '✓');
+
   // 3. Generate Order Code & Idempotency Key
-  const orderCode = isVerifiedOrder
+  const orderCode = isCustomBadgeOrder
+    ? `PED-CUSTOM-${orderUsername.toUpperCase()}`
+    : isVerifiedOrder
     ? `PED-VERIFICADO-${orderUsername.toUpperCase()}`
     : `PED-${orderQuantity}-${orderUsername.toUpperCase()}`;
-  const idempotencyKey = `follower_order_${accountId}_${contactId}_${orderUsername}_${orderQuantity}_${isVerifiedOrder ? 'verif_' : ''}${messageId}`;
+  const idempotencyKey = `follower_order_${accountId}_${contactId}_${orderUsername}_${orderQuantity}_${isCustomBadgeOrder ? 'custom_' : (isVerifiedOrder ? 'verif_' : '')}${messageId}`;
 
   if (traceId) {
     TraceLogger.log(traceId, 'T7', 'ORDER CREATED', {
@@ -395,16 +415,24 @@ export async function handleFollowerOrder(
     ? contact.name
     : pushName || parsed.username;
 
-  const finalServiceLabel = isVerifiedOrder
+  const finalServiceLabel = isCustomBadgeOrder
+    ? (isTikTok ? 'Selo Personalizado TikTok' : 'Selo Personalizado Instagram')
+    : isVerifiedOrder
     ? (isTikTok ? 'Selo Verificado TikTok' : 'Selo Verificado Instagram')
     : serviceLabel;
 
-  const quantityDisplay = isVerifiedOrder
+  const quantityDisplay = isCustomBadgeOrder
+    ? (parsed.quantity && parsed.quantity > 1 ? `${parsed.quantityFormatted} + Selo Personalizado` : 'Selo Personalizado')
+    : isVerifiedOrder
     ? (parsed.quantity && parsed.quantity > 1 ? `${parsed.quantityFormatted} + Selo Verificado` : 'Selo Verificado')
     : (parsed.quantityFormatted || String(parsed.quantity));
 
   const renderContext = {
-    title: isVerifiedOrder ? 'SOLICITAÇÃO DE VERIFICAÇÃO' : 'CONFIRMAÇÃO DE PEDIDO',
+    title: isCustomBadgeOrder
+      ? 'PEDIDO PERSONALIZADO'
+      : isVerifiedOrder
+      ? 'SOLICITAÇÃO DE VERIFICAÇÃO'
+      : 'CONFIRMAÇÃO DE PEDIDO',
     name: recipientName,
     code: orderCode,
     platform: parsed.platform || 'instagram',
@@ -415,7 +443,12 @@ export async function handleFollowerOrder(
     service: finalServiceLabel,
     is_verified: isVerifiedOrder,
     verified: isVerifiedOrder,
-    verified_badge: isVerifiedOrder ? '✓' : '',
+    is_custom_badge: isCustomBadgeOrder,
+    badge_type: finalBadgeType,
+    custom_badge_color: finalBadgeColor,
+    custom_badge_text: finalBadgeText,
+    custom_badge_icon: isCustomBadgeOrder ? (finalBadgeText ? 'text' : 'star') : 'check',
+    verified_badge: isVerifiedOrder ? (isCustomBadgeOrder ? finalBadgeText : '✓') : '',
     date: new Date().toLocaleDateString('pt-BR'),
     profile_image: templateProfileImage,
     amount: 'R$ 49,90',
@@ -429,6 +462,7 @@ export async function handleFollowerOrder(
       service: finalServiceLabel,
       amount: 'R$ 49,90',
       date: new Date().toLocaleDateString('pt-BR'),
+      badge_type: finalBadgeType,
     },
     customer: {
       name: recipientName,

@@ -124,4 +124,86 @@ describe('Creative Engine - Deterministic Renderer', () => {
     expect(res.svg).toContain('Texto no Grupo');
     expect(res.pngBuffer).toBeInstanceOf(Buffer);
   });
+
+  it('renders official Instagram verified badge on circle image when is_verified is true', async () => {
+    const template: TemplateDefinition = {
+      width: 400,
+      height: 400,
+      background: '#0f172a',
+      elements: [
+        {
+          id: 'avatar',
+          type: 'CIRCLE_IMAGE',
+          x: 100,
+          y: 100,
+          width: 200,
+          height: 200,
+        },
+      ],
+    };
+
+    const res = await CreativeRenderer.render(template, {
+      is_verified: true,
+    });
+
+    expect(res.svg).toContain('#0095F6');
+    expect(res.svg).toContain('circle_badge_');
+    expect(res.pngBuffer).toBeInstanceOf(Buffer);
+  });
+
+  it('renders custom badge with custom color and star/text icon when badge_type is custom', async () => {
+    const template: TemplateDefinition = {
+      width: 400,
+      height: 400,
+      background: '#0f172a',
+      elements: [
+        {
+          id: 'avatar',
+          type: 'CIRCLE_IMAGE',
+          x: 100,
+          y: 100,
+          width: 200,
+          height: 200,
+        },
+      ],
+    };
+
+    const res = await CreativeRenderer.render(template, {
+      is_verified: true,
+      badge_type: 'custom',
+      custom_badge_color: '#EAB308',
+      custom_badge_text: 'VIP',
+    });
+
+    expect(res.svg).toContain('#EAB308');
+    expect(res.svg).toContain('VIP');
+    expect(res.pngBuffer).toBeInstanceOf(Buffer);
+  });
+
+  it('renders standalone VERIFIED_BADGE element', async () => {
+    const template: TemplateDefinition = {
+      width: 400,
+      height: 400,
+      background: '#0f172a',
+      elements: [
+        {
+          id: 'my_badge',
+          type: 'VERIFIED_BADGE',
+          x: 50,
+          y: 50,
+          width: 40,
+          height: 40,
+          badgeType: 'custom',
+          fillColor: '#8B5CF6',
+          icon: 'star',
+          showAlways: true,
+        },
+      ],
+    };
+
+    const res = await CreativeRenderer.render(template, {});
+    expect(res.svg).toContain('my_badge');
+    expect(res.svg).toContain('#8B5CF6');
+    expect(res.pngBuffer).toBeInstanceOf(Buffer);
+  });
 });

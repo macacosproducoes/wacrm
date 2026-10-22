@@ -15,6 +15,7 @@ import type {
   ShapeElement,
   LineElement,
   GroupElement,
+  VerifiedBadgeElement,
 } from './types';
 import { resolveTextTemplate, evaluateVariable } from './variables';
 import { ImageProvider } from './image-provider';
@@ -253,6 +254,9 @@ export class CreativeRenderer {
       case 'LINE':
         return this.renderLineElement(el as LineElement, transformAttr, opacityAttr);
 
+      case 'VERIFIED_BADGE':
+        return this.renderVerifiedBadgeElement(el as VerifiedBadgeElement, context, transformAttr, opacityAttr);
+
       case 'GROUP':
         return await this.renderGroupElement(el as GroupElement, context, defs, options, uniqueId, transformAttr, opacityAttr);
 
@@ -413,25 +417,161 @@ export class CreativeRenderer {
       borderSvg = `\n  <circle cx="${cx}" cy="${cy}" r="${radius - el.borderWidth / 2}" fill="none" stroke="${escapeXml(el.borderColor)}" stroke-width="${el.borderWidth}"${transformAttr}${opacityAttr}/>`;
     }
 
-    // Official Instagram/TikTok Verified Badge if order is for verified
+    // Verified Badge if order is for verified or element specifies it
     let verifiedBadgeSvg = '';
-    if (context.is_verified || context.verified) {
+    const shouldShowBadge =
+      el.showVerifiedBadge === true ||
+      Boolean(context.is_verified || context.verified || context.is_custom_badge);
+
+    if (shouldShowBadge) {
       const badgeSize = Math.max(28, Math.round(radius * 0.54));
       // Position at bottom-right corner of circle avatar
       const badgeX = Math.round(cx + radius * 0.65 - badgeSize / 2);
       const badgeY = Math.round(cy + radius * 0.65 - badgeSize / 2);
 
-      verifiedBadgeSvg = `
-  <g id="verified_badge_${uniqueId}" transform="translate(${badgeX}, ${badgeY})">
-    <svg width="${badgeSize}" height="${badgeSize}" viewBox="0 0 40 40">
-      <circle cx="20" cy="20" r="19" fill="#0f172a" stroke="#1e293b" stroke-width="2.5"/>
-      <path fill="#0095F6" d="M19.998 4l2.5 2.1 3.2-.2 1.7 2.8 3.1 1 .8 3.2 2.5 2.1-.8 3.2-2.5 2.1-1.7 2.8-3.2-.2-2.5 2.1-3.1-1-3.1 1-2.5-2.1-3.2.2-1.7-2.8-2.5-2.1.8-3.2 2.5-2.1.8-3.2 1.7-2.8 3.2.2 2.5-2.1 3.1 1z"/>
-      <path fill="#ffffff" d="M17.5 24.5l-4.5-4.5 1.8-1.8 2.7 2.7 7.2-7.2 1.8 1.8z"/>
-    </svg>
-  </g>`;
+      const isCustomOrder = Boolean(
+        context.badge_type === 'custom' ||
+        context.is_custom_badge ||
+        el.verifiedBadgeType === 'custom'
+      );
+      const badgeType: 'instagram' | 'custom' = isCustomOrder ? 'custom' : 'instagram';
+      const badgeColor =
+        (context.custom_badge_color as string) ||
+        el.customBadgeColor ||
+        (badgeType === 'custom' ? '#EAB308' : '#0095F6');
+      const badgeText =
+        (context.custom_badge_text as string) ||
+        el.customBadgeText ||
+        '★';
+      const badgeIcon =
+        (context.custom_badge_icon as 'check' | 'star' | 'crown' | 'text') ||
+        el.customBadgeIcon ||
+        (badgeType === 'custom' ? (badgeText ? 'text' : 'star') : 'check');
+
+      verifiedBadgeSvg = CreativeRenderer.generateBadgeSvg({
+        x: badgeX,
+        y: badgeY,
+        size: badgeSize,
+        badgeType,
+        fillColor: badgeColor,
+        icon: badgeIcon,
+        text: badgeText,
+        id: `circle_badge_${uniqueId}`,
+      });
     }
 
     return imageSvg + borderSvg + verifiedBadgeSvg;
+  }
+
+  /**
+   * Generates SVG for verified badges (Instagram blue badge or custom badge)
+   */
+  public static generateBadgeSvg(options: {
+    x: number;
+    y: number;
+    size: number;
+    badgeType?: 'instagram' | 'custom';
+    fillColor?: string;
+    strokeColor?: string;
+    icon?: 'check' | 'star' | 'crown' | 'text';
+    text?: string;
+    id?: string;
+    transformAttr?: string;
+    opacityAttr?: string;
+  }): string {
+    const {
+      x,
+      y,
+      size,
+      badgeType = 'instagram',
+      fillColor,
+      strokeColor = '#1e293b',
+      icon = 'check',
+      text = '★',
+      id,
+      transformAttr = '',
+      opacityAttr = '',
+    } = options;
+
+    const idAttr = id ? ` id="${escapeXml(id)}"` : '';
+    const isCustom = badgeType === 'custom';
+    const fill = fillColor || (isCustom ? '#EAB308' : '#0095F6');
+    const stroke = strokeColor || (isCustom ? '#CA8A04' : '#1e293b');
+
+    // Instagram scalloped star geometry
+    const starPath = `<path fill="${escapeXml(fill)}" d="M19.998 4l2.5 2.1 3.2-.2 1.7 2.8 3.1 1 .8 3.2 2.5 2.1-.8 3.2-2.5 2.1-1.7 2.8-3.2-.2-2.5 2.1-3.1-1-3.1 1-2.5-2.1-3.2.2-1.7-2.8-2.5-2.1.8-3.2 2.5-2.1.8-3.2 1.7-2.8 3.2.2 2.5-2.1 3.1 1z"/>`;
+
+    // Center icon geometry based on icon type
+    let iconSvg = '';
+    if (!isCustom || icon === 'check') {
+      iconSvg = `<path fill="#ffffff" d="M17.5 24.5l-4.5-4.5 1.8-1.8 2.7 2.7 7.2-7.2 1.8 1.8z"/>`;
+    } else if (icon === 'star') {
+      iconSvg = `<path fill="#ffffff" d="M20 9.5l3.1 6.3 7 .9-5.1 4.9 1.2 6.9-6.2-3.3-6.2 3.3 1.2-6.9-5.1-4.9 7-.9z"/>`;
+    } else if (icon === 'crown') {
+      iconSvg = `<path fill="#ffffff" d="M11 25.5h18v2.5H11zm0-1.5l2.2-8.5 4 5 2.8-7.5 2.8 7.5 4-5 2.2 8.5z"/>`;
+    } else if (icon === 'text' || text) {
+      const displayStr = escapeXml(String(text).slice(0, 4));
+      const fontSize = displayStr.length > 2 ? 10 : 13;
+      iconSvg = `<text x="20" y="24.5" text-anchor="middle" font-family="Roboto, Inter, -apple-system, sans-serif" font-weight="900" font-size="${fontSize}" fill="#ffffff">${displayStr}</text>`;
+    }
+
+    return `
+  <g${idAttr} transform="translate(${x}, ${y})"${transformAttr}${opacityAttr}>
+    <svg width="${size}" height="${size}" viewBox="0 0 40 40">
+      <circle cx="20" cy="20" r="19" fill="#0f172a" stroke="${escapeXml(stroke)}" stroke-width="2.5"/>
+      ${starPath}
+      ${iconSvg}
+    </svg>
+  </g>`;
+  }
+
+  /**
+   * Renders standalone VERIFIED_BADGE element
+   */
+  private static renderVerifiedBadgeElement(
+    el: VerifiedBadgeElement,
+    context: Record<string, unknown>,
+    transformAttr: string,
+    opacityAttr: string
+  ): string {
+    // Check if should be shown
+    if (el.showAlways !== true) {
+      if (context.is_verified === false && !context.verified) {
+        return '';
+      }
+    }
+
+    const isCustomOrder = Boolean(
+      context.badge_type === 'custom' ||
+      context.is_custom_badge ||
+      el.badgeType === 'custom'
+    );
+    const badgeType: 'instagram' | 'custom' = isCustomOrder ? 'custom' : 'instagram';
+    const badgeColor =
+      (context.custom_badge_color as string) ||
+      el.fillColor ||
+      (badgeType === 'custom' ? '#EAB308' : '#0095F6');
+    const badgeText = (context.custom_badge_text as string) || el.text || '★';
+    const badgeIcon =
+      (context.custom_badge_icon as 'check' | 'star' | 'crown' | 'text') ||
+      el.icon ||
+      (badgeType === 'custom' ? (badgeText ? 'text' : 'star') : 'check');
+
+    const size = Math.min(el.width, el.height);
+
+    return CreativeRenderer.generateBadgeSvg({
+      x: el.x,
+      y: el.y,
+      size,
+      badgeType,
+      fillColor: badgeColor,
+      strokeColor: el.strokeColor,
+      icon: badgeIcon,
+      text: badgeText,
+      id: el.id,
+      transformAttr,
+      opacityAttr,
+    });
   }
 
   /**

@@ -21,12 +21,19 @@ import {
   Eye,
   Loader2,
   Sparkles,
+  ShieldCheck,
+  Star,
+  ChevronDown,
+  ChevronUp,
+  Sliders,
 } from 'lucide-react';
 import type {
   CreativeTemplate,
   TemplateDefinition,
   CreativeElement,
   CreativeElementType,
+  CircleImageElement,
+  VerifiedBadgeElement,
 } from '@/lib/creative-engine/types';
 import { PreviewModal } from './preview-modal';
 
@@ -147,6 +154,7 @@ export function TemplateModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'elements' | 'json' | 'canvas'>('elements');
+  const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
 
   // Preview state
   const [showPreview, setShowPreview] = useState(false);
@@ -165,8 +173,19 @@ export function TemplateModal({
       setDefinition(DEFAULT_DEFINITION);
       setJsonText(JSON.stringify(DEFAULT_DEFINITION, null, 2));
     }
+    setSelectedElementId(null);
     setError(null);
   }, [template, isOpen]);
+
+  const updateElement = (id: string, updates: Record<string, any>) => {
+    const updatedElements = (definition.elements || []).map((el) => {
+      if (el.id !== id) return el;
+      return { ...el, ...updates } as CreativeElement;
+    });
+    const updatedDef = { ...definition, elements: updatedElements };
+    setDefinition(updatedDef);
+    setJsonText(JSON.stringify(updatedDef, null, 2));
+  };
 
   const handleJsonChange = (val: string) => {
     setJsonText(val);
@@ -245,62 +264,90 @@ export function TemplateModal({
     }
   };
 
-  const addElement = (type: CreativeElementType) => {
+  const addElement = (type: CreativeElementType, extraProps?: Record<string, any>) => {
     const id = `el_${Date.now()}`;
-    const newEl: CreativeElement =
-      type === 'TEXT'
-        ? {
-            id,
-            type: 'TEXT',
-            x: 100,
-            y: 100,
-            width: 400,
-            height: 40,
-            text: 'Novo Texto {{var}}',
-            fontSize: 28,
-            color: '#ffffff',
-            alignment: 'left',
-          }
-        : type === 'CIRCLE_IMAGE'
-        ? {
-            id,
-            type: 'CIRCLE_IMAGE',
-            x: 100,
-            y: 100,
-            width: 150,
-            height: 150,
-            variable: 'profile_image',
-            borderColor: '#38bdf8',
-            borderWidth: 2,
-          }
-        : type === 'IMAGE'
-        ? {
-            id,
-            type: 'IMAGE',
-            x: 100,
-            y: 100,
-            width: 300,
-            height: 200,
-            variable: 'product_image',
-            fit: 'cover',
-          }
-        : {
-            id,
-            type: 'ROUNDED_RECTANGLE',
-            x: 100,
-            y: 100,
-            width: 300,
-            height: 150,
-            fill: '#1e293b',
-            stroke: '#334155',
-            strokeWidth: 1,
-            borderRadius: 12,
-          };
+    let newEl: CreativeElement;
+
+    if (type === 'TEXT') {
+      newEl = {
+        id,
+        type: 'TEXT',
+        x: 100,
+        y: 100,
+        width: 400,
+        height: 40,
+        text: 'Novo Texto {{var}}',
+        fontSize: 28,
+        color: '#ffffff',
+        alignment: 'left',
+        ...extraProps,
+      };
+    } else if (type === 'CIRCLE_IMAGE') {
+      newEl = {
+        id,
+        type: 'CIRCLE_IMAGE',
+        x: 100,
+        y: 100,
+        width: 150,
+        height: 150,
+        variable: 'profile_image',
+        borderColor: '#38bdf8',
+        borderWidth: 2,
+        showVerifiedBadge: false,
+        verifiedBadgeType: 'instagram',
+        customBadgeColor: '#EAB308',
+        customBadgeText: '★',
+        ...extraProps,
+      };
+    } else if (type === 'VERIFIED_BADGE') {
+      const isCustom = extraProps?.badgeType === 'custom';
+      newEl = {
+        id,
+        type: 'VERIFIED_BADGE',
+        x: 120,
+        y: 120,
+        width: 48,
+        height: 48,
+        badgeType: isCustom ? 'custom' : 'instagram',
+        fillColor: isCustom ? '#EAB308' : '#0095F6',
+        icon: isCustom ? 'star' : 'check',
+        text: isCustom ? '★' : '✓',
+        showAlways: true,
+        ...extraProps,
+      };
+    } else if (type === 'IMAGE') {
+      newEl = {
+        id,
+        type: 'IMAGE',
+        x: 100,
+        y: 100,
+        width: 300,
+        height: 200,
+        variable: 'product_image',
+        fit: 'cover',
+        ...extraProps,
+      };
+    } else {
+      newEl = {
+        id,
+        type: 'ROUNDED_RECTANGLE',
+        x: 100,
+        y: 100,
+        width: 300,
+        height: 150,
+        fill: '#1e293b',
+        stroke: '#334155',
+        strokeWidth: 1,
+        borderRadius: 12,
+        ...extraProps,
+      };
+    }
 
     const updatedElements = [...(definition.elements || []), newEl];
     const updatedDef = { ...definition, elements: updatedElements };
     setDefinition(updatedDef);
     setJsonText(JSON.stringify(updatedDef, null, 2));
+    setSelectedElementId(id);
   };
 
   const removeElement = (id: string) => {
@@ -397,47 +444,325 @@ export function TemplateModal({
                 <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" onClick={() => addElement('CIRCLE_IMAGE')}>
                   <Circle className="w-3.5 h-3.5 text-indigo-400" /> Foto Circular
                 </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1 text-xs border-sky-500/40 text-sky-400 hover:bg-sky-500/10 font-medium"
+                  onClick={() => addElement('VERIFIED_BADGE', { badgeType: 'instagram' })}
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-sky-400" /> Selo Verificado (IG)
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1 text-xs border-amber-500/40 text-amber-400 hover:bg-amber-500/10 font-medium"
+                  onClick={() => addElement('VERIFIED_BADGE', { badgeType: 'custom', fillColor: '#EAB308', icon: 'star', text: '★' })}
+                >
+                  <Star className="w-3.5 h-3.5 text-amber-400" /> Selo Personalizado
+                </Button>
               </div>
 
-              <div className="flex flex-col gap-2 max-h-[360px] overflow-y-auto pr-1">
-                {(definition.elements || []).map((el, idx) => (
-                  <div
-                    key={el.id || idx}
-                    className="flex items-center justify-between p-3 rounded-lg bg-card/60 border border-border/80 text-xs gap-3 hover:border-primary/40 transition-colors"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <Badge variant="secondary" className="font-mono text-[10px] shrink-0">
-                        {el.type}
-                      </Badge>
-                      <div className="truncate">
-                        <span className="font-semibold text-foreground mr-2">{el.id}</span>
-                        {'text' in el && (
-                          <span className="text-muted-foreground truncate italic">
-                            &ldquo;{(el as { text?: string }).text}&rdquo;
-                          </span>
-                        )}
-                        {'variable' in el && (
-                          <span className="text-sky-400 truncate ml-1 font-mono">
-                            {'{'}{(el as { variable?: string }).variable}{'}'}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3 shrink-0">
-                      <span className="text-[11px] font-mono text-muted-foreground">
-                        ({el.x}, {el.y}) • {el.width}×{el.height}px
-                      </span>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                        onClick={() => removeElement(el.id)}
+              <div className="flex flex-col gap-2 max-h-[460px] overflow-y-auto pr-1">
+                {(definition.elements || []).map((el, idx) => {
+                  const isSelected = selectedElementId === el.id;
+                  const isCircleImage = el.type === 'CIRCLE_IMAGE';
+                  const isBadge = el.type === 'VERIFIED_BADGE';
+                  const circleEl = isCircleImage ? (el as CircleImageElement) : null;
+                  const badgeEl = isBadge ? (el as VerifiedBadgeElement) : null;
+
+                  return (
+                    <div
+                      key={el.id || idx}
+                      className={`flex flex-col rounded-lg border text-xs transition-colors ${
+                        isSelected
+                          ? 'border-primary bg-card/90 shadow-sm'
+                          : 'border-border/80 bg-card/60 hover:border-primary/40'
+                      }`}
+                    >
+                      {/* Element Header Row */}
+                      <div
+                        className="flex items-center justify-between p-3 cursor-pointer gap-3"
+                        onClick={() => setSelectedElementId(isSelected ? null : el.id)}
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </Button>
+                        <div className="flex items-center gap-3 min-w-0">
+                          <Badge
+                            variant={isBadge ? (badgeEl?.badgeType === 'custom' ? 'default' : 'secondary') : 'secondary'}
+                            className={`font-mono text-[10px] shrink-0 ${
+                              isBadge && badgeEl?.badgeType === 'custom'
+                                ? 'bg-amber-500/20 text-amber-400 border-amber-500/40'
+                                : isBadge
+                                ? 'bg-sky-500/20 text-sky-400 border-sky-500/40'
+                                : ''
+                            }`}
+                          >
+                            {el.type}
+                          </Badge>
+                          <div className="truncate flex items-center gap-1.5">
+                            <span className="font-semibold text-foreground">{el.id}</span>
+                            {'text' in el && (
+                              <span className="text-muted-foreground truncate italic">
+                                &ldquo;{(el as { text?: string }).text}&rdquo;
+                              </span>
+                            )}
+                            {'variable' in el && (
+                              <span className="text-sky-400 truncate font-mono">
+                                {'{'}{(el as { variable?: string }).variable}{'}'}
+                              </span>
+                            )}
+                            {isCircleImage && circleEl?.showVerifiedBadge && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 border border-sky-500/30">
+                                ✓ Selo Verificado Ativo
+                              </span>
+                            )}
+                            {isBadge && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-foreground border border-border">
+                                {badgeEl?.badgeType === 'custom' ? 'Personalizado (★)' : 'Instagram Oficial (✓)'}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[11px] font-mono text-muted-foreground">
+                            ({el.x}, {el.y}) • {el.width}×{el.height}px
+                          </span>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedElementId(isSelected ? null : el.id);
+                            }}
+                          >
+                            {isSelected ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeElement(el.id);
+                            }}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      {/* Element Editor Drawer (Shown when row is clicked/selected) */}
+                      {isSelected && (
+                        <div className="border-t border-border/80 p-3.5 bg-muted/20 space-y-3">
+                          {/* Coordinates & Dimensions */}
+                          <div className="grid grid-cols-4 gap-2">
+                            <div>
+                              <label className="text-[10px] text-muted-foreground font-semibold">X (px)</label>
+                              <input
+                                type="number"
+                                value={el.x}
+                                onChange={(e) => updateElement(el.id, { x: Number(e.target.value) })}
+                                className="w-full text-xs px-2 py-1 mt-0.5 rounded border border-input bg-background"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-muted-foreground font-semibold">Y (px)</label>
+                              <input
+                                type="number"
+                                value={el.y}
+                                onChange={(e) => updateElement(el.id, { y: Number(e.target.value) })}
+                                className="w-full text-xs px-2 py-1 mt-0.5 rounded border border-input bg-background"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-muted-foreground font-semibold">Largura (px)</label>
+                              <input
+                                type="number"
+                                value={el.width}
+                                onChange={(e) => updateElement(el.id, { width: Number(e.target.value) })}
+                                className="w-full text-xs px-2 py-1 mt-0.5 rounded border border-input bg-background"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-muted-foreground font-semibold">Altura (px)</label>
+                              <input
+                                type="number"
+                                value={el.height}
+                                onChange={(e) => updateElement(el.id, { height: Number(e.target.value) })}
+                                className="w-full text-xs px-2 py-1 mt-0.5 rounded border border-input bg-background"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Specific settings for CIRCLE_IMAGE */}
+                          {isCircleImage && circleEl && (
+                            <div className="space-y-3 pt-2 border-t border-border/50">
+                              <div className="flex items-center gap-2">
+                                <label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(circleEl.showVerifiedBadge)}
+                                    onChange={(e) => updateElement(el.id, { showVerifiedBadge: e.target.checked })}
+                                    className="rounded border-input text-primary focus:ring-primary w-4 h-4 cursor-pointer"
+                                  />
+                                  <span>Exibir Selo de Verificação no Perfil</span>
+                                </label>
+                              </div>
+
+                              {circleEl.showVerifiedBadge && (
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-2.5 rounded-md bg-background/80 border border-border/60">
+                                  <div>
+                                    <label className="text-[10px] font-semibold text-muted-foreground">Tipo de Selo</label>
+                                    <select
+                                      value={circleEl.verifiedBadgeType || 'instagram'}
+                                      onChange={(e) => updateElement(el.id, { verifiedBadgeType: e.target.value as 'instagram' | 'custom' })}
+                                      className="w-full text-xs h-8 px-2 mt-1 rounded border border-input bg-background"
+                                    >
+                                      <option value="instagram">Oficial Instagram (Azul)</option>
+                                      <option value="custom">Personalizado (Custom)</option>
+                                    </select>
+                                  </div>
+
+                                  {circleEl.verifiedBadgeType === 'custom' && (
+                                    <>
+                                      <div>
+                                        <label className="text-[10px] font-semibold text-muted-foreground">Cor do Selo</label>
+                                        <div className="flex items-center gap-1.5 mt-1">
+                                          <input
+                                            type="color"
+                                            value={circleEl.customBadgeColor || '#EAB308'}
+                                            onChange={(e) => updateElement(el.id, { customBadgeColor: e.target.value })}
+                                            className="w-8 h-8 rounded border border-border cursor-pointer bg-transparent"
+                                          />
+                                          <input
+                                            type="text"
+                                            value={circleEl.customBadgeColor || '#EAB308'}
+                                            onChange={(e) => updateElement(el.id, { customBadgeColor: e.target.value })}
+                                            className="flex-1 text-xs px-2 py-1 h-8 rounded border border-input bg-background font-mono"
+                                          />
+                                        </div>
+                                      </div>
+                                      <div>
+                                        <label className="text-[10px] font-semibold text-muted-foreground">Símbolo / Texto</label>
+                                        <input
+                                          type="text"
+                                          maxLength={4}
+                                          placeholder="★ ou VIP"
+                                          value={circleEl.customBadgeText || '★'}
+                                          onChange={(e) => updateElement(el.id, { customBadgeText: e.target.value })}
+                                          className="w-full text-xs px-2 py-1 h-8 mt-1 rounded border border-input bg-background text-center font-bold"
+                                        />
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Specific settings for VERIFIED_BADGE */}
+                          {isBadge && badgeEl && (
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-border/50">
+                              <div>
+                                <label className="text-[10px] font-semibold text-muted-foreground">Tipo de Selo</label>
+                                <select
+                                  value={badgeEl.badgeType || 'instagram'}
+                                  onChange={(e) => {
+                                    const val = e.target.value as 'instagram' | 'custom';
+                                    updateElement(el.id, {
+                                      badgeType: val,
+                                      fillColor: val === 'custom' ? '#EAB308' : '#0095F6',
+                                      icon: val === 'custom' ? 'star' : 'check',
+                                    });
+                                  }}
+                                  className="w-full text-xs h-8 px-2 mt-1 rounded border border-input bg-background"
+                                >
+                                  <option value="instagram">Oficial Instagram (Azul)</option>
+                                  <option value="custom">Personalizado (Custom)</option>
+                                </select>
+                              </div>
+
+                              <div>
+                                <label className="text-[10px] font-semibold text-muted-foreground">Cor do Selo</label>
+                                <div className="flex items-center gap-1.5 mt-1">
+                                  <input
+                                    type="color"
+                                    value={badgeEl.fillColor || (badgeEl.badgeType === 'custom' ? '#EAB308' : '#0095F6')}
+                                    onChange={(e) => updateElement(el.id, { fillColor: e.target.value })}
+                                    className="w-8 h-8 rounded border border-border cursor-pointer bg-transparent"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={badgeEl.fillColor || (badgeEl.badgeType === 'custom' ? '#EAB308' : '#0095F6')}
+                                    onChange={(e) => updateElement(el.id, { fillColor: e.target.value })}
+                                    className="flex-1 text-xs px-2 py-1 h-8 rounded border border-input bg-background font-mono"
+                                  />
+                                </div>
+                              </div>
+
+                              <div>
+                                <label className="text-[10px] font-semibold text-muted-foreground">Símbolo / Ícone</label>
+                                <div className="flex items-center gap-1 mt-1">
+                                  <select
+                                    value={badgeEl.icon || 'check'}
+                                    onChange={(e) => updateElement(el.id, { icon: e.target.value as any })}
+                                    className="flex-1 text-xs h-8 px-2 rounded border border-input bg-background"
+                                  >
+                                    <option value="check">Check (✓)</option>
+                                    <option value="star">Estrela (★)</option>
+                                    <option value="crown">Coroa (👑)</option>
+                                    <option value="text">Texto Personalizado</option>
+                                  </select>
+                                  {badgeEl.icon === 'text' && (
+                                    <input
+                                      type="text"
+                                      maxLength={4}
+                                      placeholder="VIP"
+                                      value={badgeEl.text || 'VIP'}
+                                      onChange={(e) => updateElement(el.id, { text: e.target.value })}
+                                      className="w-16 text-xs px-2 py-1 h-8 rounded border border-input bg-background font-bold text-center"
+                                    />
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Specific settings for TEXT */}
+                          {'text' in el && (
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-border/50">
+                              <div className="sm:col-span-2">
+                                <label className="text-[10px] font-semibold text-muted-foreground">Texto ou Template</label>
+                                <input
+                                  type="text"
+                                  value={(el as { text?: string }).text || ''}
+                                  onChange={(e) => updateElement(el.id, { text: e.target.value })}
+                                  className="w-full text-xs px-2 py-1 mt-1 rounded border border-input bg-background font-mono"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-semibold text-muted-foreground">Cor do Texto</label>
+                                <div className="flex items-center gap-1.5 mt-1">
+                                  <input
+                                    type="color"
+                                    value={(el as { color?: string }).color || '#ffffff'}
+                                    onChange={(e) => updateElement(el.id, { color: e.target.value })}
+                                    className="w-8 h-8 rounded border border-border cursor-pointer bg-transparent"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={(el as { color?: string }).color || '#ffffff'}
+                                    onChange={(e) => updateElement(el.id, { color: e.target.value })}
+                                    className="flex-1 text-xs px-2 py-1 h-8 rounded border border-input bg-background font-mono"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </TabsContent>
 

@@ -13,11 +13,14 @@ export type CreativeElementType =
   | 'ROUNDED_RECTANGLE'
   | 'LINE'
   | 'GROUP'
-  | 'LOGO';
+  | 'LOGO'
+  | 'VERIFIED_BADGE';
 
 export type TextAlignment = 'left' | 'center' | 'right';
 export type ImageFit = 'cover' | 'contain' | 'fill';
 export type ImagePosition = 'center' | 'top' | 'bottom' | 'left' | 'right';
+export type VerifiedBadgeType = 'instagram' | 'custom';
+export type BadgeIconType = 'check' | 'star' | 'crown' | 'text';
 
 export interface BaseCreativeElement {
   id: string;
@@ -62,6 +65,22 @@ export interface CircleImageElement extends BaseCreativeElement {
   fallbackUrl?: string;
   borderColor?: string;
   borderWidth?: number;
+  showVerifiedBadge?: boolean;
+  verifiedBadgeType?: VerifiedBadgeType;
+  customBadgeColor?: string;
+  customBadgeIcon?: BadgeIconType;
+  customBadgeText?: string;
+}
+
+export interface VerifiedBadgeElement extends BaseCreativeElement {
+  type: 'VERIFIED_BADGE';
+  badgeType?: VerifiedBadgeType;
+  fillColor?: string;
+  strokeColor?: string;
+  icon?: BadgeIconType;
+  text?: string;
+  showAlways?: boolean;
+  variable?: string;
 }
 
 export interface ShapeElement extends BaseCreativeElement {
@@ -92,7 +111,8 @@ export type CreativeElement =
   | CircleImageElement
   | ShapeElement
   | LineElement
-  | GroupElement;
+  | GroupElement
+  | VerifiedBadgeElement;
 
 export interface VariableDefinition {
   key: string;

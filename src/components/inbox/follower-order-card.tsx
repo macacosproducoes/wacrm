@@ -106,6 +106,9 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
   const [customUsername, setCustomUsername] = useState("");
   const [customQuantity, setCustomQuantity] = useState(5000);
   const [isVerified, setIsVerified] = useState(false);
+  const [badgeOption, setBadgeOption] = useState<"none" | "verified" | "custom">("none");
+  const [customBadgeColor, setCustomBadgeColor] = useState("#EAB308");
+  const [customBadgeText, setCustomBadgeText] = useState("★");
   const [customTemplateId, setCustomTemplateId] = useState("");
   const [customPlatform, setCustomPlatform] = useState<"instagram" | "tiktok">("instagram");
   const [forceRegenerate, setForceRegenerate] = useState(false);
@@ -139,19 +142,31 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
   // Sync state with fetched data
   useEffect(() => {
     if (data?.job) {
+      const jobIsCustom = Boolean(
+        (data.job as any).is_custom_badge ||
+        (data.job as any).badge_type === "custom" ||
+        String(data.job.quantity).toUpperCase().includes("PERSONALIZAD")
+      );
       const jobIsVerif = Boolean(
+        jobIsCustom ||
         (data.job as any).is_verified ||
         String(data.job.quantity).toUpperCase().includes("VERIFICAD")
       );
       setCustomUsername(data.job.username || data.contact?.instagram_username || "");
       setCustomQuantity(jobIsVerif ? 1 : (Number(data.job.quantity) || 5000));
       setIsVerified(jobIsVerif);
+      setBadgeOption(jobIsCustom ? "custom" : jobIsVerif ? "verified" : "none");
+      setCustomBadgeColor((data.job as any).custom_badge_color || "#EAB308");
+      setCustomBadgeText((data.job as any).custom_badge_text || "★");
       setCustomTemplateId(data.job.template_id || data.templates?.[0]?.id || "");
       setCustomPlatform((data.job.platform as any) || "instagram");
     } else if (data?.contact) {
       setCustomUsername(data.contact.instagram_username || "");
       setCustomQuantity(5000);
       setIsVerified(false);
+      setBadgeOption("none");
+      setCustomBadgeColor("#EAB308");
+      setCustomBadgeText("★");
       setCustomTemplateId(data.templates?.[0]?.id || "");
       setCustomPlatform("instagram");
     }
@@ -230,16 +245,25 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
   const hasImage = Boolean(job?.output_url);
   const deliveryError = data?.steps?.delivery_error || job?.error;
 
+  const currentIsCustom = Boolean(
+    (job as any)?.is_custom_badge ||
+    (job as any)?.badge_type === "custom" ||
+    String(job?.quantity).toUpperCase().includes("PERSONALIZAD")
+  );
   const currentIsVerified = Boolean(
+    currentIsCustom ||
     (job as any)?.is_verified ||
     String(job?.quantity).toUpperCase().includes("VERIFICAD")
   );
+  const currentBadgeOption = currentIsCustom ? "custom" : currentIsVerified ? "verified" : "none";
 
   const isModified = Boolean(
     (customUsername.trim().replace(/^@+/, "").toLowerCase() !==
       (job?.username || "").trim().replace(/^@+/, "").toLowerCase()) ||
-    (isVerified !== currentIsVerified) ||
-    (!isVerified && Number(customQuantity) !== Number(job?.quantity || 5000)) ||
+    (badgeOption !== currentBadgeOption) ||
+    (badgeOption === "custom" && customBadgeColor !== ((job as any)?.custom_badge_color || "#EAB308")) ||
+    (badgeOption === "custom" && customBadgeText !== ((job as any)?.custom_badge_text || "★")) ||
+    (badgeOption === "none" && Number(customQuantity) !== Number(job?.quantity || 5000)) ||
     (customTemplateId && job?.template_id && customTemplateId !== job?.template_id) ||
     (customPlatform !== (job?.platform || "instagram")) ||
     forceRegenerate
@@ -262,8 +286,12 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
 
     if (useCustomParams) {
       payload.username = customUsername.trim().replace(/^@+/, "");
-      payload.quantity = isVerified ? "VERIFICADO" : Number(customQuantity);
-      payload.is_verified = isVerified;
+      payload.quantity = badgeOption === "custom" ? "PERSONALIZADO" : badgeOption === "verified" ? "VERIFICADO" : Number(customQuantity);
+      payload.is_verified = badgeOption !== "none";
+      payload.badge_type = badgeOption === "custom" ? "custom" : (badgeOption === "verified" ? "instagram" : undefined);
+      payload.is_custom = badgeOption === "custom";
+      payload.custom_badge_color = badgeOption === "custom" ? customBadgeColor : undefined;
+      payload.custom_badge_text = badgeOption === "custom" ? customBadgeText : undefined;
       payload.template_id = customTemplateId || undefined;
       payload.platform = customPlatform;
       payload.regenerate = isModified || forceRegenerate;
@@ -681,9 +709,19 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
             {/* Followers Quantity or Verified Badge with Quick Pills */}
             <div className="space-y-1.5">
               <label className="font-semibold text-foreground flex items-center justify-between">
-                <span>{isVerified ? "Serviço Selecionado" : "Quantidade de Seguidores"}</span>
+                <span>
+                  {badgeOption === "custom"
+                    ? "Opção Personalizada"
+                    : badgeOption === "verified"
+                    ? "Serviço Selecionado"
+                    : "Quantidade de Seguidores"}
+                </span>
                 <span className="font-mono text-primary font-bold">
-                  {isVerified ? "✓ Selo Verificado Oficial" : `${Number(customQuantity || 0).toLocaleString("pt-BR")} seguidores`}
+                  {badgeOption === "custom"
+                    ? `★ Selo Personalizado (${customBadgeText || "★"})`
+                    : badgeOption === "verified"
+                    ? "✓ Selo Verificado Oficial"
+                    : `${Number(customQuantity || 0).toLocaleString("pt-BR")} seguidores`}
                 </span>
               </label>
 
@@ -696,9 +734,10 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
                     onClick={() => {
                       setCustomQuantity(qty);
                       setIsVerified(false);
+                      setBadgeOption("none");
                     }}
                     className={`px-2 py-1 rounded text-[11px] font-medium transition-colors border ${
-                      !isVerified && Number(customQuantity) === qty
+                      badgeOption === "none" && Number(customQuantity) === qty
                         ? "bg-primary text-primary-foreground border-primary"
                         : "bg-muted/50 hover:bg-muted border-border text-foreground"
                     }`}
@@ -707,26 +746,96 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
                   </button>
                 ))}
 
-                {/* VERIFICADO Pill */}
+                {/* VERIFICADO (Instagram Oficial) Pill */}
                 <button
                   type="button"
-                  onClick={() => setIsVerified((prev) => !prev)}
+                  onClick={() => {
+                    if (badgeOption === "verified") {
+                      setBadgeOption("none");
+                      setIsVerified(false);
+                    } else {
+                      setBadgeOption("verified");
+                      setIsVerified(true);
+                    }
+                  }}
                   className={`px-2.5 py-1 rounded text-[11px] font-semibold transition-colors border flex items-center gap-1 ${
-                    isVerified
+                    badgeOption === "verified"
                       ? "bg-sky-500 text-white border-sky-400 shadow-sm"
                       : "bg-sky-500/10 text-sky-600 dark:text-sky-400 hover:bg-sky-500/20 border-sky-500/30"
                   }`}
                 >
                   <span>✓ VERIFICADO</span>
                 </button>
+
+                {/* PERSONALIZADA Pill */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (badgeOption === "custom") {
+                      setBadgeOption("none");
+                      setIsVerified(false);
+                    } else {
+                      setBadgeOption("custom");
+                      setIsVerified(true);
+                    }
+                  }}
+                  className={`px-2.5 py-1 rounded text-[11px] font-semibold transition-colors border flex items-center gap-1 ${
+                    badgeOption === "custom"
+                      ? "bg-amber-500 text-slate-950 font-bold border-amber-400 shadow-sm"
+                      : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 border-amber-500/30"
+                  }`}
+                >
+                  <span>★ PERSONALIZADA</span>
+                </button>
               </div>
 
-              {isVerified ? (
+              {badgeOption === "verified" ? (
                 <div className="rounded-md border border-sky-500/30 bg-sky-500/10 p-2.5 text-xs text-sky-700 dark:text-sky-300 flex items-center gap-2">
                   <span className="text-base font-bold">✓</span>
                   <span>
-                    <strong>Modo Selo Verificado Ativo:</strong> O criativo 960x960 será gerado com o selo azul oficial de verificação sobre o perfil.
+                    <strong>Modo Selo Verificado Oficial (Instagram):</strong> O criativo 960x960 será gerado com o selo azul oficial de verificação sobre o perfil.
                   </span>
+                </div>
+              ) : badgeOption === "custom" ? (
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-800 dark:text-amber-300 space-y-2">
+                  <div className="flex items-center gap-1.5 font-semibold">
+                    <span className="text-sm">★</span>
+                    <span>Modo Selo Personalizado: Defina cor e símbolo da arte</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <div>
+                      <label className="text-[10px] uppercase font-bold text-muted-foreground block mb-1">
+                        Cor do Selo
+                      </label>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="color"
+                          value={customBadgeColor}
+                          onChange={(e) => setCustomBadgeColor(e.target.value)}
+                          className="w-7 h-7 rounded border border-border cursor-pointer bg-transparent"
+                        />
+                        <input
+                          type="text"
+                          value={customBadgeColor}
+                          onChange={(e) => setCustomBadgeColor(e.target.value)}
+                          className="flex-1 h-7 text-[11px] px-2 rounded border border-input bg-background font-mono"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase font-bold text-muted-foreground block mb-1">
+                        Símbolo / Texto
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={4}
+                        placeholder="★ ou VIP"
+                        value={customBadgeText}
+                        onChange={(e) => setCustomBadgeText(e.target.value)}
+                        className="w-full h-7 text-[11px] px-2 rounded border border-input bg-background font-bold text-center"
+                      />
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <Input

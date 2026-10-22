@@ -234,6 +234,73 @@ export function PreviewModal({
                   Atualizar Preview
                 </Button>
               </div>
+
+              {/* Quick Presets */}
+              <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+                <span className="text-[10px] text-muted-foreground font-semibold mr-1">Presets:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const preset = {
+                      name: 'Cliente Exemplo',
+                      code: '5288',
+                      quantity: '5.000 seguidores',
+                      instagram_username: 'cliente_vip',
+                      service: 'Seguidores Instagram',
+                      is_verified: false,
+                      date: new Date().toLocaleDateString('pt-BR'),
+                    };
+                    setTestDataJson(JSON.stringify(preset, null, 2));
+                  }}
+                  className="px-2 py-0.5 rounded text-[10px] font-medium border border-border bg-muted/60 hover:bg-muted text-foreground transition-colors"
+                >
+                  Padrão (5k)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const preset = {
+                      name: 'Perfil Verificado',
+                      code: 'VERIF-991',
+                      quantity: 'Selo Verificado',
+                      instagram_username: 'perfil_oficial',
+                      service: 'Selo Verificado Instagram',
+                      is_verified: true,
+                      verified: true,
+                      badge_type: 'instagram',
+                      date: new Date().toLocaleDateString('pt-BR'),
+                    };
+                    setTestDataJson(JSON.stringify(preset, null, 2));
+                  }}
+                  className="px-2 py-0.5 rounded text-[10px] font-medium border border-sky-500/40 bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 transition-colors"
+                >
+                  ✓ Verificado (Instagram)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const preset = {
+                      name: 'Perfil Exclusivo',
+                      code: 'VIP-772',
+                      quantity: 'Selo Personalizado',
+                      instagram_username: 'perfil_vip',
+                      service: 'Selo Personalizado Instagram',
+                      is_verified: true,
+                      verified: true,
+                      is_custom_badge: true,
+                      badge_type: 'custom',
+                      custom_badge_color: '#EAB308',
+                      custom_badge_text: '★',
+                      date: new Date().toLocaleDateString('pt-BR'),
+                    };
+                    setTestDataJson(JSON.stringify(preset, null, 2));
+                  }}
+                  className="px-2 py-0.5 rounded text-[10px] font-medium border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 transition-colors"
+                >
+                  ★ Personalizada (Gold)
+                </button>
+              </div>
+
               <textarea
                 value={testDataJson}
                 onChange={(e) => setTestDataJson(e.target.value)}

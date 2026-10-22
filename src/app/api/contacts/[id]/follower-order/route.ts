@@ -193,12 +193,26 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const requestedUsername = (body.username || '').trim().replace(/^@+/, '');
+    const isCustomRequested = Boolean(
+      body.is_custom ||
+      body.badge_type === 'custom' ||
+      String(body.quantity).toUpperCase().includes('PERSONALIZAD')
+    );
     const isVerifiedRequested = Boolean(
       body.is_verified ||
       body.isVerified ||
+      isCustomRequested ||
       String(body.quantity).toUpperCase().includes('VERIFICAD')
     );
-    const requestedQuantity = isVerifiedRequested
+    const requestedBadgeType: 'instagram' | 'custom' | undefined = isCustomRequested
+      ? 'custom'
+      : (isVerifiedRequested ? 'instagram' : undefined);
+    const requestedBadgeColor = body.custom_badge_color || undefined;
+    const requestedBadgeText = body.custom_badge_text || undefined;
+
+    const requestedQuantity = isCustomRequested
+      ? 'PERSONALIZADO'
+      : isVerifiedRequested
       ? 'VERIFICADO'
       : (body.quantity ? Number(String(body.quantity).replace(/\D/g, '')) : undefined);
     const requestedTemplateId = body.template_id || undefined;
@@ -209,7 +223,10 @@ export async function POST(request: Request, context: RouteContext) {
     const hasModifications = Boolean(
       (requestedUsername && requestedUsername.toLowerCase() !== String(existingData.instagram_username || existingData.username || contact.instagram_username || '').toLowerCase()) ||
       (isVerifiedRequested !== Boolean(existingData.is_verified || existingData.verified)) ||
-      (requestedQuantity && requestedQuantity !== (existingData.is_verified ? 'VERIFICADO' : Number(existingData.quantity || 5000))) ||
+      (isCustomRequested !== Boolean(existingData.is_custom_badge || existingData.badge_type === 'custom')) ||
+      (requestedBadgeColor && requestedBadgeColor !== existingData.custom_badge_color) ||
+      (requestedBadgeText && requestedBadgeText !== existingData.custom_badge_text) ||
+      (requestedQuantity && requestedQuantity !== (existingData.is_custom_badge ? 'PERSONALIZADO' : existingData.is_verified ? 'VERIFICADO' : Number(existingData.quantity || 5000))) ||
       (requestedTemplateId && requestedTemplateId !== existingJob?.template_id) ||
       (requestedPlatform && requestedPlatform !== existingData.platform)
     );
@@ -269,7 +286,9 @@ export async function POST(request: Request, context: RouteContext) {
     const effectivePlatform = requestedPlatform || existingData.platform || (effectiveUsername.includes('tiktok') ? 'tiktok' : 'instagram');
 
     const syntheticMessageId = `manual_gen_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    const syntheticMessageText = isVerifiedRequested
+    const syntheticMessageText = isCustomRequested
+      ? `Quero selo personalizado para @${effectiveUsername}`
+      : isVerifiedRequested
       ? `Quero selo verificado para @${effectiveUsername}`
       : `Quero ${effectiveQuantity} seguidores para @${effectiveUsername}`;
 
@@ -306,6 +325,10 @@ export async function POST(request: Request, context: RouteContext) {
       overrideUsername: effectiveUsername,
       overrideQuantity: effectiveQuantity,
       overrideIsVerified: isVerifiedRequested,
+      overrideBadgeType: requestedBadgeType,
+      overrideBadgeColor: requestedBadgeColor,
+      overrideBadgeText: requestedBadgeText,
+      overrideIsCustomBadge: isCustomRequested,
       overridePlatform: effectivePlatform,
       overrideTemplateId: effectiveTemplateId,
       forceResend: true,
