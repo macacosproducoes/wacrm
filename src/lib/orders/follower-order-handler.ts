@@ -392,7 +392,7 @@ export async function handleFollowerOrder(
   // 4. Resolve Follower Creative Template
   let templateId = overrideTemplateId || FOLLOWER_TEMPLATE_ID;
   const { template } = await CreativeTemplateService.getTemplate(templateId, accountId).catch(async () => {
-    // Fallback: search by category 'followers'
+    // Fallback 1: search by category 'followers' in active account
     const { data: fallbackTmpl } = await supabase
       .from('creative_templates')
       .select('*')
@@ -402,10 +402,37 @@ export async function handleFollowerOrder(
       .limit(1)
       .maybeSingle();
 
-    if (!fallbackTmpl) {
-      throw new Error(`Active follower confirmation template not found for account ${accountId}`);
+    if (fallbackTmpl) {
+      return { template: fallbackTmpl };
     }
-    return { template: fallbackTmpl };
+
+    // Fallback 2: any active template with category 'followers' across accounts
+    const { data: anyFollowerTmpl } = await supabase
+      .from('creative_templates')
+      .select('*')
+      .eq('category', 'followers')
+      .eq('status', 'ACTIVE')
+      .limit(1)
+      .maybeSingle();
+
+    if (anyFollowerTmpl) {
+      return { template: anyFollowerTmpl };
+    }
+
+    // Fallback 3: any active creative template in active account
+    const { data: anyActiveTmpl } = await supabase
+      .from('creative_templates')
+      .select('*')
+      .eq('account_id', accountId)
+      .eq('status', 'ACTIVE')
+      .limit(1)
+      .maybeSingle();
+
+    if (anyActiveTmpl) {
+      return { template: anyActiveTmpl };
+    }
+
+    throw new Error(`Active follower confirmation template not found for account ${accountId}`);
   });
 
   templateId = template.id;

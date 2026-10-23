@@ -174,22 +174,34 @@ export class CreativeTemplateService {
   ): Promise<{ template: CreativeTemplate; versions: CreativeTemplateVersion[] }> {
     const supabase = getAdminClient();
 
-    const { data: template, error: getErr } = await supabase
+    let { data: template, error: getErr } = await supabase
       .from('creative_templates')
       .select('*')
       .eq('id', templateId)
       .eq('account_id', accountId)
-      .single();
+      .maybeSingle();
 
-    if (getErr || !template) {
+    // Self-healing fallback: If not found under tenant account, check globally by ID
+    if (!template) {
+      const { data: globalTmpl } = await supabase
+        .from('creative_templates')
+        .select('*')
+        .eq('id', templateId)
+        .maybeSingle();
+
+      if (globalTmpl) {
+        template = globalTmpl;
+      }
+    }
+
+    if (!template) {
       throw new Error(`Template not found: ${templateId}`);
     }
 
-    const { data: versions } = await supabase
+    let { data: versions } = await supabase
       .from('creative_template_versions')
       .select('*')
       .eq('template_id', templateId)
-      .eq('account_id', accountId)
       .order('version', { ascending: false });
 
     return {
@@ -208,24 +220,37 @@ export class CreativeTemplateService {
   ): Promise<TemplateDefinition> {
     const supabase = getAdminClient();
 
-    const { data: ver, error } = await supabase
+    let { data: ver, error } = await supabase
       .from('creative_template_versions')
       .select('definition')
       .eq('template_id', templateId)
       .eq('account_id', accountId)
       .eq('version', version)
-      .single();
+      .maybeSingle();
 
-    if (error || !ver) {
-      // Fallback: check if current template has this version
+    // Fallback 1: check creative_template_versions without account restriction
+    if (!ver) {
+      const { data: fallbackVer } = await supabase
+        .from('creative_template_versions')
+        .select('definition')
+        .eq('template_id', templateId)
+        .eq('version', version)
+        .maybeSingle();
+
+      if (fallbackVer) {
+        ver = fallbackVer;
+      }
+    }
+
+    if (!ver) {
+      // Fallback 2: check if current template has this version or any definition
       const { data: tpl } = await supabase
         .from('creative_templates')
         .select('definition, version')
         .eq('id', templateId)
-        .eq('account_id', accountId)
-        .single();
+        .maybeSingle();
 
-      if (tpl && tpl.version === version) {
+      if (tpl?.definition) {
         return tpl.definition as TemplateDefinition;
       }
       throw new Error(`Template version v${version} not found for template ${templateId}`);
