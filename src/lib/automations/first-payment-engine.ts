@@ -368,7 +368,7 @@ export async function processFirstPaymentAutomation(
     amount,
     buyer,
     rawPayload: input.raw_payload,
-    accountId: input.account_id || 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f',
+    accountId: input.account_id || '512ca9fc-083c-4f59-ab46-7a065a370e77',
   });
 
   if (!eligibility.isEligible && !force_retry) {
@@ -382,17 +382,23 @@ export async function processFirstPaymentAutomation(
   }
 
   // 2. Identify stable Lead ID (contact_id)
-  let contactId: string | null = input.contact_id || eligibility.contactId || null;
-  let accountId: string = input.account_id || 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f';
-  let contactPhone = buyer?.phone || '';
-  let contactName = buyer?.name || 'Cliente';
-
+  let contactId: string | null = input.contact_id || null;
   if (!contactId && external_id && external_id.startsWith("smm_")) {
     const parts = external_id.split("_");
     if (parts.length >= 3 && parts[1].length >= 32) {
       contactId = parts[1];
     }
   }
+  if (!contactId) {
+    contactId = eligibility.contactId || null;
+  }
+
+  let accountId: string = input.account_id || eligibility.accountId || '512ca9fc-083c-4f59-ab46-7a065a370e77';
+  if (accountId === 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f') {
+    accountId = '512ca9fc-083c-4f59-ab46-7a065a370e77';
+  }
+  let contactPhone = buyer?.phone || '';
+  let contactName = buyer?.name || 'Cliente';
 
   // Always fetch contact from DB when contactId is known to guarantee we have their real WhatsApp phone and name!
   if (contactId) {

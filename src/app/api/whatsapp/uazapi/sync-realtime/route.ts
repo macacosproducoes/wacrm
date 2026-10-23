@@ -149,6 +149,9 @@ async function handleSync(request: Request) {
     const chatsData = await chatsRes.json();
     const rawChats: Array<Record<string, unknown>> = chatsData.chats || [];
 
+    // Auto-reconcile pending payments on every tick (non-blocking)
+    void reconcilePendingPayments(admin, accountId);
+
     if (rawChats.length === 0) {
       return NextResponse.json({ success: true, syncedMessages: 0, chatsChecked: 0 });
     }
@@ -512,14 +515,14 @@ async function handleSync(request: Request) {
 
 async function reconcilePendingPayments(admin: any, accountId: string) {
   try {
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const { data: pendingEvents } = await admin
       .from('webhook_events')
       .select('id, provider, external_event_id, payload')
       .in('provider', ['buckpay', 'wiinpay'])
       .eq('processing_status', 'RECEIVED')
-      .gte('created_at', twoHoursAgo)
-      .limit(10);
+      .gte('created_at', oneDayAgo)
+      .limit(20);
 
     if (!pendingEvents || pendingEvents.length === 0) return;
 
@@ -527,18 +530,53 @@ async function reconcilePendingPayments(admin: any, accountId: string) {
       const extId = event.external_event_id;
       if (!extId) continue;
 
+      const eventPayload = (event.payload || {}) as Record<string, any>;
+      let targetAccountId = eventPayload.account_id || accountId || '512ca9fc-083c-4f59-ab46-7a065a370e77';
+      if (targetAccountId === 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f') {
+        targetAccountId = '512ca9fc-083c-4f59-ab46-7a065a370e77';
+      }
+
+      // Extract contactId if present in externalId (smm_<contactId>_...) or payload
+      let contactId: string | undefined = eventPayload.contact_id;
+      if (!contactId && extId.startsWith('smm_')) {
+        const parts = extId.split('_');
+        if (parts.length >= 3 && parts[1].length >= 32) {
+          contactId = parts[1];
+        }
+      }
+
+      // Fetch contact details if contactId is known
+      let contactData: any = null;
+      if (contactId) {
+        const { data: c } = await admin
+          .from('contacts')
+          .select('id, account_id, name, phone')
+          .eq('id', contactId)
+          .maybeSingle();
+        if (c) {
+          contactData = c;
+          if (c.account_id) targetAccountId = c.account_id;
+        }
+      }
+
       if (event.provider === 'buckpay') {
         const result = await getBuckPayTransaction(extId);
         if (result?.data?.status === 'paid') {
-          // Check eligibility first: only SMM/Edgar products and CRM clients
+          const effectiveBuyer = {
+            name: result.data.buyer?.name || eventPayload.buyer?.name || contactData?.name || 'Cliente',
+            phone: result.data.buyer?.phone || eventPayload.buyer?.phone || contactData?.phone || '',
+            email: result.data.buyer?.email || eventPayload.buyer?.email,
+          };
+
+          // Check eligibility: only SMM/Edgar products and CRM clients
           const eligibility = await checkPaymentEligibility(admin, {
             paymentId: result.data.id,
             externalId: extId,
-            buyer: result.data.buyer,
-            offer: (result.data as any).offer,
-            product: (result.data as any).product,
-            rawPayload: result.data as unknown as Record<string, unknown>,
-            accountId,
+            buyer: effectiveBuyer,
+            offer: (result.data as any).offer || eventPayload.offer,
+            product: (result.data as any).product || eventPayload.product,
+            rawPayload: { ...(result.data as any), ...eventPayload },
+            accountId: targetAccountId,
           });
 
           if (!eligibility.isEligible) {
@@ -555,29 +593,34 @@ async function reconcilePendingPayments(admin: any, accountId: string) {
             .update({
               processing_status: 'COMPLETED',
               payload: {
-                ...(event.payload || {}),
+                ...eventPayload,
                 status: 'paid',
                 confirmed_at: new Date().toISOString(),
               },
             })
             .eq('id', event.id);
 
-          const amount = typeof result.data.total_amount === 'number' ? result.data.total_amount / 100 : undefined;
+          const amount = typeof result.data.total_amount === 'number'
+            ? result.data.total_amount / 100
+            : (typeof eventPayload.amount === 'number' ? eventPayload.amount : undefined);
+
+          const finalContactId = contactId || eligibility.contactId;
 
           await processFirstPaymentAutomation({
             payment_id: result.data.id,
             external_id: extId,
-            contact_id: eligibility.contactId,
+            contact_id: finalContactId,
+            account_id: targetAccountId,
             status: 'paid',
             amount,
-            buyer: result.data.buyer,
-            raw_payload: result.data as unknown as Record<string, unknown>,
+            buyer: effectiveBuyer,
+            raw_payload: { ...(result.data as any), ...eventPayload },
           });
 
           await notifyPaymentInCrm(admin, {
-            accountId,
-            contactId: eligibility.contactId,
-            leadName: result.data.buyer?.name,
+            accountId: targetAccountId,
+            contactId: finalContactId,
+            leadName: effectiveBuyer.name,
             amount,
             paymentId: result.data.id,
             externalId: extId,

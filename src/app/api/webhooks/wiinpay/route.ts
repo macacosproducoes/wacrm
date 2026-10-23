@@ -95,8 +95,10 @@ export async function POST(request: Request) {
       },
       product: { name: body.description || body.metadata?.message || 'Apoio VIP Edgar Katsumi' },
       rawPayload: body,
-      accountId: 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f',
+      accountId: body.account_id || body.metadata?.account_id,
     })
+
+    const targetAccountId = eligibility.accountId || body.account_id || body.metadata?.account_id || '512ca9fc-083c-4f59-ab46-7a065a370e77'
 
     if (!eligibility.isEligible) {
       console.log(`[WiinPay Webhook] 🛑 Produto ignorado pelo CRM: ${eligibility.reason}`, {
@@ -162,6 +164,7 @@ export async function POST(request: Request) {
           payment_id: transactionId,
           external_id: externalId,
           contact_id: eligibility.contactId,
+          account_id: targetAccountId,
           status: 'paid',
           amount,
           buyer: {
@@ -177,7 +180,7 @@ export async function POST(request: Request) {
 
       if (admin) {
         await notifyPaymentInCrm(admin, {
-          accountId: 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f',
+          accountId: targetAccountId,
           contactId: automationResult?.leadId || eligibility.contactId,
           leadName: body.name || body.metadata?.donor_name,
           amount,

@@ -56,9 +56,19 @@ export async function GET(request: Request) {
             })
             .eq('external_event_id', external_id)
 
+          let contactIdFromExt: string | undefined = undefined;
+          if (external_id.startsWith('smm_')) {
+            const parts = external_id.split('_');
+            if (parts.length >= 3 && parts[1].length >= 32) {
+              contactIdFromExt = parts[1];
+            }
+          }
+
           processFirstPaymentAutomation({
             payment_id: result.data.id,
             external_id,
+            contact_id: contactIdFromExt,
+            account_id: '512ca9fc-083c-4f59-ab46-7a065a370e77',
             status: 'paid',
             amount,
             buyer: result.data.buyer,
@@ -68,7 +78,8 @@ export async function GET(request: Request) {
           )
 
           notifyPaymentInCrm(admin, {
-            accountId: 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f',
+            accountId: '512ca9fc-083c-4f59-ab46-7a065a370e77',
+            contactId: contactIdFromExt,
             amount,
             leadName: result.data.buyer?.name,
             paymentId: result.data.id,

@@ -20,11 +20,14 @@ export interface CheckPaymentEligibilityInput {
   accountId?: string;
 }
 
+export const DEFAULT_ACTIVE_ACCOUNT_ID = '512ca9fc-083c-4f59-ab46-7a065a370e77';
+
 export interface PaymentEligibilityResult {
   isEligible: boolean;
   isSmmOrEdgarProduct: boolean;
   isExistingCrmClient: boolean;
   contactId?: string;
+  accountId?: string;
   matchedBy?: 'external_id' | 'product_name' | 'contact_id' | 'phone' | 'email';
   reason: string;
 }
@@ -54,7 +57,10 @@ export async function checkPaymentEligibility(
   admin: SupabaseClient | null,
   input: CheckPaymentEligibilityInput
 ): Promise<PaymentEligibilityResult> {
-  const accountId = input.accountId || 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f';
+  let accountId = input.accountId;
+  if (!accountId || accountId === 'ce78c02b-49e0-43bf-b384-7cdd52f61b9f') {
+    accountId = DEFAULT_ACTIVE_ACCOUNT_ID;
+  }
   const extId = (input.externalId || '').trim();
   const raw = input.rawPayload || {};
   const rawData = (raw.data || {}) as Record<string, unknown>;
@@ -111,8 +117,7 @@ export async function checkPaymentEligibility(
         const potentialContactId = parts[1];
         const { data: c } = await admin
           .from('contacts')
-          .select('id')
-          .eq('account_id', accountId)
+          .select('id, account_id')
           .eq('id', potentialContactId)
           .maybeSingle();
 
@@ -120,6 +125,9 @@ export async function checkPaymentEligibility(
           isExistingCrmClient = true;
           matchedContactId = c.id;
           matchedBy = matchedBy || 'contact_id';
+          if (c.account_id) {
+            accountId = c.account_id;
+          }
         }
       }
     }
@@ -212,6 +220,7 @@ export async function checkPaymentEligibility(
     isSmmOrEdgarProduct,
     isExistingCrmClient,
     contactId: matchedContactId,
+    accountId,
     matchedBy,
     reason,
   };
