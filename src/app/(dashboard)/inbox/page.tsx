@@ -341,11 +341,11 @@ function InboxPageInner() {
       .from("whatsapp_connections")
       .select("status, provider, provider_config")
       .eq("account_id", accountId)
-      .eq("status", "connected")
+      .eq("is_active", true)
       .limit(1);
 
     const activeConn = activeConns?.[0];
-    const isConnected = activeConn?.status === "connected";
+    const isConnected = activeConn?.status === "connected" || activeConn?.status === "hibernated";
     setWhatsappConnected(isConnected);
     const isBaileys = (activeConn?.provider_config as { driver?: string })?.driver === "baileys";
     setIsUazApi(!isBaileys && activeConn?.provider !== "meta");
@@ -569,9 +569,14 @@ function InboxPageInner() {
         setResyncToken((n) => n + 1);
       }
     };
+    const onResync = () => {
+      setResyncToken((n) => n + 1);
+    };
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("wacrm:resync", onResync);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("wacrm:resync", onResync);
     };
   }, []);
 

@@ -99,8 +99,8 @@ async function handleSync(request: Request) {
 
     const conn = conns?.find((c) => c.status === 'connected') || conns?.[0] || null;
 
-    if (!conn || conn.status === 'disconnected') {
-      return NextResponse.json({ success: true, reason: 'uazapi_disconnected' });
+    if (!conn) {
+      return NextResponse.json({ success: true, reason: 'no_active_connection' });
     }
 
     const config = (conn.provider_config || {}) as Record<string, string>;
@@ -487,14 +487,16 @@ async function handleSync(request: Request) {
       }
     };
 
-    // Controlled bounded execution to never saturate PostgREST connection slots
+    // Bounded concurrent execution (chunks of 5) for ultra-fast sub-second response
     const chatsToSync = rawChats.slice(0, 25);
-    for (const chat of chatsToSync) {
-      await syncChat(chat);
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < chatsToSync.length; i += BATCH_SIZE) {
+      const batch = chatsToSync.slice(i, i + BATCH_SIZE);
+      await Promise.all(batch.map((chat) => syncChat(chat)));
     }
 
-    // Auto-reconcile pending payments in the background
-    await reconcilePendingPayments(admin, accountId);
+    // Auto-reconcile pending payments in the background (non-blocking)
+    void reconcilePendingPayments(admin, accountId);
 
     return NextResponse.json({
       success: true,

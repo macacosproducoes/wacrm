@@ -155,10 +155,10 @@ export function WhatsAppRealtimeBridge() {
         console.log(`[TIMELINE] ${new Date().toLocaleTimeString('pt-BR')} SOURCE=WhatsAppRealtimeBridge:tick starting sync-realtime`);
       }
       isSyncingRef.current = true;
-      let nextDelay = 60000; // 60s base heartbeat to prevent exhausting Supabase connection pool and API log volume
+      let nextDelay = 6000; // 6s fast heartbeat when tab is active for true real-time sync
       try {
         const controller = new AbortController();
-        const abortTimeout = setTimeout(() => controller.abort(), 8000);
+        const abortTimeout = setTimeout(() => controller.abort(), 20000);
         const res = await fetch('/api/whatsapp/uazapi/sync-realtime', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -166,21 +166,29 @@ export function WhatsAppRealtimeBridge() {
         });
         clearTimeout(abortTimeout);
 
-        if (!res.ok) {
-          nextDelay = 90000;
+        if (res.ok) {
+          const data = await res.json().catch(() => ({}));
+          if (data?.syncedMessages > 0) {
+            window.dispatchEvent(new CustomEvent('wacrm:resync'));
+          }
+          nextDelay = 6000;
+        } else {
+          nextDelay = 15000;
         }
       } catch {
-        nextDelay = 120000;
+        nextDelay = 15000;
       } finally {
         isSyncingRef.current = false;
         if (isMounted) {
-          timer = setTimeout(tick, nextDelay);
+          const isHidden = typeof document !== 'undefined' && document.hidden;
+          const effectiveDelay = isHidden ? 30000 : nextDelay;
+          timer = setTimeout(tick, effectiveDelay);
         }
       }
     }
 
-    // Initial trigger after 15s to let the page settle with 0 contention
-    timer = setTimeout(tick, 15000);
+    // Initial trigger after 3s to sync right away on load
+    timer = setTimeout(tick, 3000);
 
     // Periodic check for due conditional follow-ups (every 90s to save Vercel quotas)
     let followUpTimer: NodeJS.Timeout | null = null;
