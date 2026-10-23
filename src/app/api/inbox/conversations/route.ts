@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { getCurrentAccount } from '@/lib/auth/account';
 import { createClient as createAdminClient } from '@supabase/supabase-js';
 
 function supabaseAdmin() {
@@ -15,27 +15,9 @@ function supabaseAdmin() {
  */
 export async function GET(request: Request) {
   try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
+    const ctx = await getCurrentAccount();
     const admin = supabaseAdmin();
-
-    const { data: profile } = await admin
-      .from('profiles')
-      .select('account_id')
-      .eq('user_id', user.id)
-      .maybeSingle();
-
-    if (!profile?.account_id) {
-      return NextResponse.json({ conversations: [] });
-    }
+    const accountId = ctx.accountId;
 
     const { searchParams } = new URL(request.url);
     const status = searchParams.get('status');
@@ -46,7 +28,7 @@ export async function GET(request: Request) {
     let query = admin
       .from('conversations')
       .select('*, contact:contacts(*, contact_tags(tags(*)))')
-      .eq('account_id', profile.account_id)
+      .eq('account_id', accountId)
       .order('last_message_at', { ascending: false, nullsFirst: false })
       .order('updated_at', { ascending: false });
 
