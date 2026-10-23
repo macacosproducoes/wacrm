@@ -44,10 +44,12 @@ function normalizeQuickReply(row: Record<string, unknown>) {
 
 export async function GET() {
   try {
-    const { supabase } = await getCurrentAccount();
-    const { data, error } = await supabase
+    const ctx = await getCurrentAccount();
+    const admin = supabaseAdmin();
+    const { data, error } = await admin
       .from('quick_replies')
       .select('*')
+      .eq('account_id', ctx.accountId)
       .order('created_at', { ascending: false });
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });

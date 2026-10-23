@@ -414,11 +414,16 @@ export function ConversationList({
     }
 
     // Final absolute safety assertion:
-    if (filter === "closed") {
-      return result.filter((c) => c.status === "closed" || (c as unknown as { status: string }).status === "archived");
-    } else {
-      return result.filter((c) => c.status !== "closed" && (c as unknown as { status: string }).status !== "archived");
-    }
+    const finalResult = filter === "closed"
+      ? result.filter((c) => c.status === "closed" || (c as unknown as { status: string }).status === "archived")
+      : result.filter((c) => c.status !== "closed" && (c as unknown as { status: string }).status !== "archived");
+
+    // Enforce strict chronological sort: most recent message first, descending
+    return [...finalResult].sort((a, b) => {
+      const timeA = a.last_message_at ? new Date(a.last_message_at).getTime() : (a.updated_at ? new Date(a.updated_at).getTime() : 0);
+      const timeB = b.last_message_at ? new Date(b.last_message_at).getTime() : (b.updated_at ? new Date(b.updated_at).getTime() : 0);
+      return timeB - timeA;
+    });
   }, [conversations, filter, search, selectedTagIds, selectedCompany, accountId]);
 
   const toggleTag = useCallback((id: string) => {
@@ -529,39 +534,37 @@ export function ConversationList({
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-1">
-          <DropdownMenu>
-            <DropdownMenuTrigger className="inline-flex items-center justify-center h-7 gap-1 px-2 text-xs font-medium text-muted-foreground hover:text-foreground rounded-md hover:bg-muted">
-                <span>{activeFilter?.label ?? "Todas"}</span>
-                <span className="text-[11px] opacity-70 font-semibold">({activeFilter?.count ?? 0})</span>
-                <ChevronDown className="h-3 w-3" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="start"
-              className="border-border bg-popover w-44"
+        <div className="flex items-center gap-1 overflow-x-auto no-scrollbar py-0.5">
+          {FILTER_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setFilter(opt.value)}
+              className={cn(
+                "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all shrink-0 cursor-pointer select-none",
+                filter === opt.value
+                  ? opt.value === "closed"
+                    ? "bg-amber-600 text-white font-semibold shadow-xs"
+                    : "bg-primary text-primary-foreground font-semibold shadow-xs"
+                  : "bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+              )}
             >
-              {FILTER_OPTIONS.map((opt) => (
-                <DropdownMenuItem
-                  key={opt.value}
-                  onClick={() => setFilter(opt.value)}
-                  className={cn(
-                    "flex items-center justify-between gap-2 text-sm cursor-pointer",
-                    filter === opt.value
-                      ? "text-primary font-medium"
-                      : "text-popover-foreground"
-                  )}
-                >
-                  <span>{opt.label}</span>
-                  <span className={cn(
-                    "rounded px-1.5 py-0.2 text-[10px] font-semibold",
-                    opt.value === "closed" ? "bg-muted text-muted-foreground" : "bg-muted text-foreground"
-                  )}>
-                    {opt.count}
-                  </span>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+              <span>{opt.label}</span>
+              {opt.count > 0 && (
+                <span className={cn(
+                  "rounded-full px-1.5 py-0.2 text-[10px] font-bold",
+                  filter === opt.value
+                    ? "bg-white/20 text-white"
+                    : "bg-background/80 text-muted-foreground"
+                )}>
+                  {opt.count}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1">
 
           {tags.length > 0 && (
             <DropdownMenu>
