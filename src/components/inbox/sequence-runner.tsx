@@ -258,7 +258,7 @@ export function useSequenceRunner(params: {
           payload = {
             ...payload,
             message_type: "image",
-            media_url: step.media_url ? (step.media_url as string).replace(/(?:kzhvkfunvrhjvghhhart|zwdpytqizoodlcrhryvg)\.supabase\.co/gi, 'swovcbrtjzdsqgqzjrdm.supabase.co') : null,
+            media_url: step.media_url ? (step.media_url as string).replace(/(?:kzhvkfunvrhjvghhhart|zwdpytqizoodlcrhryvg|swovcbrtjzdsqgqzjrdm)\.supabase\.co/gi, 'ouitkocrqzflsmvuuckg.supabase.co').replace(/account-[a-f0-9-]{36}/gi, 'account-512ca9fc-083c-4f59-ab46-7a065a370e77') : null,
             content_text: "",
             filename: step.filename || "imagem.jpg",
           };
@@ -273,14 +273,14 @@ export function useSequenceRunner(params: {
         payload = {
           ...payload,
           message_type: "audio",
-          media_url: step.media_url ? (step.media_url as string).replace(/(?:kzhvkfunvrhjvghhhart|zwdpytqizoodlcrhryvg)\.supabase\.co/gi, 'swovcbrtjzdsqgqzjrdm.supabase.co') : null,
+          media_url: step.media_url ? (step.media_url as string).replace(/(?:kzhvkfunvrhjvghhhart|zwdpytqizoodlcrhryvg|swovcbrtjzdsqgqzjrdm)\.supabase\.co/gi, 'ouitkocrqzflsmvuuckg.supabase.co').replace(/account-[a-f0-9-]{36}/gi, 'account-512ca9fc-083c-4f59-ab46-7a065a370e77') : null,
           content_text: step.content || "[Áudio Gravado]",
         };
       } else if (["image", "video", "document"].includes(effectiveType)) {
         payload = {
           ...payload,
           message_type: effectiveType,
-          media_url: step.media_url ? (step.media_url as string).replace(/(?:kzhvkfunvrhjvghhhart|zwdpytqizoodlcrhryvg)\.supabase\.co/gi, 'swovcbrtjzdsqgqzjrdm.supabase.co') : null,
+          media_url: step.media_url ? (step.media_url as string).replace(/(?:kzhvkfunvrhjvghhhart|zwdpytqizoodlcrhryvg|swovcbrtjzdsqgqzjrdm)\.supabase\.co/gi, 'ouitkocrqzflsmvuuckg.supabase.co').replace(/account-[a-f0-9-]{36}/gi, 'account-512ca9fc-083c-4f59-ab46-7a065a370e77') : null,
           content_text: step.content || "",
           filename: step.filename || (effectiveType === "image" ? "imagem.jpg" : undefined),
         };
@@ -307,7 +307,7 @@ export function useSequenceRunner(params: {
             sender_id: "",
             content_type: effectiveType === "text" ? "text" : (effectiveType as any),
             content_text: (payload.content_text as string) || "",
-            media_url: step.media_url ? (step.media_url as string).replace(/(?:kzhvkfunvrhjvghhhart|zwdpytqizoodlcrhryvg)\.supabase\.co/gi, 'swovcbrtjzdsqgqzjrdm.supabase.co') : null,
+            media_url: step.media_url ? (step.media_url as string).replace(/(?:kzhvkfunvrhjvghhhart|zwdpytqizoodlcrhryvg|swovcbrtjzdsqgqzjrdm)\.supabase\.co/gi, 'ouitkocrqzflsmvuuckg.supabase.co').replace(/account-[a-f0-9-]{36}/gi, 'account-512ca9fc-083c-4f59-ab46-7a065a370e77') : null,
             status: "sent",
             created_at: new Date().toISOString(),
           } as Message);

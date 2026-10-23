@@ -104,7 +104,7 @@ export interface ProcessFirstPaymentResult {
 const DEFAULT_AUDIO = {
   id: '2fc16835-ab2a-4bf2-a0a5-3f70c9af402a',
   name: 'PEDIDO CONFIRMADO',
-  url: 'https://swovcbrtjzdsqgqzjrdm.supabase.co/storage/v1/object/public/chat-media/account-ce78c02b-49e0-43bf-b384-7cdd52f61b9f/WhatsApp%20Ptt%202025-11-16%20at%2023.28.43.ogg',
+  url: 'https://ouitkocrqzflsmvuuckg.supabase.co/storage/v1/object/public/chat-media/account-512ca9fc-083c-4f59-ab46-7a065a370e77/WhatsApp_Ptt_2025-11-16_at_23.28.43.ogg',
 };
 
 /**
