@@ -33,11 +33,14 @@ export async function POST(request: Request, context: RouteContext) {
     const requestedBadgeColor = body.custom_badge_color || undefined;
     const requestedBadgeText = body.custom_badge_text || undefined;
 
+    const requestedPlatform: 'instagram' | 'tiktok' = body.platform === 'tiktok' ? 'tiktok' : 'instagram';
+    const platformLabel = requestedPlatform === 'tiktok' ? 'TikTok' : 'Instagram';
+
     const customQuantity = isCustomRequested
       ? 'PERSONALIZADO'
       : isVerifiedRequested
       ? 'VERIFICADO'
-      : (body.quantity ? Number(String(body.quantity).replace(/\D/g, '')) || 5000 : 5000);
+      : (body.quantity ? String(body.quantity).trim() : '5000');
     const admin = supabaseAdmin();
 
     // 1. Fetch Contact
@@ -55,7 +58,7 @@ export async function POST(request: Request, context: RouteContext) {
     const username = (body.username || contact.instagram_username || '').trim().replace(/^@+/, '');
     if (!username) {
       return NextResponse.json(
-        { error: 'Contato não possui @ de Instagram cadastrado. Informe um perfil antes de enviar.' },
+        { error: `Contato não possui @ de ${platformLabel} cadastrado. Informe um perfil antes de enviar.` },
         { status: 400 }
       );
     }
@@ -94,15 +97,16 @@ export async function POST(request: Request, context: RouteContext) {
     const traceId = TraceLogger.generateTraceId('trc_manual');
     const syntheticMessageId = `manual_send_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const syntheticMessageText = isCustomRequested
-      ? `Quero selo personalizado para @${username}`
+      ? `Quero selo personalizado para @${username} no ${platformLabel}`
       : isVerifiedRequested
-      ? `Quero selo verificado para @${username}`
-      : `Quero ${customQuantity} seguidores para @${username}`;
+      ? `Quero selo verificado para @${username} no ${platformLabel}`
+      : `Quero ${customQuantity} seguidores para @${username} no ${platformLabel}`;
 
     TraceLogger.log(traceId, 'T0', 'MANUAL SEND INITIATED', {
       contactId,
       username,
       quantity: customQuantity,
+      platform: requestedPlatform,
       phone: contact.phone,
       isVerified: isVerifiedRequested,
       badgeType: requestedBadgeType,
@@ -123,8 +127,9 @@ export async function POST(request: Request, context: RouteContext) {
       const matchContact = d.contact_id === contact.id || d.recipient === contact.phone;
       const matchVerified = Boolean(d.is_verified || d.verified) === isVerifiedRequested;
       const matchCustom = Boolean(d.is_custom_badge || d.badge_type === 'custom') === isCustomRequested;
-      const matchQuantity = isVerifiedRequested || Number(d.quantity) === Number(customQuantity);
-      return (matchContact || matchUsername) && matchVerified && matchCustom && matchQuantity;
+      const matchPlatform = (d.platform || 'instagram') === requestedPlatform;
+      const matchQuantity = isVerifiedRequested || String(d.quantity) === String(customQuantity);
+      return (matchContact || matchUsername) && matchVerified && matchCustom && matchPlatform && matchQuantity;
     });
 
     const { sendFollowerOrderCreative } = await import('@/lib/orders/follower-order-handler');
@@ -164,6 +169,7 @@ export async function POST(request: Request, context: RouteContext) {
         order_code: existingJob.source_id,
         username,
         quantity: customQuantity,
+        platform: requestedPlatform,
         profile_image_url: contact.profile_image_url,
         creative_job_id: existingJob.id,
         delivery_success: true,
@@ -189,7 +195,7 @@ export async function POST(request: Request, context: RouteContext) {
       overrideBadgeColor: requestedBadgeColor,
       overrideBadgeText: requestedBadgeText,
       overrideIsCustomBadge: isCustomRequested,
-      overridePlatform: 'instagram',
+      overridePlatform: requestedPlatform,
       forceResend: true,
     });
 

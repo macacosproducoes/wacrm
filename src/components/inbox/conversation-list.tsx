@@ -84,16 +84,16 @@ export function ConversationList({
     return { all, unread, open, pending, closed };
   }, [conversations, accountId]);
 
-  const FILTER_OPTIONS: { label: string; value: InboxFilter; count: number }[] = useMemo(() => [
+  const ACTIVE_FILTER_OPTIONS: { label: string; value: "all" | "unread" | "open" | "pending"; count: number }[] = useMemo(() => [
     { label: "Todas", value: "all", count: counts.all },
     { label: "Não lidas", value: "unread", count: counts.unread },
     { label: "Abertas", value: "open", count: counts.open },
     { label: "Pendentes", value: "pending", count: counts.pending },
-    { label: "Arquivadas", value: "closed", count: counts.closed },
   ], [counts]);
 
+  const [mainTab, setMainTab] = useState<"active" | "archived">("active");
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<InboxFilter>("all");
+  const [filter, setFilter] = useState<"all" | "unread" | "open" | "pending">("all");
   const [loading, setLoading] = useState(true);
   // Contact-based filters (issue #272). Tags use OR logic (a conversation
   // matches if its contact carries any selected tag), consistent with
@@ -375,22 +375,25 @@ export function ConversationList({
       result = result.filter((c) => !c.account_id || c.account_id === accountId);
     }
 
-    // STRICT ARCHIVE ISOLATION:
+    // STRICT TAB ISOLATION:
     // If viewing "Arquivadas" tab: ONLY show closed / archived conversations.
-    // If viewing any other tab ("Todas", "Não lidas", "Abertas", "Pendentes"):
-    // NEVER show closed / archived conversations! They are 100% segregated.
-    if (filter === "closed") {
-      result = result.filter((c) => c.status === "closed" || (c as unknown as { status: string }).status === "archived");
+    // If viewing "Ativas" tab: NEVER show closed / archived conversations!
+    if (mainTab === "archived") {
+      result = result.filter(
+        (c) => c.status === "closed" || (c as unknown as { status: string }).status === "archived"
+      );
     } else {
-      result = result.filter((c) => c.status !== "closed" && (c as unknown as { status: string }).status !== "archived");
-    }
+      result = result.filter(
+        (c) => c.status !== "closed" && (c as unknown as { status: string }).status !== "archived"
+      );
 
-    if (filter === "unread") {
-      result = result.filter((c) => c.unread_count > 0);
-    } else if (filter === "open") {
-      result = result.filter((c) => c.status === "open");
-    } else if (filter === "pending") {
-      result = result.filter((c) => c.status === "pending");
+      if (filter === "unread") {
+        result = result.filter((c) => c.unread_count > 0);
+      } else if (filter === "open") {
+        result = result.filter((c) => c.status === "open");
+      } else if (filter === "pending") {
+        result = result.filter((c) => c.status === "pending");
+      }
     }
 
     // Contact-based filters (tags via OR logic, exact company match).
@@ -413,8 +416,8 @@ export function ConversationList({
       });
     }
 
-    // Final absolute safety assertion:
-    const finalResult = filter === "closed"
+    // Final safety assertion:
+    const finalResult = mainTab === "archived"
       ? result.filter((c) => c.status === "closed" || (c as unknown as { status: string }).status === "archived")
       : result.filter((c) => c.status !== "closed" && (c as unknown as { status: string }).status !== "archived");
 
@@ -424,7 +427,7 @@ export function ConversationList({
       const timeB = b.last_message_at ? new Date(b.last_message_at).getTime() : (b.updated_at ? new Date(b.updated_at).getTime() : 0);
       return timeB - timeA;
     });
-  }, [conversations, filter, search, selectedTagIds, selectedCompany, accountId]);
+  }, [conversations, mainTab, filter, search, selectedTagIds, selectedCompany, accountId]);
 
   const toggleTag = useCallback((id: string) => {
     setSelectedTagIds((prev) =>
@@ -453,7 +456,7 @@ export function ConversationList({
     [onSelect]
   );
 
-  const activeFilter = FILTER_OPTIONS.find((o) => o.value === filter);
+  const activeFilter = ACTIVE_FILTER_OPTIONS.find((o) => o.value === filter);
 
   return (
     // w-full on mobile so the list occupies the whole viewport when it's
@@ -524,45 +527,107 @@ export function ConversationList({
           </div>
         </div>
 
+        {/* Primary Tabs: Ativas vs Arquivadas */}
+        <div className="grid grid-cols-2 p-1 bg-muted/80 rounded-lg border border-border/70 text-xs font-semibold gap-1">
+          <button
+            type="button"
+            onClick={() => setMainTab("active")}
+            className={cn(
+              "flex items-center justify-center gap-1.5 py-1.5 rounded-md transition-all cursor-pointer select-none",
+              mainTab === "active"
+                ? "bg-background text-foreground shadow-xs font-bold border border-border/40"
+                : "text-muted-foreground hover:text-foreground hover:bg-background/40"
+            )}
+          >
+            <span>💬 Ativas</span>
+            <span
+              className={cn(
+                "px-1.5 py-0.2 rounded-full text-[10px] font-bold",
+                mainTab === "active"
+                  ? "bg-primary/15 text-primary"
+                  : "bg-muted text-muted-foreground"
+              )}
+            >
+              {counts.all}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setMainTab("archived")}
+            className={cn(
+              "flex items-center justify-center gap-1.5 py-1.5 rounded-md transition-all cursor-pointer select-none",
+              mainTab === "archived"
+                ? "bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-500/40 shadow-xs font-bold"
+                : "text-muted-foreground hover:text-foreground hover:bg-background/40"
+            )}
+          >
+            <span>📁 Arquivadas</span>
+            <span
+              className={cn(
+                "px-1.5 py-0.2 rounded-full text-[10px] font-bold",
+                mainTab === "archived"
+                  ? "bg-amber-500/30 text-amber-800 dark:text-amber-300"
+                  : "bg-muted text-muted-foreground"
+              )}
+            >
+              {counts.closed}
+            </span>
+          </button>
+        </div>
+
         <div className="relative">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={search}
             onChange={handleSearchChange}
-            placeholder={t("searchPlaceholder")}
+            placeholder={mainTab === "archived" ? "Buscar nas arquivadas..." : t("searchPlaceholder")}
             className="border-border bg-muted pl-9 text-sm text-foreground placeholder-muted-foreground focus:border-primary/50"
           />
         </div>
 
-        <div className="flex items-center gap-1 overflow-x-auto no-scrollbar py-0.5">
-          {FILTER_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => setFilter(opt.value)}
-              className={cn(
-                "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all shrink-0 cursor-pointer select-none",
-                filter === opt.value
-                  ? opt.value === "closed"
-                    ? "bg-amber-600 text-white font-semibold shadow-xs"
-                    : "bg-primary text-primary-foreground font-semibold shadow-xs"
-                  : "bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-              )}
-            >
-              <span>{opt.label}</span>
-              {opt.count > 0 && (
-                <span className={cn(
-                  "rounded-full px-1.5 py-0.2 text-[10px] font-bold",
+        {/* Sub-Filters for Active Conversations */}
+        {mainTab === "active" ? (
+          <div className="flex items-center gap-1 overflow-x-auto no-scrollbar py-0.5">
+            {ACTIVE_FILTER_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setFilter(opt.value)}
+                className={cn(
+                  "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all shrink-0 cursor-pointer select-none",
                   filter === opt.value
-                    ? "bg-white/20 text-white"
-                    : "bg-background/80 text-muted-foreground"
-                )}>
-                  {opt.count}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
+                    ? "bg-primary text-primary-foreground font-semibold shadow-xs"
+                    : "bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                )}
+              >
+                <span>{opt.label}</span>
+                {opt.count > 0 && (
+                  <span
+                    className={cn(
+                      "rounded-full px-1.5 py-0.2 text-[10px] font-bold",
+                      filter === opt.value
+                        ? "bg-white/20 text-white"
+                        : "bg-background/80 text-muted-foreground"
+                    )}
+                  >
+                    {opt.count}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-700 dark:text-amber-300 flex items-center justify-between">
+            <span className="flex items-center gap-1.5 font-medium">
+              <span>📁</span>
+              <span>Pasta de Arquivadas ({counts.closed})</span>
+            </span>
+            <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">
+              Isoladas de Ativas
+            </span>
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center gap-1">
 
@@ -717,7 +782,9 @@ export function ConversationList({
           </div>
         ) : filtered.length === 0 ? (
           <div className="px-4 py-12 text-center">
-            <p className="text-sm text-muted-foreground">{t("noConversations")}</p>
+            <p className="text-sm text-muted-foreground">
+              {mainTab === "archived" ? "Nenhuma conversa arquivada encontrada." : t("noConversations")}
+            </p>
           </div>
         ) : (
           <div className="flex flex-col">
@@ -791,7 +858,14 @@ function ConversationItem({
             <span className="truncate text-sm font-medium text-foreground">
               {displayName}
             </span>
-            {conversation.ai_autoreply_disabled === true ? (
+            {conversation.status === "closed" ? (
+              <span
+                className="inline-flex items-center px-1 py-0.5 rounded text-[9px] font-semibold border border-amber-500/40 bg-amber-500/15 text-amber-700 dark:text-amber-400 shrink-0"
+                title="Conversa arquivada"
+              >
+                📁 Arquivada
+              </span>
+            ) : conversation.ai_autoreply_disabled === true ? (
               <span
                 className="inline-flex items-center px-1 py-0.5 rounded text-[9px] font-semibold border border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0"
                 title="IA pausada nesta conversa (Atendimento humano)"

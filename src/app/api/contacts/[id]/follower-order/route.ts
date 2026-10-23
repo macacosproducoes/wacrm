@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/flows/admin-client';
 import {
   sendFollowerOrderCreative,
   handleFollowerOrder,
+  parseCustomQuantityValue,
 } from '@/lib/orders/follower-order-handler';
 import { TraceLogger } from '@/lib/whatsapp/trace';
 
@@ -210,11 +211,12 @@ export async function POST(request: Request, context: RouteContext) {
     const requestedBadgeColor = body.custom_badge_color || undefined;
     const requestedBadgeText = body.custom_badge_text || undefined;
 
+    const parsedCustom = body.quantity !== undefined ? parseCustomQuantityValue(body.quantity) : null;
     const requestedQuantity = isCustomRequested
       ? 'PERSONALIZADO'
       : isVerifiedRequested
       ? 'VERIFICADO'
-      : (body.quantity ? Number(String(body.quantity).replace(/\D/g, '')) : undefined);
+      : (parsedCustom ? parsedCustom.num : undefined);
     const requestedTemplateId = body.template_id || undefined;
     const requestedPlatform = (body.platform as ('instagram' | 'tiktok') | undefined) || undefined;
     const forceRegenerate = Boolean(body.regenerate || body.force_regenerate);

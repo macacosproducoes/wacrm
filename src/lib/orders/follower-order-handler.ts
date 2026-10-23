@@ -44,6 +44,37 @@ export interface ParsedFollowerOrder {
   isVerified?: boolean;
 }
 
+export function parseCustomQuantityValue(raw: unknown): { num: number; formatted: string } {
+  if (typeof raw === 'number') {
+    return { num: raw, formatted: raw.toLocaleString('pt-BR') };
+  }
+  const str = String(raw || '').trim();
+  if (!str) return { num: 5000, formatted: '5.000' };
+
+  const lower = str.toLowerCase();
+  const mMatch = lower.match(/^([\d.,]+)\s*(?:m|mi|milh(?:ão|ao|ões|oes))$/i);
+  if (mMatch) {
+    const val = parseFloat(mMatch[1].replace(/\./g, '').replace(',', '.'));
+    const total = Math.round(val * 1000000);
+    return { num: total, formatted: total.toLocaleString('pt-BR') };
+  }
+
+  const kMatch = lower.match(/^([\d.,]+)\s*(?:k|mil)$/i);
+  if (kMatch) {
+    const val = parseFloat(kMatch[1].replace(/\./g, '').replace(',', '.'));
+    const total = Math.round(val * 1000);
+    return { num: total, formatted: total.toLocaleString('pt-BR') };
+  }
+
+  const digitsOnly = str.replace(/\D/g, '');
+  if (digitsOnly) {
+    const num = parseInt(digitsOnly, 10);
+    return { num, formatted: num.toLocaleString('pt-BR') };
+  }
+
+  return { num: 1, formatted: str };
+}
+
 /**
  * Deterministically parses a customer message for follower order intent,
  * Instagram/TikTok handle, and follower quantity.
@@ -223,17 +254,14 @@ export async function handleFollowerOrder(
       params.overrideIsVerified ||
       String(overrideQuantity).toUpperCase().includes('VERIFICAD')
     );
-    const qtyNum = isExplicitVerified
-      ? 1
-      : typeof overrideQuantity === 'number'
-      ? overrideQuantity
-      : parseInt(String(overrideQuantity).replace(/\D/g, ''), 10) || 5000;
+    const parsedQty = parseCustomQuantityValue(overrideQuantity);
+    const qtyNum = isExplicitVerified ? 1 : parsedQty.num;
     parsed = {
       isFollowerOrder: true,
       platform: overridePlatform || (isTtk ? 'tiktok' : 'instagram'),
       username: rawUser,
       quantity: qtyNum,
-      quantityFormatted: isExplicitVerified ? 'Selo Verificado' : qtyNum.toLocaleString('pt-BR'),
+      quantityFormatted: isExplicitVerified ? 'Selo Verificado' : parsedQty.formatted,
       isVerified: isExplicitVerified,
     };
   } else {

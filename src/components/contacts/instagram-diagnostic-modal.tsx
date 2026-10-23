@@ -30,6 +30,8 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -50,6 +52,14 @@ export function InstagramBrandIcon({ className = "h-4 w-4" }: { className?: stri
       <rect width="20" height="20" x="2" y="2" rx="5" ry="5" />
       <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
       <line x1="17.5" x2="17.51" y1="6.5" y2="6.5" />
+    </svg>
+  );
+}
+
+export function TikTokBrandIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
+      <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 3 15.68a6.34 6.34 0 0 0 6.34 6.32 6.34 6.34 0 0 0 6.34-6.32V8.71a8.21 8.21 0 0 0 3.91 1.25V6.69z" />
     </svg>
   );
 }
@@ -77,9 +87,11 @@ export function InstagramDiagnosticModal({
   triggerButton,
 }: InstagramDiagnosticModalProps) {
   const [open, setOpen] = useState(false);
+  const [platform, setPlatform] = useState<"instagram" | "tiktok">("instagram");
   const [isResolving, setIsResolving] = useState(false);
   const [isSendingOrder, setIsSendingOrder] = useState(false);
   const [orderQuantity, setOrderQuantity] = useState("5000");
+  const [customQuantityText, setCustomQuantityText] = useState("");
   const [customBadgeColor, setCustomBadgeColor] = useState("#EAB308");
   const [customBadgeText, setCustomBadgeText] = useState("★");
   const [editingUsername, setEditingUsername] = useState(false);
@@ -88,11 +100,13 @@ export function InstagramDiagnosticModal({
 
   const diag = getInstagramDiagnosticInfo(contact);
   const username = contact.instagram_username || "";
-  const profileUrl =
-    contact.instagram_url ||
-    (username ? `https://www.instagram.com/${username.replace(/^@+/, "")}/` : null);
+  const isTikTok = platform === "tiktok";
+  const platformLabel = isTikTok ? "TikTok" : "Instagram";
+  const profileUrl = isTikTok
+    ? (username ? `https://www.tiktok.com/@${username.replace(/^@+/, "")}` : null)
+    : (contact.instagram_url || (username ? `https://www.instagram.com/${username.replace(/^@+/, "")}/` : null));
 
-  // 1. Resolve Profile from Instagram
+  // 1. Resolve Profile from Instagram or TikTok
   const handleResolve = useCallback(
     async (force = true) => {
       setIsResolving(true);
@@ -100,20 +114,20 @@ export function InstagramDiagnosticModal({
         const res = await fetch(`/api/contacts/${contact.id}/instagram`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "resolve", forceRefresh: force }),
+          body: JSON.stringify({ action: "resolve", forceRefresh: force, platform }),
         });
         const data = await res.json();
         if (!res.ok) {
-          throw new Error(data.error || "Falha ao resolver perfil.");
+          throw new Error(data.error || `Falha ao resolver perfil do ${platform === 'tiktok' ? 'TikTok' : 'Instagram'}.`);
         }
         toast.success(
           data.result?.profileImageUrl
-            ? "Foto do Instagram obtida com sucesso!"
+            ? `Foto do ${platform === 'tiktok' ? 'TikTok' : 'Instagram'} obtida com sucesso!`
             : "Perfil consultado com sucesso."
         );
         onContactUpdated?.({
           ...contact,
-          instagram_username: data.result?.instagramUsername || contact.instagram_username,
+          instagram_username: data.result?.instagramUsername || data.result?.username || contact.instagram_username,
           instagram_url: data.result?.instagramUrl || contact.instagram_url,
           profile_image_url: data.result?.profileImageUrl,
           profile_image_source: data.result?.profileImageSource,
@@ -123,7 +137,7 @@ export function InstagramDiagnosticModal({
           instagram_last_error: null,
         });
       } catch (err: any) {
-        toast.error(err.message || "Erro ao consultar perfil.");
+        toast.error(err.message || `Erro ao consultar perfil do ${platform === 'tiktok' ? 'TikTok' : 'Instagram'}.`);
         onContactUpdated?.({
           ...contact,
           instagram_resolve_status: "FAILED",
@@ -133,10 +147,10 @@ export function InstagramDiagnosticModal({
         setIsResolving(false);
       }
     },
-    [contact, onContactUpdated]
+    [contact, onContactUpdated, platform]
   );
 
-  // 2. Save new Instagram handle
+  // 2. Save new Instagram/TikTok handle
   const handleSaveUsername = async () => {
     const clean = usernameInput.trim().replace(/^@+/, "");
     if (!clean) return;
@@ -145,16 +159,16 @@ export function InstagramDiagnosticModal({
       const res = await fetch(`/api/contacts/${contact.id}/instagram`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: clean, action: "resolve", forceRefresh: true }),
+        body: JSON.stringify({ username: clean, action: "resolve", forceRefresh: true, platform }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Falha ao atualizar @.");
-      toast.success(`Instagram @${clean} salvo com sucesso!`);
+      if (!res.ok) throw new Error(data.error || `Falha ao atualizar @ do ${platform === 'tiktok' ? 'TikTok' : 'Instagram'}.`);
+      toast.success(`${platform === 'tiktok' ? 'TikTok' : 'Instagram'} @${clean} salvo com sucesso!`);
       setEditingUsername(false);
       onContactUpdated?.({
         ...contact,
         instagram_username: clean,
-        instagram_url: `https://www.instagram.com/${clean}/`,
+        instagram_url: platform === 'tiktok' ? `https://www.tiktok.com/@${clean}` : `https://www.instagram.com/${clean}/`,
         profile_image_url: data.result?.profileImageUrl,
         instagram_resolve_status: data.result?.resolveStatus,
       });
@@ -171,25 +185,38 @@ export function InstagramDiagnosticModal({
       toast.error("Contato não possui telefone WhatsApp cadastrado.");
       return;
     }
-    if (!username) {
-      toast.error("Informe o @ de Instagram antes de enviar.");
+    const targetUser = usernameInput.trim().replace(/^@+/, "") || username;
+    if (!targetUser) {
+      toast.error(`Informe o @ de ${platform === 'tiktok' ? 'TikTok' : 'Instagram'} antes de enviar.`);
       return;
     }
 
     setIsSendingOrder(true);
     try {
-      const isCustom = orderQuantity === "PERSONALIZADA";
-      const isVerified = orderQuantity === "VERIFICADO" || isCustom;
+      const isCustomBadge = orderQuantity === "PERSONALIZADA";
+      const isVerified = orderQuantity === "VERIFICADO" || isCustomBadge;
+
+      let finalQty: string | number;
+      if (orderQuantity === "CUSTOM_VALUE") {
+        finalQty = customQuantityText.trim() || "5000";
+      } else if (isCustomBadge) {
+        finalQty = "PERSONALIZADO";
+      } else if (isVerified) {
+        finalQty = "VERIFICADO";
+      } else {
+        finalQty = parseInt(orderQuantity, 10) || 5000;
+      }
 
       const payload: Record<string, any> = {
-        username,
-        quantity: isCustom ? "PERSONALIZADO" : isVerified ? "VERIFICADO" : (parseInt(orderQuantity, 10) || 5000),
+        platform,
+        username: targetUser,
+        quantity: finalQty,
         is_verified: isVerified,
-        is_custom: isCustom,
-        badge_type: isCustom ? "custom" : isVerified ? "instagram" : undefined,
+        is_custom: isCustomBadge,
+        badge_type: isCustomBadge ? "custom" : isVerified ? (platform === 'tiktok' ? 'tiktok' : 'instagram') : undefined,
       };
 
-      if (isCustom) {
+      if (isCustomBadge) {
         payload.custom_badge_color = customBadgeColor;
         payload.custom_badge_text = customBadgeText;
       }
@@ -206,8 +233,8 @@ export function InstagramDiagnosticModal({
 
       toast.success(
         data.delivery_success
-          ? `✅ Pedido #${data.order_code} gerado e enviado ao WhatsApp!`
-          : `Arte #${data.order_code} gerada com sucesso!`
+          ? `✅ Pedido #${data.order_code} (${platformLabel}) gerado e enviado ao WhatsApp!`
+          : `Arte #${data.order_code} (${platformLabel}) gerada com sucesso!`
       );
       setOpen(false);
     } catch (err: any) {
@@ -312,15 +339,20 @@ export function InstagramDiagnosticModal({
         <DialogHeader className="pb-3 border-b border-border">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-linear-to-tr from-amber-500 via-rose-500 to-purple-600 text-white shadow-md">
-                <InstagramBrandIcon className="h-4 w-4" />
+              <span className={cn(
+                "flex h-8 w-8 items-center justify-center rounded-lg text-white shadow-md transition-all",
+                isTikTok
+                  ? "bg-linear-to-tr from-sky-500 to-rose-500"
+                  : "bg-linear-to-tr from-amber-500 via-rose-500 to-purple-600"
+              )}>
+                {isTikTok ? <TikTokBrandIcon className="h-4 w-4" /> : <InstagramBrandIcon className="h-4 w-4" />}
               </span>
               <div>
                 <DialogTitle className="text-base font-bold flex items-center gap-1.5">
-                  Diagnóstico do Instagram
+                  Confirmação & Diagnóstico ({platformLabel})
                 </DialogTitle>
                 <p className="text-xs text-muted-foreground">
-                  Foto e metadados dedicados exclusivamente ao Creative Engine
+                  Foto e dados integrados ao Creative Engine (960x960)
                 </p>
               </div>
             </div>
@@ -336,6 +368,36 @@ export function InstagramDiagnosticModal({
             >
               {diag.badgeLabel}
             </Badge>
+          </div>
+
+          {/* Platform Switcher Tabs */}
+          <div className="grid grid-cols-2 gap-1.5 p-1 bg-muted/60 rounded-lg border border-border mt-3">
+            <button
+              type="button"
+              onClick={() => setPlatform("instagram")}
+              className={cn(
+                "flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer",
+                platform === "instagram"
+                  ? "bg-linear-to-r from-pink-500/20 via-purple-500/20 to-amber-500/20 border border-pink-500/40 text-pink-700 dark:text-pink-300 shadow-xs font-bold"
+                  : "text-muted-foreground hover:text-foreground hover:bg-background/40"
+              )}
+            >
+              <InstagramBrandIcon className="h-3.5 w-3.5 text-pink-500" />
+              <span>Instagram</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setPlatform("tiktok")}
+              className={cn(
+                "flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer",
+                platform === "tiktok"
+                  ? "bg-linear-to-r from-sky-500/20 to-rose-500/20 border border-sky-500/40 text-sky-700 dark:text-sky-300 shadow-xs font-bold"
+                  : "text-muted-foreground hover:text-foreground hover:bg-background/40"
+              )}
+            >
+              <TikTokBrandIcon className="h-3.5 w-3.5 text-sky-500" />
+              <span>TikTok</span>
+            </button>
           </div>
         </DialogHeader>
 
@@ -530,7 +592,7 @@ export function InstagramDiagnosticModal({
                   className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none font-medium"
                 >
                   <optgroup label="Selos & Verificação">
-                    <option value="VERIFICADO">✓ Selo Verificado (Oficial Instagram)</option>
+                    <option value="VERIFICADO">✓ Selo Verificado (Oficial {platformLabel})</option>
                     <option value="PERSONALIZADA">★ Selo Personalizado</option>
                   </optgroup>
                   <optgroup label="Seguidores">
@@ -543,6 +605,15 @@ export function InstagramDiagnosticModal({
                     <option value="30000">30.000 seguidores</option>
                     <option value="50000">50.000 seguidores</option>
                     <option value="100000">100.000 seguidores</option>
+                    <option value="150000">150.000 seguidores</option>
+                    <option value="200000">200.000 seguidores</option>
+                    <option value="300000">300.000 seguidores</option>
+                    <option value="500000">500.000 seguidores</option>
+                    <option value="1000000">1.000.000 seguidores (1 Milhão)</option>
+                    <option value="2000000">2.000.000 seguidores (2 Milhões)</option>
+                  </optgroup>
+                  <optgroup label="Valor Personalizado">
+                    <option value="CUSTOM_VALUE">✏️ Outro valor livre / personalizado...</option>
                   </optgroup>
                 </select>
               </div>
@@ -565,6 +636,25 @@ export function InstagramDiagnosticModal({
                 )}
               </Button>
             </div>
+
+            {orderQuantity === "CUSTOM_VALUE" && (
+              <div className="rounded-md border border-primary/40 bg-primary/10 p-2.5 space-y-1.5">
+                <label className="text-[10px] uppercase font-bold text-primary block">
+                  ✏️ Digite o Valor ou Quantidade Personalizada
+                </label>
+                <Input
+                  type="text"
+                  placeholder="Ex: 250.000, 750k ou 5.000.000"
+                  value={customQuantityText}
+                  onChange={(e) => setCustomQuantityText(e.target.value)}
+                  className="h-8 text-xs font-semibold bg-background border-primary/50"
+                  autoFocus
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Você pode digitar qualquer quantidade acima de 100k, milhões ou texto customizado para renderizar no template.
+                </p>
+              </div>
+            )}
 
             {orderQuantity === "VERIFICADO" && (
               <div className="rounded-md border border-sky-500/30 bg-sky-500/10 p-2 text-xs text-sky-700 dark:text-sky-300 flex items-center gap-1.5">
@@ -634,7 +724,7 @@ export function InstagramDiagnosticModal({
             ) : (
               <RefreshCw className="h-3 w-3" />
             )}
-            <span>Buscar no Instagram</span>
+            <span>{isTikTok ? "Buscar no TikTok" : "Buscar no Instagram"}</span>
           </Button>
 
           <input

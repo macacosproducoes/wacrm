@@ -104,7 +104,7 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
 
   // Customization state for resend / editing
   const [customUsername, setCustomUsername] = useState("");
-  const [customQuantity, setCustomQuantity] = useState(5000);
+  const [customQuantity, setCustomQuantity] = useState<number | string>(5000);
   const [isVerified, setIsVerified] = useState(false);
   const [badgeOption, setBadgeOption] = useState<"none" | "verified" | "custom">("none");
   const [customBadgeColor, setCustomBadgeColor] = useState("#EAB308");
@@ -263,7 +263,7 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
     (badgeOption !== currentBadgeOption) ||
     (badgeOption === "custom" && customBadgeColor !== ((job as any)?.custom_badge_color || "#EAB308")) ||
     (badgeOption === "custom" && customBadgeText !== ((job as any)?.custom_badge_text || "★")) ||
-    (badgeOption === "none" && Number(customQuantity) !== Number(job?.quantity || 5000)) ||
+    (badgeOption === "none" && String(customQuantity).trim() !== String(job?.quantity || 5000).trim()) ||
     (customTemplateId && job?.template_id && customTemplateId !== job?.template_id) ||
     (customPlatform !== (job?.platform || "instagram")) ||
     forceRegenerate
@@ -286,9 +286,9 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
 
     if (useCustomParams) {
       payload.username = customUsername.trim().replace(/^@+/, "");
-      payload.quantity = badgeOption === "custom" ? "PERSONALIZADO" : badgeOption === "verified" ? "VERIFICADO" : Number(customQuantity);
+      payload.quantity = badgeOption === "custom" ? "PERSONALIZADO" : badgeOption === "verified" ? "VERIFICADO" : (typeof customQuantity === 'number' ? customQuantity : String(customQuantity).trim());
       payload.is_verified = badgeOption !== "none";
-      payload.badge_type = badgeOption === "custom" ? "custom" : (badgeOption === "verified" ? "instagram" : undefined);
+      payload.badge_type = badgeOption === "custom" ? "custom" : (badgeOption === "verified" ? (customPlatform === 'tiktok' ? 'tiktok' : 'instagram') : undefined);
       payload.is_custom = badgeOption === "custom";
       payload.custom_badge_color = badgeOption === "custom" ? customBadgeColor : undefined;
       payload.custom_badge_text = badgeOption === "custom" ? customBadgeText : undefined;
@@ -455,7 +455,14 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
           <div className="flex items-center justify-between text-muted-foreground">
             <span>Perfil:</span>
             <span className="inline-flex items-center gap-1 font-medium text-foreground">
-              <Camera className="h-3 w-3 text-pink-500" />
+              {job?.platform === "tiktok" || customPlatform === "tiktok" ? (
+                <>
+                  <span className="text-xs">🎵</span>
+                  <span className="text-sky-500 font-semibold text-[11px]">[TikTok]</span>
+                </>
+              ) : (
+                <Camera className="h-3 w-3 text-pink-500" />
+              )}
               @{job?.username || (contact as any)?.instagram_username}
             </span>
           </div>
@@ -467,7 +474,7 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
                   ✓ Selo Verificado
                 </span>
               ) : (
-                `${Number(job?.quantity || 5000).toLocaleString("pt-BR")} seguidores`
+                `${!isNaN(Number(job?.quantity)) && Number(job?.quantity) > 0 ? Number(job?.quantity).toLocaleString("pt-BR") : (job?.quantity || 5000)} seguidores`
               )}
             </span>
           </div>
@@ -720,14 +727,14 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
                   {badgeOption === "custom"
                     ? `★ Selo Personalizado (${customBadgeText || "★"})`
                     : badgeOption === "verified"
-                    ? "✓ Selo Verificado Oficial"
-                    : `${Number(customQuantity || 0).toLocaleString("pt-BR")} seguidores`}
+                    ? `✓ Selo Verificado (${customPlatform === "tiktok" ? "TikTok" : "Instagram"})`
+                    : `${!isNaN(Number(customQuantity)) && Number(customQuantity) > 0 ? Number(customQuantity).toLocaleString("pt-BR") : customQuantity} seguidores`}
                 </span>
               </label>
 
               {/* Quick Pills */}
               <div className="flex flex-wrap gap-1.5 pb-1">
-                {[500, 1000, 2000, 5000, 10000, 20000, 30000, 50000, 100000].map((qty) => (
+                {[500, 1000, 2000, 5000, 10000, 20000, 30000, 50000, 100000, 150000, 200000, 300000, 500000, 1000000, 2000000].map((qty) => (
                   <button
                     key={qty}
                     type="button"
@@ -737,12 +744,12 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
                       setBadgeOption("none");
                     }}
                     className={`px-2 py-1 rounded text-[11px] font-medium transition-colors border ${
-                      badgeOption === "none" && Number(customQuantity) === qty
-                        ? "bg-primary text-primary-foreground border-primary"
+                      badgeOption === "none" && (customQuantity === qty || Number(String(customQuantity).replace(/\D/g, "")) === qty)
+                        ? "bg-primary text-primary-foreground border-primary font-bold shadow-xs"
                         : "bg-muted/50 hover:bg-muted border-border text-foreground"
                     }`}
                   >
-                    {qty >= 1000 ? `${qty / 1000}k` : qty}
+                    {qty >= 1000000 ? `${qty / 1000000}M` : qty >= 1000 ? `${qty / 1000}k` : qty}
                   </button>
                 ))}
 
@@ -838,15 +845,18 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
                   </div>
                 </div>
               ) : (
-                <Input
-                  type="number"
-                  min={1}
-                  step={50}
-                  placeholder="5000"
-                  value={customQuantity || ""}
-                  onChange={(e) => setCustomQuantity(Number(e.target.value))}
-                  className="h-9 text-xs"
-                />
+                <div className="space-y-1">
+                  <Input
+                    type="text"
+                    placeholder="Ex: 250.000, 500k ou 1.000.000"
+                    value={customQuantity || ""}
+                    onChange={(e) => setCustomQuantity(e.target.value)}
+                    className="h-9 text-xs font-semibold"
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Digite qualquer valor (ex: 150.000, 500k, 1M ou texto customizado).
+                  </p>
+                </div>
               )}
             </div>
 
@@ -880,7 +890,7 @@ export function FollowerOrderCard({ contact, onContactUpdated }: FollowerOrderCa
             <Button
               size="sm"
               onClick={() => handleSend({ forceResend: true, useCustomParams: true })}
-              disabled={sending || !customUsername.trim() || !customQuantity}
+              disabled={sending || !customUsername.trim() || !String(customQuantity).trim()}
               className="gap-1.5 bg-primary"
             >
               {sending ? (

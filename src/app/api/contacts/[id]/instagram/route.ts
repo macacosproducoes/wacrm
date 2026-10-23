@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/flows/admin-client';
 import { InstagramProfileResolver } from '@/lib/instagram-resolver';
 import { parseInstagramUsername, buildInstagramProfileUrl } from '@/lib/instagram-resolver/parser';
 import { getInstagramDiagnosticInfo } from '@/lib/instagram-resolver/types';
+import { TikTokProfileResolver, parseTikTokUsername, buildTikTokProfileUrl } from '@/lib/tiktok-resolver';
 
 export const runtime = 'nodejs';
 
@@ -77,10 +78,12 @@ export async function POST(request: Request, context: RouteContext) {
     let username: string | undefined;
     let imageUrl: string | undefined;
     let imageBuffer: Buffer | undefined;
+    let platform: 'instagram' | 'tiktok' = 'instagram';
 
     if (contentType.includes('multipart/form-data')) {
       const formData = await request.formData();
       action = String(formData.get('action') || 'set_manual_photo');
+      platform = formData.get('platform') === 'tiktok' ? 'tiktok' : 'instagram';
       const file = formData.get('file');
       if (file && file instanceof Blob) {
         const arrayBuf = await file.arrayBuffer();
@@ -92,6 +95,7 @@ export async function POST(request: Request, context: RouteContext) {
       forceRefresh = Boolean(body.forceRefresh);
       username = body.username;
       imageUrl = body.imageUrl;
+      platform = body.platform === 'tiktok' ? 'tiktok' : 'instagram';
 
       if (body.imageBase64) {
         const base64Data = body.imageBase64.replace(/^data:image\/\w+;base64,/, '');
@@ -103,16 +107,29 @@ export async function POST(request: Request, context: RouteContext) {
 
     // 1. Update username first if provided
     if (username !== undefined) {
-      const parsed = parseInstagramUsername(username);
-      const url = parsed ? buildInstagramProfileUrl(parsed) : null;
-      await admin
-        .from('contacts')
-        .update({
-          instagram_username: parsed || null,
-          instagram_url: url,
-        })
-        .eq('id', contactId)
-        .eq('account_id', ctx.accountId);
+      if (platform === 'tiktok') {
+        const parsed = parseTikTokUsername(username);
+        const url = parsed ? buildTikTokProfileUrl(parsed) : null;
+        await admin
+          .from('contacts')
+          .update({
+            instagram_username: parsed || null,
+            instagram_url: url,
+          })
+          .eq('id', contactId)
+          .eq('account_id', ctx.accountId);
+      } else {
+        const parsed = parseInstagramUsername(username);
+        const url = parsed ? buildInstagramProfileUrl(parsed) : null;
+        await admin
+          .from('contacts')
+          .update({
+            instagram_username: parsed || null,
+            instagram_url: url,
+          })
+          .eq('id', contactId)
+          .eq('account_id', ctx.accountId);
+      }
     }
 
     // 2. Action: Set Manual Photo
@@ -133,7 +150,46 @@ export async function POST(request: Request, context: RouteContext) {
       return NextResponse.json({ success: true, result });
     }
 
-    // 3. Action: Resolve Profile
+    // 3. Action: Resolve Profile (Instagram or TikTok)
+    if (platform === 'tiktok') {
+      const { data: ct } = await admin
+        .from('contacts')
+        .select('instagram_username')
+        .eq('id', contactId)
+        .eq('account_id', ctx.accountId)
+        .single();
+      const targetUser = (username || ct?.instagram_username || '').trim().replace(/^@+/, '');
+      if (!targetUser) {
+        return NextResponse.json({ error: 'Informe um perfil do TikTok para consultar.' }, { status: 400 });
+      }
+
+      const tikRes = await TikTokProfileResolver.resolveProfile(targetUser, ctx.accountId);
+      if (tikRes.profileImageUrl && tikRes.resolveStatus === 'IMAGE_AVAILABLE' && !tikRes.profileImageUrl.startsWith('data:')) {
+        await admin
+          .from('contacts')
+          .update({
+            profile_image_url: tikRes.profileImageUrl,
+            profile_image_source: 'TIKTOK_PROVIDER',
+            instagram_resolve_status: 'IMAGE_AVAILABLE',
+            instagram_last_error: null,
+            profile_image_updated_at: new Date().toISOString(),
+          })
+          .eq('id', contactId);
+      }
+
+      return NextResponse.json({
+        success: true,
+        result: {
+          username: tikRes.username,
+          profileImageUrl: tikRes.profileImageUrl,
+          profileImageSource: 'TIKTOK_PROVIDER',
+          resolveStatus: tikRes.resolveStatus,
+          error: tikRes.error,
+          updatedAt: new Date().toISOString(),
+        },
+      });
+    }
+
     const result = await InstagramProfileResolver.resolveContact(
       ctx.accountId,
       contactId,
