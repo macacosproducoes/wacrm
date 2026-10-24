@@ -45,19 +45,31 @@ function LoginPageInner() {
   const [showPassword, setShowPassword] = useState(false);
   const supabase = createClient();
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
 
-    let cleanEmail = email.trim().toLowerCase();
+    // Read directly from form elements or fallback to state to guarantee autofill/password manager compatibility
+    const form = e.currentTarget;
+    const formElements = form.elements as unknown as Record<string, HTMLInputElement>;
+    const rawEmail = formElements.email?.value ?? email ?? "";
+    const rawPassword = formElements.password?.value ?? password ?? "";
+
+    let cleanEmail = rawEmail.trim().toLowerCase();
     if (cleanEmail === "larissa") cleanEmail = "larissa@engajamentoreal.com";
     if (cleanEmail === "admin") cleanEmail = "howlay23@hotmail.com";
     if (!cleanEmail.includes("@") && cleanEmail.length > 0) {
       cleanEmail = `${cleanEmail}@engajamentoreal.com`;
     }
 
-    const cleanPassword = password.trim();
+    const cleanPassword = rawPassword.trim();
+
+    if (!cleanEmail || !cleanPassword) {
+      setError("Por favor, preencha o e-mail e a senha.");
+      setLoading(false);
+      return;
+    }
 
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
@@ -150,7 +162,7 @@ function LoginPageInner() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleLogin} className="flex flex-col gap-4">
+          <form onSubmit={handleLogin} noValidate className="flex flex-col gap-4">
             {error && (
               <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
                 {error}
@@ -163,8 +175,13 @@ function LoginPageInner() {
               </Label>
               <Input
                 id="email"
-                type="email"
-                placeholder={t('emailPlaceholder')}
+                name="email"
+                type="text"
+                inputMode="email"
+                autoCapitalize="none"
+                autoCorrect="off"
+                autoComplete="username email"
+                placeholder="larissa@engajamentoreal.com ou apenas larissa"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -187,6 +204,7 @@ function LoginPageInner() {
               <div className="relative">
                 <Input
                   id="password"
+                  name="password"
                   type={showPassword ? "text" : "password"}
                   placeholder={t('passwordPlaceholder')}
                   value={password}
@@ -220,11 +238,38 @@ function LoginPageInner() {
             </Button>
           </form>
 
-          <div className="mt-4 rounded-lg border border-border/40 bg-muted/30 p-3 text-center text-xs text-muted-foreground">
-            <span className="font-semibold text-foreground/80">E-mails de acesso: </span>
-            <span className="select-all font-mono text-primary">larissa@engajamentoreal.com</span>
-            {" · "}
-            <span className="select-all font-mono text-primary">howlay23@hotmail.com</span>
+          <div className="mt-4 flex flex-col gap-2 border-t border-border/40 pt-4">
+            <span className="text-center text-xs text-muted-foreground">
+              Acesso Rápido com 1 Clique:
+            </span>
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="border-border/60 hover:border-primary hover:bg-primary/10 hover:text-primary text-xs font-normal"
+                onClick={() => {
+                  setEmail("larissa@engajamentoreal.com");
+                  setPassword("Nati2004@200");
+                  setError(null);
+                }}
+              >
+                👤 Larissa (Oficial)
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="border-border/60 hover:border-primary hover:bg-primary/10 hover:text-primary text-xs font-normal"
+                onClick={() => {
+                  setEmail("howlay23@hotmail.com");
+                  setPassword("Nati2004@200");
+                  setError(null);
+                }}
+              >
+                ⚡ howlay23
+              </Button>
+            </div>
           </div>
 
           <p className="mt-6 text-center text-sm text-muted-foreground">
