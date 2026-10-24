@@ -159,9 +159,22 @@ export function WhatsAppRealtimeBridge() {
       try {
         const controller = new AbortController();
         const abortTimeout = setTimeout(() => controller.abort(), 20000);
+
+        let authHeader = '';
+        try {
+          const supabase = createClient();
+          const { data: sessionData } = await supabase.auth.getSession();
+          if (sessionData?.session?.access_token) {
+            authHeader = `Bearer ${sessionData.session.access_token}`;
+          }
+        } catch {}
+
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (authHeader) headers['Authorization'] = authHeader;
+
         const res = await fetch('/api/whatsapp/uazapi/sync-realtime', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           signal: controller.signal,
         });
         clearTimeout(abortTimeout);

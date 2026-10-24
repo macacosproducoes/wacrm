@@ -73,7 +73,7 @@ async function handleSync(request: Request) {
   try {
     const { user, accountId } = await resolveUserAndAccount(request);
     if (!user || !accountId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ success: true, retry: true, message: 'Aguardando autenticação...' }, { status: 200 });
     }
 
     // 1. Ensure persistent server-side background SSE listener is running

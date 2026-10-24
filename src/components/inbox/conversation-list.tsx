@@ -183,9 +183,21 @@ export function ConversationList({
   const handleSyncChats = async () => {
     try {
       setSyncing(true);
+      let authHeader = "";
+      try {
+        const supabase = createClient();
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (sessionData?.session?.access_token) {
+          authHeader = `Bearer ${sessionData.session.access_token}`;
+        }
+      } catch {}
+
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (authHeader) headers["Authorization"] = authHeader;
+
       const res = await fetch("/api/whatsapp/sync", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ limit: 500 }),
       });
       const data = await res.json();
@@ -195,17 +207,23 @@ export function ConversationList({
         if (leadCaptureEnabled) {
           fetch("/api/whatsapp/uazapi/capture-leads", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers,
             body: JSON.stringify({ action: "capture-all" }),
           }).catch(() => {});
         }
         // Refresh conversations list
-        const apiRes = await fetch("/api/inbox/conversations?status=all_with_archived&limit=150").then((r) => r.json());
+        const apiRes = await fetch("/api/inbox/conversations?status=all_with_archived&limit=150", {
+          headers,
+        }).then((r) => r.json());
         if (apiRes.conversations) {
           onConversationsLoadedRef.current(apiRes.conversations);
         }
       } else {
-        toast.error(data.error || "Falha ao sincronizar conversas.");
+        const errorMsg =
+          res.status === 401 || data.error === "Unauthorized" || data.error === "Não autorizado"
+            ? "Sessão expirada. Recarregue a página para sincronizar."
+            : data.error || "Falha ao sincronizar conversas.";
+        toast.error(errorMsg);
       }
     } catch {
       toast.error("Erro ao sincronizar conversas.");

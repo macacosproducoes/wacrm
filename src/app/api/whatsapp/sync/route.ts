@@ -11,18 +11,44 @@ function supabaseAdmin() {
   );
 }
 
-async function resolveUserAndAccount() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
+async function resolveUserAndAccount(request?: Request) {
+  const admin = supabaseAdmin();
+  let user: { id: string; email?: string } | null = null;
 
-  if (authError || !user) {
+  // 1. Try Bearer token from request headers
+  const authHeader = request?.headers.get('authorization');
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.slice(7).trim();
+    if (token) {
+      const { data } = await admin.auth.getUser(token);
+      if (data?.user) {
+        user = data.user;
+      }
+    }
+  }
+
+  // 2. Try cookie session
+  if (!user) {
+    try {
+      const supabase = await createClient();
+      const {
+        data: { user: cookieUser },
+        error: authError,
+      } = await supabase.auth.getUser();
+
+      if (!authError && cookieUser) {
+        user = cookieUser;
+      }
+    } catch {
+      // Non-cookie context
+    }
+  }
+
+  if (!user) {
     return { user: null, accountId: null };
   }
 
-  const { data: profile } = await supabaseAdmin()
+  const { data: profile } = await admin
     .from('profiles')
     .select('account_id')
     .eq('user_id', user.id)
@@ -38,7 +64,7 @@ async function resolveUserAndAccount() {
  */
 export async function POST(request: Request) {
   try {
-    const { user, accountId } = await resolveUserAndAccount();
+    const { user, accountId } = await resolveUserAndAccount(request);
     if (!user || !accountId) {
       return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
     }
